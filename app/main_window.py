@@ -20,15 +20,13 @@ class MainWindow(wx.Frame):
         super().__init__(None, title="Sidecar Data Quality", size=(1120, 780))
 
         # ── App icon (upper-left corner) ─────────────────────────────────────
-        # Preferred location inside your project:
-        #   assets/sidecar.ico
-        # Fallback to the provided container path if present:
-        icon_paths = [
+        icon_candidates = [
             os.path.join("assets", "sidecar.ico"),
+            os.path.join("assets", "sidecar-01.ico"),
             "/mnt/data/sidecar-01.ico",
-            "sidecar.ico",  # last-chance local fallback
+            "sidecar.ico",
         ]
-        for p in icon_paths:
+        for p in icon_candidates:
             if os.path.exists(p):
                 try:
                     self.SetIcon(wx.Icon(p, wx.BITMAP_TYPE_ICO))
@@ -51,10 +49,9 @@ class MainWindow(wx.Frame):
         BG_DARK = wx.Colour(40, 40, 40)          # window background
         BG_PANEL = wx.Colour(45, 45, 45)         # panel background
         TXT_PRIMARY = wx.Colour(220, 220, 220)   # primary light text
-        TXT_MUTED = wx.Colour(190, 190, 190)     # secondary text
         ACCENT = wx.Colour(70, 130, 180)         # steel blue for buttons
         GRID_BG = wx.Colour(55, 55, 55)
-        GRID_BG_ALT = wx.Colour(48, 48, 48)
+        GRID_ALT = wx.Colour(48, 48, 48)
         GRID_TXT = wx.Colour(235, 235, 235)
         GRID_HDR_BG = wx.Colour(70, 70, 70)
         GRID_HDR_TXT = wx.Colour(240, 240, 240)
@@ -102,7 +99,7 @@ class MainWindow(wx.Frame):
             btn = wx.Button(pnl, label=label)
             btn.SetBackgroundColour(ACCENT)
             btn.SetForegroundColour(wx.WHITE)
-            btn.SetFont(wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_MEDIUM))
+            btn.SetFont(wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
             btn.Bind(wx.EVT_BUTTON, fn)
             if rest:
                 btn.process = rest[0]
@@ -120,7 +117,7 @@ class MainWindow(wx.Frame):
 
         self.grid.SetLabelBackgroundColour(GRID_HDR_BG)
         self.grid.SetLabelTextColour(GRID_HDR_TXT)
-        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT.BOLD))
+        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
 
         vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
         pnl.SetSizer(vbox)
@@ -143,7 +140,7 @@ class MainWindow(wx.Frame):
                 self.grid.SetCellValue(r, c, str(val))
                 # alternate row shading for readability
                 if r % 2 == 0:
-                    self.grid.SetCellBackgroundColour(r, c, wx.Colour(48, 48, 48))
+                    self.grid.SetCellBackgroundColour(r, c, GRID_ALT)
 
         self.adjust_grid()
 
