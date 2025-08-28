@@ -28,12 +28,14 @@ class MainWindow(wx.Frame):
 
     def _build_ui(self):
         pnl = wx.Panel(self)
+        pnl.SetBackgroundColour(wx.Colour(245, 245, 245))  # light neutral gray
         vbox = wx.BoxSizer(wx.VERTICAL)
 
         title = wx.StaticText(pnl, label="🚀  Sidecar Data Quality")
-        title.SetFont(wx.Font(14, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        title.SetForegroundColour(wx.RED)
-        vbox.Add(title, 0, wx.ALIGN_CENTER | wx.ALL, 5)
+        title_font = wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        title.SetFont(title_font)
+        title.SetForegroundColour(wx.Colour(40, 50, 75))  # professional slate blue
+        vbox.Add(title, 0, wx.ALIGN_CENTER | wx.ALL, 10)
 
         # menu bar
         mb = wx.MenuBar()
@@ -63,17 +65,24 @@ class MainWindow(wx.Frame):
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
         for label, fn, *rest in buttons:
             btn = wx.Button(pnl, label=label)
+            btn.SetBackgroundColour(wx.Colour(70, 130, 180))  # steel blue
+            btn.SetForegroundColour(wx.WHITE)
+            btn.SetFont(wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_MEDIUM))
             btn.Bind(wx.EVT_BUTTON, fn)
             if rest:
                 btn.process = rest[0]
             toolbar.Add(btn, 0, wx.ALL, 4)
-        vbox.Add(toolbar, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 4)
+        vbox.Add(toolbar, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 6)
 
         # data grid
         self.grid = gridlib.Grid(pnl)
         self.grid.CreateGrid(0, 0)
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
-        vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 5)
+        self.grid.SetDefaultCellBackgroundColour(wx.Colour(255, 255, 255))
+        self.grid.SetDefaultCellTextColour(wx.Colour(0, 0, 0))
+        self.grid.SetLabelBackgroundColour(wx.Colour(230, 230, 230))
+        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
 
         pnl.SetSizer(vbox)
 
@@ -83,13 +92,18 @@ class MainWindow(wx.Frame):
             self.grid.DeleteRows(0, self.grid.GetNumberRows())
         if self.grid.GetNumberCols():
             self.grid.DeleteCols(0, self.grid.GetNumberCols())
+
         self.grid.AppendCols(len(hdr))
         for i, h in enumerate(hdr):
             self.grid.SetColLabelValue(i, h)
+
         self.grid.AppendRows(len(data))
         for r, row in enumerate(data):
             for c, val in enumerate(row):
                 self.grid.SetCellValue(r, c, str(val))
+                if r % 2 == 0:
+                    self.grid.SetCellBackgroundColour(r, c, wx.Colour(245, 245, 245))  # alternate row color
+
         self.adjust_grid()
 
     def adjust_grid(self):
