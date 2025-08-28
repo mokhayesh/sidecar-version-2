@@ -1,43 +1,78 @@
+import os
 import wx
 import wx.grid as gridlib
 import pandas as pd
-import csv
-from datetime import datetime
 
-from app.settings import SettingsWindow, save_defaults, defaults
+from app.settings import SettingsWindow
 from app.dialogs import QualityRuleDialog, DataBuddyDialog
 from app.analysis import (
     detect_and_split_data,
     profile_analysis,
     quality_analysis,
     catalog_analysis,
-    compliance_analysis
+    compliance_analysis,
 )
 from app.s3_utils import download_text_from_uri, upload_to_s3
+
 
 class MainWindow(wx.Frame):
     def __init__(self):
         super().__init__(None, title="Sidecar Data Quality", size=(1120, 780))
+
+        # ── App icon (upper-left corner) ─────────────────────────────────────
+        # Preferred location inside your project:
+        #   assets/sidecar.ico
+        # Fallback to the provided container path if present:
+        icon_paths = [
+            os.path.join("assets", "sidecar.ico"),
+            "/mnt/data/sidecar-01.ico",
+            "sidecar.ico",  # last-chance local fallback
+        ]
+        for p in icon_paths:
+            if os.path.exists(p):
+                try:
+                    self.SetIcon(wx.Icon(p, wx.BITMAP_TYPE_ICO))
+                    break
+                except Exception:
+                    pass
+
+        # state
         self.raw_data = []
         self.headers = []
         self.current_process = ""
         self.quality_rules = {}
+
         self._build_ui()
         self.Centre()
         self.Show()
 
     def _build_ui(self):
+        # ── Dark theme palette ──────────────────────────────────────────────
+        BG_DARK = wx.Colour(40, 40, 40)          # window background
+        BG_PANEL = wx.Colour(45, 45, 45)         # panel background
+        TXT_PRIMARY = wx.Colour(220, 220, 220)   # primary light text
+        TXT_MUTED = wx.Colour(190, 190, 190)     # secondary text
+        ACCENT = wx.Colour(70, 130, 180)         # steel blue for buttons
+        GRID_BG = wx.Colour(55, 55, 55)
+        GRID_BG_ALT = wx.Colour(48, 48, 48)
+        GRID_TXT = wx.Colour(235, 235, 235)
+        GRID_HDR_BG = wx.Colour(70, 70, 70)
+        GRID_HDR_TXT = wx.Colour(240, 240, 240)
+
+        self.SetBackgroundColour(BG_DARK)
+
         pnl = wx.Panel(self)
-        pnl.SetBackgroundColour(wx.Colour(245, 245, 245))  # light neutral gray
+        pnl.SetBackgroundColour(BG_PANEL)
         vbox = wx.BoxSizer(wx.VERTICAL)
 
-        title = wx.StaticText(pnl, label="🚀  Sidecar Data Quality")
+        # Title
+        title = wx.StaticText(pnl, label="🏍️🛺  Sidecar Data Quality")
         title_font = wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
         title.SetFont(title_font)
-        title.SetForegroundColour(wx.Colour(40, 50, 75))  # professional slate blue
+        title.SetForegroundColour(TXT_PRIMARY)
         vbox.Add(title, 0, wx.ALIGN_CENTER | wx.ALL, 10)
 
-        # menu bar
+        # Menu bar
         mb = wx.MenuBar()
         m_file, m_set = wx.Menu(), wx.Menu()
         m_file.Append(wx.ID_EXIT, "Exit")
@@ -48,7 +83,7 @@ class MainWindow(wx.Frame):
         mb.Append(m_set, "&Settings")
         self.SetMenuBar(mb)
 
-        # toolbar
+        # Toolbar (styled buttons)
         buttons = [
             ("Load File", self.on_load_file),
             ("Load from URI/S3", self.on_load_s3),
@@ -65,27 +100,32 @@ class MainWindow(wx.Frame):
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
         for label, fn, *rest in buttons:
             btn = wx.Button(pnl, label=label)
-            btn.SetBackgroundColour(wx.Colour(70, 130, 180))  # steel blue
+            btn.SetBackgroundColour(ACCENT)
             btn.SetForegroundColour(wx.WHITE)
-            btn.SetFont(wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_MEDIUM))
+            btn.SetFont(wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_MEDIUM))
             btn.Bind(wx.EVT_BUTTON, fn)
             if rest:
                 btn.process = rest[0]
             toolbar.Add(btn, 0, wx.ALL, 4)
         vbox.Add(toolbar, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 6)
 
-        # data grid
+        # Data grid (dark theme)
         self.grid = gridlib.Grid(pnl)
         self.grid.CreateGrid(0, 0)
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
-        self.grid.SetDefaultCellBackgroundColour(wx.Colour(255, 255, 255))
-        self.grid.SetDefaultCellTextColour(wx.Colour(0, 0, 0))
-        self.grid.SetLabelBackgroundColour(wx.Colour(230, 230, 230))
-        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
 
+        self.grid.SetDefaultCellBackgroundColour(GRID_BG)
+        self.grid.SetDefaultCellTextColour(GRID_TXT)
+        self.grid.SetGridLineColour(wx.Colour(80, 80, 80))
+
+        self.grid.SetLabelBackgroundColour(GRID_HDR_BG)
+        self.grid.SetLabelTextColour(GRID_HDR_TXT)
+        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT.BOLD))
+
+        vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
         pnl.SetSizer(vbox)
 
+    # ── Helpers ─────────────────────────────────────────────────────────────
     def _display(self, hdr, data):
         self.grid.ClearGrid()
         if self.grid.GetNumberRows():
@@ -101,8 +141,9 @@ class MainWindow(wx.Frame):
         for r, row in enumerate(data):
             for c, val in enumerate(row):
                 self.grid.SetCellValue(r, c, str(val))
+                # alternate row shading for readability
                 if r % 2 == 0:
-                    self.grid.SetCellBackgroundColour(r, c, wx.Colour(245, 245, 245))  # alternate row color
+                    self.grid.SetCellBackgroundColour(r, c, wx.Colour(48, 48, 48))
 
         self.adjust_grid()
 
@@ -120,6 +161,7 @@ class MainWindow(wx.Frame):
         event.Skip()
         wx.CallAfter(self.adjust_grid)
 
+    # ── Menu / toolbar handlers ─────────────────────────────────────────────
     def on_settings(self, _):
         SettingsWindow(self).Show()
 
@@ -155,7 +197,7 @@ class MainWindow(wx.Frame):
             "Profile": profile_analysis,
             "Quality": lambda d: quality_analysis(d, self.quality_rules),
             "Catalog": catalog_analysis,
-            "Compliance": compliance_analysis
+            "Compliance": compliance_analysis,
         }[proc]
         hdr, data = func(df)
         self._display(hdr, data)
@@ -198,5 +240,8 @@ class MainWindow(wx.Frame):
         hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
         data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))]
                 for r in range(self.grid.GetNumberRows())]
-        wx.MessageBox(upload_to_s3(self.current_process or "Unknown", hdr, data),
-                      "Upload", wx.OK | wx.ICON_INFORMATION)
+        wx.MessageBox(
+            upload_to_s3(self.current_process or "Unknown", hdr, data),
+            "Upload",
+            wx.OK | wx.ICON_INFORMATION,
+        )
