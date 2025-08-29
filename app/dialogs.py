@@ -5,7 +5,7 @@ import json
 import threading
 import requests
 
-# Optional audio (kept for future voice UI, protected at runtime)
+# Optional audio (reserved for future voice UI)
 try:
     import pygame
 except Exception:
@@ -351,14 +351,17 @@ class DataBuddyDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Synthetic Data Dialog (choose record count and fields)
+# Synthetic Data Dialog (choose record count and fields) — fixed parent/sizer
 # ──────────────────────────────────────────────────────────────────────────────
 class SyntheticDataDialog(wx.Dialog):
     """Popup to choose how many synthetic rows to generate and which fields to include."""
     def __init__(self, parent, fields):
-        super().__init__(parent, title="Generate Synthetic Data",
-                         size=(520, 520),
-                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        super().__init__(
+            parent,
+            title="Generate Synthetic Data",
+            size=(520, 520),
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+        )
 
         # Theme (match app)
         BG = wx.Colour(38, 38, 38)
@@ -369,9 +372,16 @@ class SyntheticDataDialog(wx.Dialog):
         ACCENT = wx.Colour(70, 130, 180)
 
         self.SetBackgroundColour(BG)
+
+        # Top-level sizer for the dialog
+        top = wx.BoxSizer(wx.VERTICAL)
+
+        # All controls live on this panel; its sizer manages them
         pnl = wx.Panel(self)
         pnl.SetBackgroundColour(PANEL)
+        top.Add(pnl, 1, wx.EXPAND)
         s = wx.BoxSizer(wx.VERTICAL)
+        pnl.SetSizer(s)
 
         # How many rows
         box1 = wx.StaticBox(pnl, label="How many records?")
@@ -411,11 +421,21 @@ class SyntheticDataDialog(wx.Dialog):
 
         s.Add(s2, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
-        # OK/Cancel
-        btns = self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL)
+        # OK/Cancel buttons — IMPORTANT: children of pnl (not self)
+        btns = wx.StdDialogButtonSizer()
+        ok_btn = wx.Button(pnl, wx.ID_OK)
+        cancel_btn = wx.Button(pnl, wx.ID_CANCEL)
+        for b in (ok_btn, cancel_btn):
+            b.SetBackgroundColour(ACCENT)
+            b.SetForegroundColour(wx.WHITE)
+            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        btns.AddButton(ok_btn)
+        btns.AddButton(cancel_btn)
+        btns.Realize()
         s.Add(btns, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
 
-        pnl.SetSizer(s)
+        # Finish layout
+        self.SetSizerAndFit(top)
 
     def get_values(self):
         n = int(self.count.GetValue())
