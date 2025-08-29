@@ -250,7 +250,7 @@ class DataBuddyDialog(wx.Dialog):
 
         self.prompt = wx.TextCtrl(pnl, style=wx.TE_PROCESS_ENTER)
         self.prompt.SetBackgroundColour(self.COLORS["input_bg"])
-        self.prompt.SetForegroundColour(self.COLORS["input_fg"])
+               self.prompt.SetForegroundColour(self.COLORS["input_fg"])
         self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         self.prompt.SetHint("Type your question and press Enter…")
         self.prompt.Bind(wx.EVT_TEXT_ENTER, self.on_ask)
@@ -348,3 +348,76 @@ class DataBuddyDialog(wx.Dialog):
             self._write_reply(answer)
 
         wx.CallAfter(render)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Synthetic Data Dialog (choose record count and fields)
+# ──────────────────────────────────────────────────────────────────────────────
+class SyntheticDataDialog(wx.Dialog):
+    """Popup to choose how many synthetic rows to generate and which fields to include."""
+    def __init__(self, parent, fields):
+        super().__init__(parent, title="Generate Synthetic Data",
+                         size=(520, 520),
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+
+        # Theme (match app)
+        BG = wx.Colour(38, 38, 38)
+        PANEL = wx.Colour(38, 38, 38)
+        TXT = wx.Colour(235, 235, 235)
+        INPUT_BG = wx.Colour(50, 50, 50)
+        INPUT_TXT = wx.Colour(240, 240, 240)
+        ACCENT = wx.Colour(70, 130, 180)
+
+        self.SetBackgroundColour(BG)
+        pnl = wx.Panel(self)
+        pnl.SetBackgroundColour(PANEL)
+        s = wx.BoxSizer(wx.VERTICAL)
+
+        # How many rows
+        box1 = wx.StaticBox(pnl, label="How many records?")
+        box1.SetForegroundColour(TXT)
+        s1 = wx.StaticBoxSizer(box1, wx.HORIZONTAL)
+        self.count = wx.SpinCtrl(pnl, min=1, max=1_000_000, initial=100)
+        self.count.SetBackgroundColour(INPUT_BG)
+        self.count.SetForegroundColour(INPUT_TXT)
+        self.count.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        s1.Add(self.count, 1, wx.ALL | wx.EXPAND, 6)
+        s.Add(s1, 0, wx.EXPAND | wx.ALL, 8)
+
+        # Which fields
+        box2 = wx.StaticBox(pnl, label="Choose fields to include")
+        box2.SetForegroundColour(TXT)
+        s2 = wx.StaticBoxSizer(box2, wx.VERTICAL)
+        self.chk = wx.CheckListBox(pnl, choices=list(fields))
+        self.chk.SetBackgroundColour(INPUT_BG)
+        self.chk.SetForegroundColour(INPUT_TXT)
+        self.chk.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        for i in range(len(fields)):
+            self.chk.Check(i, True)  # default: all selected
+        s2.Add(self.chk, 1, wx.ALL | wx.EXPAND, 6)
+
+        # quick select buttons
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        btn_all = wx.Button(pnl, label="Select All")
+        btn_none = wx.Button(pnl, label="Clear")
+        for b in (btn_all, btn_none):
+            b.SetBackgroundColour(ACCENT)
+            b.SetForegroundColour(wx.WHITE)
+        btn_all.Bind(wx.EVT_BUTTON, lambda e: [self.chk.Check(i, True) for i in range(self.chk.GetCount())])
+        btn_none.Bind(wx.EVT_BUTTON, lambda e: [self.chk.Check(i, False) for i in range(self.chk.GetCount())])
+        row.Add(btn_all, 0, wx.RIGHT, 6)
+        row.Add(btn_none, 0)
+        s2.Add(row, 0, wx.LEFT | wx.BOTTOM, 6)
+
+        s.Add(s2, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        # OK/Cancel
+        btns = self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL)
+        s.Add(btns, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
+
+        pnl.SetSizer(s)
+
+    def get_values(self):
+        n = int(self.count.GetValue())
+        selected = [self.chk.GetString(i) for i in range(self.chk.GetCount()) if self.chk.IsChecked(i)]
+        return n, selected
