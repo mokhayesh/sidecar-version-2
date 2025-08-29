@@ -46,24 +46,23 @@ class MainWindow(wx.Frame):
         # Palette
         BG_FRAME   = wx.Colour(26, 26, 26)   # window frame
         BG_PANEL   = wx.Colour(32, 32, 32)   # main content panel (sides)
-        BG_HEADER  = wx.Colour(22, 22, 22)   # header band (title + buttons) → darker grey
+        BG_HEADER  = wx.Colour(22, 22, 22)   # header band (title + buttons)
         TXT_PRIMARY = wx.Colour(225, 225, 225)
         ACCENT     = wx.Colour(70, 130, 180)
 
         GRID_BG      = wx.Colour(45, 45, 45)
-        GRID_ALT     = wx.Colour(40, 40, 40)
         GRID_TXT     = wx.Colour(235, 235, 235)
-        GRID_HDR_BG  = wx.Colour(58, 58, 58)  # column/row label background (side darker)
+        GRID_HDR_BG  = wx.Colour(58, 58, 58)
         GRID_HDR_TXT = wx.Colour(245, 245, 245)
 
         self.SetBackgroundColour(BG_FRAME)
 
-        # Root content panel (so sides/outside grid are dark)
+        # Root content panel
         root = wx.Panel(self)
         root.SetBackgroundColour(BG_PANEL)
         root_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # ── Header band (darker grey) ───────────────────────────────────────
+        # ── Header band ────────────────────────────────────────────────────
         header = wx.Panel(root)
         header.SetBackgroundColour(BG_HEADER)
         header_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -73,17 +72,15 @@ class MainWindow(wx.Frame):
         title.SetForegroundColour(TXT_PRIMARY)
         header_sizer.Add(title, 0, wx.ALIGN_CENTER | wx.ALL, 8)
 
-        # Toolbar container so we can color its background
+        # Toolbar (use BoxSizer so height is computed reliably)
         tb_panel = wx.Panel(header)
         tb_panel.SetBackgroundColour(BG_HEADER)
-        tb_sizer = wx.WrapSizer(wx.HORIZONTAL)
+        tb_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
         buttons = [
             ("Load File", self.on_load_file),
             ("Load from URI/S3", self.on_load_s3),
-
-            ("Generate Synthetic Data", self.on_generate_synth),  # ← new button
-
+            ("Generate Synthetic Data", self.on_generate_synth),  # new button
             ("Quality Rule Assignment", self.on_rules),
             ("Profile", self.do_analysis, "Profile"),
             ("Quality", self.do_analysis, "Quality"),
@@ -105,10 +102,13 @@ class MainWindow(wx.Frame):
             tb_sizer.Add(btn, 0, wx.ALL, 4)
 
         tb_panel.SetSizer(tb_sizer)
+        tb_panel.Layout()            # ensure best size is calculated
+        tb_panel.Fit()               # make panel adopt its best size
+
         header_sizer.Add(tb_panel, 0, wx.ALIGN_CENTER | wx.BOTTOM, 8)
         header.SetSizer(header_sizer)
 
-        # ── Menu bar (OS-styled; colors typically unmanaged) ───────────────
+        # ── Menu bar ───────────────────────────────────────────────────────
         mb = wx.MenuBar()
         m_file, m_set = wx.Menu(), wx.Menu()
         m_file.Append(wx.ID_EXIT, "Exit")
@@ -119,7 +119,7 @@ class MainWindow(wx.Frame):
         mb.Append(m_set, "&Settings")
         self.SetMenuBar(mb)
 
-        # ── Grid (side/labels now darker via GRID_HDR_BG) ───────────────────
+        # ── Grid ───────────────────────────────────────────────────────────
         self.grid = gridlib.Grid(root)
         self.grid.CreateGrid(0, 0)
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
@@ -127,20 +127,17 @@ class MainWindow(wx.Frame):
         self.grid.SetDefaultCellBackgroundColour(GRID_BG)
         self.grid.SetDefaultCellTextColour(GRID_TXT)
         self.grid.SetGridLineColour(wx.Colour(80, 80, 80))
-
-        # darken both column and row labels (left “side” too)
         self.grid.SetLabelBackgroundColour(GRID_HDR_BG)
         self.grid.SetLabelTextColour(GRID_HDR_TXT)
         self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-
-        # optional: widen row-label area a touch and center text
         self.grid.SetRowLabelSize(46)
         self.grid.SetRowLabelAlignment(wx.ALIGN_CENTER, wx.ALIGN_CENTER)
 
-        # layout
-        root_sizer.Add(header, 0, wx.EXPAND)                           # dark header band
-        root_sizer.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)            # content
+        # Layout root
+        root_sizer.Add(header, 0, wx.EXPAND)
+        root_sizer.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
         root.SetSizer(root_sizer)
+        root.Layout()
 
     # ── Display helpers ─────────────────────────────────────────────────────
     def _display(self, hdr, data):
@@ -159,7 +156,7 @@ class MainWindow(wx.Frame):
             for c, val in enumerate(row):
                 self.grid.SetCellValue(r, c, str(val))
                 if r % 2 == 0:
-                    self.grid.SetCellBackgroundColour(r, c, wx.Colour(40, 40, 40))  # alternate darker stripe
+                    self.grid.SetCellBackgroundColour(r, c, wx.Colour(40, 40, 40))
         self.adjust_grid()
 
     def adjust_grid(self):
@@ -290,21 +287,16 @@ class MainWindow(wx.Frame):
                       "Synthetic Data", wx.OK | wx.ICON_INFORMATION)
 
     def _generate_synthetic_df(self, df: pd.DataFrame, fields, n_rows: int) -> pd.DataFrame:
-        """
-        Generate synthetic data by bootstrapping (sample with replacement) each selected column.
-        This preserves the empirical distribution without inventing unseen categories/values.
-        """
+        """Bootstrap each selected column to preserve empirical distributions."""
         out = {}
         for col in fields:
             s = df[col]
             s_nonnull = s.dropna()
 
-            # If column is empty, fill blanks
             if s_nonnull.empty:
                 out[col] = [""] * n_rows
                 continue
 
-            # Date/time handling
             if pd.api.types.is_datetime64_any_dtype(s) or "date" in col.lower() or "time" in col.lower():
                 dt = pd.to_datetime(s_nonnull, errors="coerce").dropna()
                 if dt.empty:
@@ -314,7 +306,6 @@ class MainWindow(wx.Frame):
                     out[col] = sampled.dt.strftime("%Y-%m-%d %H:%M:%S").tolist()
                 continue
 
-            # Numeric
             if pd.api.types.is_numeric_dtype(s):
                 sampled = s_nonnull.sample(n=n_rows, replace=True).reset_index(drop=True)
                 if pd.api.types.is_integer_dtype(s.dtype):
@@ -322,7 +313,6 @@ class MainWindow(wx.Frame):
                 out[col] = sampled.tolist()
                 continue
 
-            # Text / categorical
             out[col] = s_nonnull.astype(str).sample(n=n_rows, replace=True).reset_index(drop=True).tolist()
 
         return pd.DataFrame(out)
