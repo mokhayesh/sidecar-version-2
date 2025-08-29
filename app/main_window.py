@@ -17,7 +17,7 @@ from app.s3_utils import download_text_from_uri, upload_to_s3
 
 class MainWindow(wx.Frame):
     def __init__(self):
-        super().__init__(None, title="Sidecar Data Quality", size=(1200, 800))
+        super().__init__(None, title="Sidecar Application: Data Governance", size=(1200, 800))
 
         # App icon (tries several common locations)
         for p in [
@@ -67,7 +67,7 @@ class MainWindow(wx.Frame):
         header.SetBackgroundColour(BG_HEADER)
         header_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        title = wx.StaticText(header, label="🏍️🛺  Sidecar Data Quality")
+        title = wx.StaticText(header, label="🏍️🛺  Sidecar Application:  Data Governance")
         title.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         title.SetForegroundColour(TXT_PRIMARY)
         header_sizer.Add(title, 0, wx.ALIGN_CENTER | wx.ALL, 8)
