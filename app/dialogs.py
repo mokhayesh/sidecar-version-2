@@ -224,7 +224,7 @@ class DataBuddyDialog(wx.Dialog):
         self.voice = wx.Choice(pnl, choices=["en-US-AriaNeural", "en-US-GuyNeural", "en-GB-SoniaNeural"])
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
-               self.voice.SetForegroundColour(self.COLORS["input_fg"])
+        self.voice.SetForegroundColour(self.COLORS["input_fg"])
         self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         vbox.Add(self.voice, 0, wx.EXPAND | wx.ALL, 5)
 
