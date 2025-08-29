@@ -17,7 +17,7 @@ from app.s3_utils import download_text_from_uri, upload_to_s3
 
 class MainWindow(wx.Frame):
     def __init__(self):
-        super().__init__(None, title="Sidecar Data Governance", size=(1120, 780))
+        super().__init__(None, title="Sidecar Application: Data Governance", size=(1120, 780))
         self.raw_data = []
         self.headers = []
         self.current_process = ""
@@ -31,7 +31,7 @@ class MainWindow(wx.Frame):
         pnl.SetBackgroundColour(wx.Colour(245, 245, 245))  # light neutral gray
         vbox = wx.BoxSizer(wx.VERTICAL)
 
-        title = wx.StaticText(pnl, label="🚀  Sidecar Data Governance")
+        title = wx.StaticText(pnl, label="🚀  Sidecar Application: Data Governance")
         title_font = wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
         title.SetFont(title_font)
         title.SetForegroundColour(wx.Colour(40, 50, 75))  # professional slate blue
