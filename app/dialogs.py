@@ -250,7 +250,7 @@ class DataBuddyDialog(wx.Dialog):
 
         self.prompt = wx.TextCtrl(pnl, style=wx.TE_PROCESS_ENTER)
         self.prompt.SetBackgroundColour(self.COLORS["input_bg"])
-               self.prompt.SetForegroundColour(self.COLORS["input_fg"])
+        self.prompt.SetForegroundColour(self.COLORS["input_fg"])
         self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         self.prompt.SetHint("Type your question and press Enter…")
         self.prompt.Bind(wx.EVT_TEXT_ENTER, self.on_ask)
