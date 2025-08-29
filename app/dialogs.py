@@ -4,13 +4,18 @@ import re
 import json
 import threading
 import requests
-import pygame
+
+# Optional audio (kept for future voice UI, protected at runtime)
+try:
+    import pygame
+except Exception:
+    pygame = None
 
 from app.settings import defaults
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Quality Rule Assignment Dialog
+# Quality Rule Assignment Dialog (dark theme)
 # ──────────────────────────────────────────────────────────────────────────────
 class QualityRuleDialog(wx.Dialog):
     def __init__(self, parent, fields, current_rules):
@@ -170,7 +175,7 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy Chat Dialog (high-contrast + readable fonts)
+# Little Buddy Chat Dialog (high-contrast + forced white reply text)
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None):
@@ -194,7 +199,7 @@ class DataBuddyDialog(wx.Dialog):
             "input_bg": wx.Colour(50, 50, 50),
             "input_fg": wx.Colour(240, 240, 240),
             "reply_bg": wx.Colour(28, 28, 28),
-            "reply_fg": wx.Colour(235, 235, 235),
+            "reply_fg": wx.Colour(255, 255, 255),  # pure white for contrast
         }
 
         self.SetBackgroundColour(self.COLORS["bg"])
@@ -208,9 +213,9 @@ class DataBuddyDialog(wx.Dialog):
         title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
-        # Optional audio init (kept, but don't crash if unavailable)
+        # (Optional) audio init protected
         try:
-            if not pygame.mixer.get_init():
+            if pygame and not pygame.mixer.get_init():
                 pygame.mixer.init()
         except Exception:
             pass
@@ -219,7 +224,7 @@ class DataBuddyDialog(wx.Dialog):
         self.voice = wx.Choice(pnl, choices=["en-US-AriaNeural", "en-US-GuyNeural", "en-GB-SoniaNeural"])
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
-        self.voice.SetForegroundColour(self.COLORS["input_fg"])
+               self.voice.SetForegroundColour(self.COLORS["input_fg"])
         self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         vbox.Add(self.voice, 0, wx.EXPAND | wx.ALL, 5)
 
@@ -260,14 +265,14 @@ class DataBuddyDialog(wx.Dialog):
 
         vbox.Add(row, 0, wx.EXPAND | wx.ALL, 5)
 
-        # Reply area
+        # Reply area (RichText)
         self.reply = rt.RichTextCtrl(
             pnl,
             style=wx.TE_MULTILINE | wx.TE_READONLY | wx.BORDER_SIMPLE
         )
         self.reply.SetBackgroundColour(self.COLORS["reply_bg"])
         self.reply.SetForegroundColour(self.COLORS["reply_fg"])
-        self._apply_reply_style()
+        self._reset_reply_style()
         vbox.Add(self.reply, 1, wx.EXPAND | wx.ALL, 6)
 
         pnl.SetSizer(vbox)
@@ -275,26 +280,39 @@ class DataBuddyDialog(wx.Dialog):
         # Initial message
         self._write_reply("Hi, I'm Little Buddy!")
 
-    # Ensure the RichTextCtrl uses a clear font & color by default.
-    def _apply_reply_style(self):
+    # ----- styling helpers -------------------------------------------------
+    def _current_attr(self):
         attr = rt.RichTextAttr()
-        attr.SetTextColour(self.COLORS["reply_fg"])
-        attr.SetFontSize(11)  # larger, readable
-        attr.SetFontFaceName("Segoe UI")
-        self.reply.SetDefaultStyle(attr)
+        attr.SetTextColour(self.COLORS["reply_fg"])  # white text
+        attr.SetFontSize(11)                         # readable size
+        attr.SetFontFaceName("Segoe UI")             # clean Windows font
+        return attr
 
-    def _write_reply(self, text: str):
-        # Apply style every time to guarantee contrast after clears
-        self._apply_reply_style()
-        self.reply.AppendText(text)
+    def _reset_reply_style(self):
+        """Reapply both default and basic styles so new text is white."""
+        attr = self._current_attr()
+        self.reply.SetDefaultStyle(attr)  # affects subsequent inserts
+        self.reply.SetBasicStyle(attr)    # base style of the control
 
+    def _write_reply(self, text: str, newline: bool = False):
+        """Write with a forced style block to avoid theme overrides."""
+        attr = self._current_attr()
+        self.reply.BeginStyle(attr)
+        try:
+            self.reply.WriteText(text + ("\n" if newline else ""))
+        finally:
+            self.reply.EndStyle()
+
+    # ----- events ----------------------------------------------------------
     def on_ask(self, _):
         q = self.prompt.GetValue().strip()
         self.prompt.SetValue("")
         if not q:
             return
         self.reply.Clear()
+        self._reset_reply_style()
         self._write_reply("Thinking...")
+
         threading.Thread(target=self._answer, args=(q,), daemon=True).start()
 
     def _answer(self, q: str):
@@ -324,5 +342,9 @@ class DataBuddyDialog(wx.Dialog):
         except Exception as e:
             answer = f"Error: {e}"
 
-        wx.CallAfter(self.reply.Clear)
-        wx.CallAfter(self._write_reply, answer)
+        def render():
+            self.reply.Clear()
+            self._reset_reply_style()
+            self._write_reply(answer)
+
+        wx.CallAfter(render)
