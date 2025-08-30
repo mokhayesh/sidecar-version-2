@@ -1,15 +1,27 @@
-import wx
-import wx.richtext as rt
+import os
 import re
 import json
 import threading
+import tempfile
 import requests
+import wx
+import wx.richtext as rt
 
-# Optional audio (reserved for future voice UI)
+# Optional audio / speech libs (we handle gracefully if missing)
 try:
     import pygame
 except Exception:
     pygame = None
+
+try:
+    import speech_recognition as sr
+except Exception:
+    sr = None
+
+try:
+    import edge_tts
+except Exception:
+    edge_tts = None
 
 from app.settings import defaults
 
@@ -175,14 +187,14 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy Chat Dialog (high-contrast + knowledge files context)
+# Little Buddy Chat Dialog (voice enabled: TTS + STT)
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None, knowledge=None):
         super().__init__(
             parent,
             title="Little Buddy",
-            size=(820, 620),
+            size=(860, 660),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
 
@@ -190,7 +202,13 @@ class DataBuddyDialog(wx.Dialog):
         self.headers = headers
         self.knowledge = knowledge or []  # list of dicts: {name, path, type, content}
 
-        # High-contrast theme for readability
+        # TTS / STT state
+        self._tts_file = None
+        self._tts_thread = None
+        self._listening = False
+        self._stop_listening = None  # SR background stopper
+
+        # High-contrast theme
         self.COLORS = {
             "bg": wx.Colour(35, 35, 35),
             "panel": wx.Colour(38, 38, 38),
@@ -200,7 +218,7 @@ class DataBuddyDialog(wx.Dialog):
             "input_bg": wx.Colour(50, 50, 50),
             "input_fg": wx.Colour(240, 240, 240),
             "reply_bg": wx.Colour(28, 28, 28),
-            "reply_fg": wx.Colour(255, 255, 255),  # pure white for contrast
+            "reply_fg": wx.Colour(255, 255, 255),
         }
 
         self.SetBackgroundColour(self.COLORS["bg"])
@@ -214,20 +232,22 @@ class DataBuddyDialog(wx.Dialog):
         title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
-        # (Optional) audio init protected
-        try:
-            if pygame and not pygame.mixer.get_init():
-                pygame.mixer.init()
-        except Exception:
-            pass
+        # Voice selector + options row
+        opts = wx.BoxSizer(wx.HORIZONTAL)
 
-        # Voice selector
         self.voice = wx.Choice(pnl, choices=["en-US-AriaNeural", "en-US-GuyNeural", "en-GB-SoniaNeural"])
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
         self.voice.SetForegroundColour(self.COLORS["input_fg"])
         self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-        vbox.Add(self.voice, 0, wx.EXPAND | wx.ALL, 5)
+        opts.Add(self.voice, 0, wx.RIGHT | wx.EXPAND, 6)
+
+        self.tts_checkbox = wx.CheckBox(pnl, label="🔊 Speak Reply")
+        self.tts_checkbox.SetValue(True)
+        self.tts_checkbox.SetForegroundColour(self.COLORS["text"])
+        opts.Add(self.tts_checkbox, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+
+        vbox.Add(opts, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         # Persona selector
         self.persona = wx.ComboBox(
@@ -262,11 +282,25 @@ class DataBuddyDialog(wx.Dialog):
         send_btn.SetForegroundColour(wx.WHITE)
         send_btn.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         send_btn.Bind(wx.EVT_BUTTON, self.on_ask)
-        row.Add(send_btn, 0, wx.ALIGN_CENTER_VERTICAL)
+        row.Add(send_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+
+        # STT: mic toggle
+        self.mic_btn = wx.Button(pnl, label="🎙 Speak")
+        self.mic_btn.SetBackgroundColour(wx.Colour(60, 120, 90))
+        self.mic_btn.SetForegroundColour(wx.WHITE)
+        self.mic_btn.Bind(wx.EVT_BUTTON, self.on_mic_toggle)
+        row.Add(self.mic_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+
+        # Stop button: stops TTS playback and STT listening
+        self.stop_btn = wx.Button(pnl, label="Stop")
+        self.stop_btn.SetBackgroundColour(wx.Colour(150, 60, 60))
+        self.stop_btn.SetForegroundColour(wx.WHITE)
+        self.stop_btn.Bind(wx.EVT_BUTTON, self.on_stop_voice)
+        row.Add(self.stop_btn, 0, wx.ALIGN_CENTER_VERTICAL)
 
         vbox.Add(row, 0, wx.EXPAND | wx.ALL, 5)
 
-        # Reply area (RichText)
+        # Reply area
         self.reply = rt.RichTextCtrl(
             pnl,
             style=wx.TE_MULTILINE | wx.TE_READONLY | wx.BORDER_SIMPLE
@@ -284,19 +318,17 @@ class DataBuddyDialog(wx.Dialog):
     # ----- styling helpers -------------------------------------------------
     def _current_attr(self):
         attr = rt.RichTextAttr()
-        attr.SetTextColour(self.COLORS["reply_fg"])  # white text
-        attr.SetFontSize(11)                         # readable size
-        attr.SetFontFaceName("Segoe UI")             # clean Windows font
+        attr.SetTextColour(self.COLORS["reply_fg"])
+        attr.SetFontSize(11)
+        attr.SetFontFaceName("Segoe UI")
         return attr
 
     def _reset_reply_style(self):
-        """Reapply both default and basic styles so new text is white."""
         attr = self._current_attr()
-        self.reply.SetDefaultStyle(attr)  # affects subsequent inserts
-        self.reply.SetBasicStyle(attr)    # base style of the control
+        self.reply.SetDefaultStyle(attr)
+        self.reply.SetBasicStyle(attr)
 
     def _write_reply(self, text: str, newline: bool = False):
-        """Write with a forced style block to avoid theme overrides."""
         attr = self._current_attr()
         self.reply.BeginStyle(attr)
         try:
@@ -306,11 +338,6 @@ class DataBuddyDialog(wx.Dialog):
 
     # ----- knowledge context ----------------------------------------------
     def _build_knowledge_context(self, max_chars=1500):
-        """
-        Build a compact textual context from the loaded knowledge files:
-        - CSV/JSON/TXT: include a truncated snippet.
-        - Images/binary: include filename only.
-        """
         if not self.knowledge:
             return ""
         chunks = []
@@ -347,7 +374,6 @@ class DataBuddyDialog(wx.Dialog):
         if self.data:
             prompt += "\n\nData sample:\n" + "; ".join(map(str, self.data[0]))
 
-        # Include knowledge files context
         kn = self._build_knowledge_context()
         if kn:
             prompt += "\n\nKnowledge files:\n" + kn
@@ -377,12 +403,133 @@ class DataBuddyDialog(wx.Dialog):
             self.reply.Clear()
             self._reset_reply_style()
             self._write_reply(answer)
+            if self.tts_checkbox.GetValue():
+                self.speak(answer)
 
         wx.CallAfter(render)
 
+    # ----- TTS (edge-tts + pygame) ----------------------------------------
+    def speak(self, text: str):
+        if not edge_tts:
+            wx.MessageBox("Text-to-speech requires the 'edge-tts' package.\nInstall with: pip install edge-tts",
+                          "TTS Not Available", wx.OK | wx.ICON_WARNING)
+            return
+        if not pygame:
+            wx.MessageBox("Audio playback requires 'pygame'.\nInstall with: pip install pygame",
+                          "Playback Not Available", wx.OK | wx.ICON_WARNING)
+            return
+
+        # Stop any current playback
+        self._stop_playback()
+
+        def worker():
+            import asyncio
+
+            async def _synth():
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                tmp.close()
+                voice = self.voice.GetStringSelection() or "en-US-GuyNeural"
+                try:
+                    communicate = edge_tts.Communicate(text, voice)
+                    await communicate.save(tmp.name)
+                    self._tts_file = tmp.name
+                except Exception as e:
+                    self._tts_file = None
+                    wx.CallAfter(wx.MessageBox, f"TTS error: {e}", "edge-tts", wx.OK | wx.ICON_ERROR)
+
+            try:
+                asyncio.run(_synth())
+            except RuntimeError:
+                # If a loop is already running, create a new one in a thread-safe way
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(_synth())
+                loop.close()
+
+            if self._tts_file and pygame:
+                try:
+                    if not pygame.mixer.get_init():
+                        pygame.mixer.init()
+                    pygame.mixer.music.load(self._tts_file)
+                    pygame.mixer.music.play()
+                except Exception as e:
+                    wx.CallAfter(wx.MessageBox, f"Audio playback error: {e}", "pygame", wx.OK | wx.ICON_ERROR)
+
+        self._tts_thread = threading.Thread(target=worker, daemon=True)
+        self._tts_thread.start()
+
+    def _stop_playback(self):
+        try:
+            if pygame and pygame.mixer.get_init():
+                pygame.mixer.music.stop()
+        except Exception:
+            pass
+        if self._tts_file and os.path.exists(self._tts_file):
+            try:
+                os.remove(self._tts_file)
+            except Exception:
+                pass
+        self._tts_file = None
+
+    # ----- STT (speech_recognition) ---------------------------------------
+    def on_mic_toggle(self, _):
+        if not sr:
+            wx.MessageBox("Speech-to-text requires 'SpeechRecognition'.\nInstall with: pip install SpeechRecognition",
+                          "STT Not Available", wx.OK | wx.ICON_WARNING)
+            return
+
+        if not self._listening:
+            # Start background listening
+            try:
+                recognizer = sr.Recognizer()
+                mic = sr.Microphone()  # may raise OSError if no mic
+                # Reduce ambient noise slightly
+                with mic as source:
+                    recognizer.adjust_for_ambient_noise(source, duration=0.5)
+
+                def callback(rec, audio):
+                    try:
+                        text = rec.recognize_google(audio)
+                    except Exception:
+                        text = ""
+                    if text:
+                        # Append or replace prompt; here we replace for clarity
+                        wx.CallAfter(self.prompt.SetValue, text)
+                        # Optional: auto-send once recognized
+                        # wx.CallAfter(self.on_ask, None)
+
+                self._stop_listening = recognizer.listen_in_background(
+                    mic, callback, phrase_time_limit=12
+                )
+                self._listening = True
+                self.mic_btn.SetLabel("Stop Mic")
+            except Exception as e:
+                wx.MessageBox(f"Microphone error: {e}", "STT Error", wx.OK | wx.ICON_ERROR)
+        else:
+            self._stop_stt()
+
+    def _stop_stt(self):
+        if self._stop_listening:
+            try:
+                self._stop_listening(wait_for_stop=False)
+            except Exception:
+                pass
+        self._stop_listening = None
+        self._listening = False
+        self.mic_btn.SetLabel("🎙 Speak")
+
+    # ----- Stop all voice (button) ----------------------------------------
+    def on_stop_voice(self, _):
+        self._stop_playback()
+        self._stop_stt()
+        wx.Bell()
+        # Keep focus in the prompt for fast follow-up
+        self.prompt.SetFocus()
+
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Synthetic Data Dialog (choose record count and fields) — fixed parent/sizer
+# Synthetic Data Dialog (choose record count and fields)
 # ──────────────────────────────────────────────────────────────────────────────
 class SyntheticDataDialog(wx.Dialog):
     """Popup to choose how many synthetic rows to generate and which fields to include."""
@@ -394,7 +541,7 @@ class SyntheticDataDialog(wx.Dialog):
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
 
-        # Theme (match app)
+        # Theme
         BG = wx.Colour(38, 38, 38)
         PANEL = wx.Colour(38, 38, 38)
         TXT = wx.Colour(235, 235, 235)
@@ -404,17 +551,14 @@ class SyntheticDataDialog(wx.Dialog):
 
         self.SetBackgroundColour(BG)
 
-        # Top-level sizer for the dialog
         top = wx.BoxSizer(wx.VERTICAL)
-
-        # All controls live on this panel; its sizer manages them
         pnl = wx.Panel(self)
         pnl.SetBackgroundColour(PANEL)
         top.Add(pnl, 1, wx.EXPAND)
         s = wx.BoxSizer(wx.VERTICAL)
         pnl.SetSizer(s)
 
-        # How many rows
+        # Count
         box1 = wx.StaticBox(pnl, label="How many records?")
         box1.SetForegroundColour(TXT)
         s1 = wx.StaticBoxSizer(box1, wx.HORIZONTAL)
@@ -425,7 +569,7 @@ class SyntheticDataDialog(wx.Dialog):
         s1.Add(self.count, 1, wx.ALL | wx.EXPAND, 6)
         s.Add(s1, 0, wx.EXPAND | wx.ALL, 8)
 
-        # Which fields
+        # Fields
         box2 = wx.StaticBox(pnl, label="Choose fields to include")
         box2.SetForegroundColour(TXT)
         s2 = wx.StaticBoxSizer(box2, wx.VERTICAL)
@@ -434,10 +578,9 @@ class SyntheticDataDialog(wx.Dialog):
         self.chk.SetForegroundColour(INPUT_TXT)
         self.chk.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         for i in range(len(fields)):
-            self.chk.Check(i, True)  # default: all selected
+            self.chk.Check(i, True)
         s2.Add(self.chk, 1, wx.ALL | wx.EXPAND, 6)
 
-        # quick select buttons
         row = wx.BoxSizer(wx.HORIZONTAL)
         btn_all = wx.Button(pnl, label="Select All")
         btn_none = wx.Button(pnl, label="Clear")
@@ -452,7 +595,7 @@ class SyntheticDataDialog(wx.Dialog):
 
         s.Add(s2, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
-        # OK/Cancel buttons — IMPORTANT: children of pnl (not self)
+        # Buttons
         btns = wx.StdDialogButtonSizer()
         ok_btn = wx.Button(pnl, wx.ID_OK)
         cancel_btn = wx.Button(pnl, wx.ID_CANCEL)
@@ -465,7 +608,6 @@ class SyntheticDataDialog(wx.Dialog):
         btns.Realize()
         s.Add(btns, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
 
-        # Finish layout
         self.SetSizerAndFit(top)
 
     def get_values(self):
