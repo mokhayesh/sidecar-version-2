@@ -23,6 +23,11 @@ try:
 except Exception:
     edge_tts = None
 
+try:
+    import pyttsx3
+except Exception:
+    pyttsx3 = None
+
 from app.settings import defaults
 
 
@@ -187,7 +192,7 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy Chat Dialog (voice enabled: TTS + STT) - Option A for TTS
+# Little Buddy Chat Dialog (voice enabled: TTS + STT) — Edge then offline TTS
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None, knowledge=None):
@@ -207,6 +212,7 @@ class DataBuddyDialog(wx.Dialog):
         self._tts_thread = None
         self._listening = False
         self._stop_listening = None  # SR background stopper
+        self._offline_warned = False  # show fallback message only once
 
         # High-contrast theme
         self.COLORS = {
@@ -408,9 +414,9 @@ class DataBuddyDialog(wx.Dialog):
 
         wx.CallAfter(render)
 
-    # ----- TTS (edge-tts public endpoint only) -----------------------------
+    # ----- TTS helpers -----------------------------------------------------
     def _clear_edge_azure_env(self):
-        """Prevent edge-tts from trying Azure mode."""
+        """Prevent edge-tts from switching to Azure mode when no key is set."""
         for k in (
             "SPEECH_KEY", "SPEECH_REGION",
             "AZURE_TTS_KEY", "AZURE_TTS_REGION",
@@ -421,62 +427,105 @@ class DataBuddyDialog(wx.Dialog):
             except Exception:
                 pass
 
+    # ----- TTS (Edge public -> offline pyttsx3 fallback) -------------------
     def speak(self, text: str):
-        if not edge_tts:
-            wx.MessageBox("Text-to-speech requires the 'edge-tts' package.\nInstall with: pip install edge-tts",
-                          "TTS Not Available", wx.OK | wx.ICON_WARNING)
-            return
-        if not pygame:
-            wx.MessageBox("Audio playback requires 'pygame'.\nInstall with: pip install pygame",
-                          "Playback Not Available", wx.OK | wx.ICON_WARNING)
-            return
-
-        # Stop any current playback
+        # Stop any current playback first
         self._stop_playback()
 
         def worker():
-            import asyncio
+            # 1) Try Edge public endpoint (no key)
+            ok = False
+            if edge_tts:
+                import asyncio
 
-            async def _synth_edge_public():
-                # Force the public Edge endpoint (no key)
-                self._clear_edge_azure_env()
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-                tmp.close()
-                voice = self.voice.GetStringSelection() or "en-US-GuyNeural"
-                communicate = edge_tts.Communicate(text, voice)
-                await communicate.save(tmp.name)
-                self._tts_file = tmp.name
+                async def _synth_edge_public():
+                    self._clear_edge_azure_env()
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                    tmp.close()
+                    voice = self.voice.GetStringSelection() or "en-US-GuyNeural"
+                    communicate = edge_tts.Communicate(text, voice)
+                    await communicate.save(tmp.name)
+                    self._tts_file = tmp.name
 
-            async def _run():
                 try:
-                    await _synth_edge_public()
+                    try:
+                        asyncio.run(_synth_edge_public())
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        loop.run_until_complete(_synth_edge_public())
+                        loop.close()
+                    ok = True
                 except Exception as e1:
-                    self._tts_file = None
+                    # Edge failed (401 etc.) — fall through to offline
+                    if not self._offline_warned:
+                        wx.CallAfter(
+                            wx.MessageBox,
+                            f"Online TTS unavailable ({e1}). Falling back to offline voice.",
+                            "TTS Fallback",
+                            wx.OK | wx.ICON_WARNING,
+                        )
+                        self._offline_warned = True
+
+            # 2) Offline fallback via pyttsx3 (Windows SAPI5)
+            if not ok:
+                if not pyttsx3:
                     wx.CallAfter(
                         wx.MessageBox,
-                        f"TTS error (Edge public endpoint): {e1}",
-                        "edge-tts",
-                        wx.OK | wx.ICON_ERROR,
+                        "Offline TTS requires 'pyttsx3'. Install with: pip install pyttsx3 pypiwin32",
+                        "TTS Not Available",
+                        wx.OK | wx.ICON_WARNING,
                     )
                     return
-
-                # Play it
                 try:
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+                    tmp.close()
+                    engine = pyttsx3.init()
+                    # Try to pick a US/GB English voice if available
+                    try:
+                        voices = engine.getProperty("voices")
+                        pick = None
+                        for v in voices:
+                            nm = (v.name or "").lower()
+                            lid = (v.id or "").lower()
+                            if any(k in nm or k in lid for k in ("zira", "hazel", "david", "zira desktop", "english")):
+                                pick = v.id
+                                break
+                        if pick:
+                            engine.setProperty("voice", pick)
+                    except Exception:
+                        pass
+                    # Save to WAV file
+                    engine.save_to_file(text, tmp.name)
+                    engine.runAndWait()
+                    self._tts_file = tmp.name
+                    ok = True
+                except Exception as e2:
+                    wx.CallAfter(
+                        wx.MessageBox,
+                        f"Offline TTS error: {e2}",
+                        "pyttsx3",
+                        wx.OK | wx.ICON_ERROR,
+                    )
+                    self._tts_file = None
+                    ok = False
+
+            # Play audio if we have a file and pygame is present
+            if ok and self._tts_file:
+                try:
+                    if not pygame:
+                        wx.CallAfter(
+                            wx.MessageBox,
+                            "Audio playback requires 'pygame' (pip install pygame).",
+                            "Playback Not Available",
+                            wx.OK | wx.ICON_WARNING,
+                        )
+                        return
                     if not pygame.mixer.get_init():
                         pygame.mixer.init()
                     pygame.mixer.music.load(self._tts_file)
                     pygame.mixer.music.play()
                 except Exception as e:
                     wx.CallAfter(wx.MessageBox, f"Audio playback error: {e}", "pygame", wx.OK | wx.ICON_ERROR)
-
-            # Run the async synth
-            try:
-                asyncio.run(_run())
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(_run())
-                loop.close()
 
         self._tts_thread = threading.Thread(target=worker, daemon=True)
         self._tts_thread.start()
