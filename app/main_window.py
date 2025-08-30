@@ -1,9 +1,10 @@
 import os
+import csv
 import wx
 import wx.grid as gridlib
 import pandas as pd
 
-from app.settings import SettingsWindow
+from app.settings import SettingsWindow, save_defaults, defaults
 from app.dialogs import QualityRuleDialog, DataBuddyDialog, SyntheticDataDialog
 from app.analysis import (
     detect_and_split_data,
@@ -11,136 +12,44 @@ from app.analysis import (
     quality_analysis,
     catalog_analysis,
     compliance_analysis,
-    detect_anomalies,
 )
 from app.s3_utils import download_text_from_uri, upload_to_s3
 
 
 class MainWindow(wx.Frame):
     def __init__(self):
-        super().__init__(None, title="Sidecar Data Quality", size=(1200, 800))
+        super().__init__(None, title="Sidecar Data Quality", size=(1120, 780))
 
-        # App icon
-        for p in [
-            os.path.join("assets", "sidecar.ico"),
-            os.path.join("assets", "sidecar-01.ico"),
-            "/mnt/data/sidecar-01.ico",
-            "sidecar.ico",
-        ]:
-            if os.path.exists(p):
-                try:
-                    self.SetIcon(wx.Icon(p, wx.BITMAP_TYPE_ICO))
-                    break
-                except Exception:
-                    pass
+        # App icon (upper-left corner)
+        try:
+            icon = wx.Icon("assets/sidecar-01.ico", wx.BITMAP_TYPE_ICO)
+            self.SetIcon(icon)
+        except Exception:
+            pass
 
         self.raw_data = []
         self.headers = []
         self.current_process = ""
         self.quality_rules = {}
-        self.knowledge_files = []  # for Little Buddy
+
+        # Knowledge files live here: list[dict(name,path,type,content?)]
+        self.knowledge_files = []
 
         self._build_ui()
         self.Centre()
         self.Show()
 
+    # ────────────────────────────────────────────────────────────────── UI
     def _build_ui(self):
-        # Palette
-        BG_FRAME   = wx.Colour(26, 26, 26)
-        BG_PANEL   = wx.Colour(32, 32, 32)
-        BG_HEADER  = wx.Colour(22, 22, 22)
-        TXT_PRIMARY = wx.Colour(225, 225, 225)
-        TXT_MUTED   = wx.Colour(200, 200, 200)
-        ACCENT     = wx.Colour(70, 130, 180)
+        pnl = wx.Panel(self)
+        pnl.SetBackgroundColour(wx.Colour(40, 40, 40))
+        vbox = wx.BoxSizer(wx.VERTICAL)
 
-        GRID_BG      = wx.Colour(45, 45, 45)
-        GRID_TXT     = wx.Colour(235, 235, 235)
-        GRID_HDR_BG  = wx.Colour(58, 58, 58)
-        GRID_HDR_TXT = wx.Colour(245, 245, 245)
-
-        self.SetBackgroundColour(BG_FRAME)
-
-        root = wx.Panel(self)
-        root.SetBackgroundColour(BG_PANEL)
-        root_sizer = wx.BoxSizer(wx.VERTICAL)
-
-        # Header band
-        header = wx.Panel(root)
-        header.SetBackgroundColour(BG_HEADER)
-        header_sizer = wx.BoxSizer(wx.VERTICAL)
-
-        title = wx.StaticText(header, label="🏍️🛺  Sidecar Data Quality")
+        # Title row
+        title = wx.StaticText(pnl, label="🏍️🛺 Sidecar Data Quality")
         title.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        title.SetForegroundColour(TXT_PRIMARY)
-        header_sizer.Add(title, 0, wx.ALIGN_CENTER | wx.ALL, 8)
-
-        # Toolbar container (left-aligned, expandable)
-        tb_panel = wx.Panel(header)
-        tb_panel.SetBackgroundColour(BG_HEADER)
-        # WrapSizer lets buttons flow to a new line if space is tight
-        tb_sizer = wx.WrapSizer(wx.HORIZONTAL)
-
-        # ── Left fixed column: Load Knowledge Files + compact filename area
-        left_col = wx.Panel(tb_panel)
-        left_col.SetBackgroundColour(BG_HEADER)
-        left_col_sizer = wx.BoxSizer(wx.VERTICAL)
-
-        btn_knowledge = wx.Button(left_col, label="Load Knowledge Files")
-        btn_knowledge.SetBackgroundColour(ACCENT)
-        btn_knowledge.SetForegroundColour(wx.WHITE)
-        btn_knowledge.SetFont(wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-        btn_knowledge.Bind(wx.EVT_BUTTON, self.on_load_knowledge)
-
-        # Small, wrapped, read-only box for filenames (fixed width prevents pushing toolbar)
-        self.knowledge_box = wx.TextCtrl(
-            left_col,
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.BORDER_NONE,
-            size=(220, 40),
-        )
-        self.knowledge_box.SetBackgroundColour(BG_HEADER)
-        self.knowledge_box.SetForegroundColour(TXT_MUTED)
-        self.knowledge_box.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-
-        left_col_sizer.Add(btn_knowledge, 0, wx.ALL, 4)
-        left_col_sizer.Add(self.knowledge_box, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 4)
-        left_col.SetSizer(left_col_sizer)
-        # Keep the left column narrow and fixed so it doesn't consume toolbar width
-        left_col.SetMinSize((230, -1))
-
-        tb_sizer.Add(left_col, 0, wx.RIGHT, 8)
-
-        # Other toolbar buttons
-        def make_btn(parent, text, handler):
-            b = wx.Button(parent, label=text)
-            b.SetBackgroundColour(ACCENT)
-            b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-            b.Bind(wx.EVT_BUTTON, handler)
-            return b
-
-        # Buttons in desired order
-        btns = [
-            ("Load File", self.on_load_file),
-            ("Load from URI/S3", self.on_load_s3),
-            ("Generate Synthetic Data", self.on_generate_synth),
-            ("Quality Rule Assignment", self.on_rules),
-            ("Profile", lambda e: self.do_analysis_with("Profile")),
-            ("Quality", lambda e: self.do_analysis_with("Quality")),
-            ("Detect Anomalies", self.on_detect_anomalies),
-            ("Catalog", lambda e: self.do_analysis_with("Catalog")),
-            ("Compliance", lambda e: self.do_analysis_with("Compliance")),
-            ("Little Buddy", self.on_buddy),
-            ("Export CSV", self.on_export_csv),
-            ("Export TXT", self.on_export_txt),
-            ("Upload to S3", self.on_upload_s3),
-        ]
-        for label, handler in btns:
-            tb_sizer.Add(make_btn(tb_panel, label, handler), 0, wx.ALL, 4)
-
-        tb_panel.SetSizer(tb_sizer)
-        # Left align and allow the toolbar to span full width
-        header_sizer.Add(tb_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        header.SetSizer(header_sizer)
+        title.SetForegroundColour(wx.Colour(230, 230, 230))
+        vbox.Add(title, 0, wx.ALIGN_CENTER | wx.ALL, 8)
 
         # Menu
         mb = wx.MenuBar()
@@ -153,65 +62,90 @@ class MainWindow(wx.Frame):
         mb.Append(m_set, "&Settings")
         self.SetMenuBar(mb)
 
-        # Grid
-        self.grid = gridlib.Grid(root)
+        # Toolbar (dark chip row)
+        toolbar_bg = wx.Panel(pnl)
+        toolbar_bg.SetBackgroundColour(wx.Colour(28, 28, 28))
+        tb = wx.WrapSizer(wx.HORIZONTAL)
+        toolbar_bg.SetSizer(tb)
+
+        def make_btn(lbl, handler, process: str | None = None):
+            btn = wx.Button(toolbar_bg, label=lbl)
+            btn.SetBackgroundColour(wx.Colour(70, 130, 180))
+            btn.SetForegroundColour(wx.WHITE)
+            btn.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+            btn.Bind(wx.EVT_BUTTON, handler)
+            if process:
+                btn.process = process
+            tb.Add(btn, 0, wx.ALL, 4)
+            return btn
+
+        # Buttons (order matters)
+        self.btn_load_knowledge = make_btn("Load Knowledge Files", self.on_load_knowledge)
+        make_btn("Load File", self.on_load_file)
+        make_btn("Load from URI/S3", self.on_load_s3)
+        make_btn("Generate Synthetic Data", self.on_generate_synth)
+        make_btn("Quality Rule Assignment", self.on_rules)
+        make_btn("Profile", self.do_analysis, "Profile")
+        make_btn("Quality", self.do_analysis, "Quality")
+        # Detect Anomalies button
+        make_btn("Detect Anomalies", self.on_detect_anomalies)
+        make_btn("Catalog", self.do_analysis, "Catalog")
+        make_btn("Compliance", self.do_analysis, "Compliance")
+        make_btn("Little Buddy", self.on_buddy)
+        make_btn("Export CSV", self.on_export_csv)
+        make_btn("Export TXT", self.on_export_txt)
+        make_btn("Upload to S3", self.on_upload_s3)
+
+        vbox.Add(toolbar_bg, 0, wx.EXPAND)
+
+        # Knowledge strip (separate row so it never overlaps toolbar)
+        strip = wx.Panel(pnl)
+        strip.SetBackgroundColour(wx.Colour(36, 36, 36))
+        strip_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        strip.SetSizer(strip_sizer)
+
+        lbl = wx.StaticText(strip, label="Knowledge Files:")
+        lbl.SetForegroundColour(wx.Colour(180, 200, 225))
+        lbl.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        strip_sizer.Add(lbl, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
+
+        self.knowledge_label = wx.StaticText(strip, label="None")
+        self.knowledge_label.SetForegroundColour(wx.Colour(215, 215, 215))
+        self.knowledge_label.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        strip_sizer.Add(self.knowledge_label, 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
+
+        vbox.Add(strip, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 2)
+
+        # Data grid
+        self.grid = gridlib.Grid(pnl)
         self.grid.CreateGrid(0, 0)
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
-        self.grid.SetDefaultCellBackgroundColour(GRID_BG)
-        self.grid.SetDefaultCellTextColour(GRID_TXT)
-        self.grid.SetGridLineColour(wx.Colour(80, 80, 80))
-        self.grid.SetLabelBackgroundColour(GRID_HDR_BG)
-        self.grid.SetLabelTextColour(GRID_HDR_TXT)
+        self.grid.SetDefaultCellBackgroundColour(wx.Colour(55, 55, 55))
+        self.grid.SetDefaultCellTextColour(wx.Colour(220, 220, 220))
+        self.grid.SetLabelBackgroundColour(wx.Colour(80, 80, 80))
+        self.grid.SetLabelTextColour(wx.Colour(240, 240, 240))
         self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        self.grid.SetRowLabelSize(46)
-        self.grid.SetRowLabelAlignment(wx.ALIGN_CENTER, wx.ALIGN_CENTER)
+        vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
 
-        root_sizer.Add(header, 0, wx.EXPAND)
-        root_sizer.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
-        root.SetSizer(root_sizer)
-        root.Layout()
+        pnl.SetSizer(vbox)
 
-    # ── Knowledge files handler ─────────────────────────────────────────────
-    def on_load_knowledge(self, _):
-        wildcard = (
-            "Supported (*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.csv;*.json;*.txt)|"
-            "*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.csv;*.json;*.txt|"
-            "All files (*.*)|*.*"
-        )
-        dlg = wx.FileDialog(
-            self,
-            "Select Knowledge Files",
-            wildcard=wildcard,
-            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE,
-        )
-        if dlg.ShowModal() != wx.ID_OK:
-            return
-        paths = dlg.GetPaths()
-        dlg.Destroy()
+    # ─────────────────────────────────────────────────────── knowledge strip
+    def _refresh_knowledge_strip(self):
+        if not self.knowledge_files:
+            txt = "None"
+        else:
+            names = [kf["name"] for kf in self.knowledge_files]
+            txt = "   •   ".join(names)
+        self.knowledge_label.SetLabel(txt)
+        try:
+            width = self.GetClientSize().GetWidth() - 150
+            if width > 150:
+                self.knowledge_label.Wrap(width)
+        except Exception:
+            pass
+        self.Layout()
 
-        files = []
-        for p in paths:
-            name = os.path.basename(p)
-            ext = os.path.splitext(name)[1].lower()
-            entry = {"name": name, "path": p, "type": ext, "content": None}
-            try:
-                if ext in {".txt", ".csv", ".json"}:
-                    with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                        text = f.read()
-                    if len(text) > 100_000:
-                        text = text[:100_000] + "\n…(truncated)…"
-                    entry["content"] = text
-            except Exception as e:
-                entry["content"] = f"(error reading file: {e})"
-            files.append(entry)
-
-        self.knowledge_files = files
-        # Show only names (small box, won’t expand toolbar)
-        self.knowledge_box.SetValue("\n".join(f["name"] for f in files))
-
-        wx.MessageBox(f"Loaded {len(files)} knowledge file(s).", "Knowledge", wx.OK | wx.ICON_INFORMATION)
-
-    # Display helpers
+    # ────────────────────────────────────────────────────────── data render
     def _display(self, hdr, data):
         self.grid.ClearGrid()
         if self.grid.GetNumberRows():
@@ -228,7 +162,7 @@ class MainWindow(wx.Frame):
             for c, val in enumerate(row):
                 self.grid.SetCellValue(r, c, str(val))
                 if r % 2 == 0:
-                    self.grid.SetCellBackgroundColour(r, c, wx.Colour(40, 40, 40))
+                    self.grid.SetCellBackgroundColour(r, c, wx.Colour(45, 45, 45))
         self.adjust_grid()
 
     def adjust_grid(self):
@@ -245,7 +179,7 @@ class MainWindow(wx.Frame):
         event.Skip()
         wx.CallAfter(self.adjust_grid)
 
-    # Menu / toolbar handlers
+    # ───────────────────────────────────────────────────── menu / toolbar
     def on_settings(self, _):
         SettingsWindow(self).Show()
 
@@ -270,21 +204,26 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Failed to load data:\n{e}", "Error", wx.OK | wx.ICON_ERROR)
 
-    def do_analysis_with(self, proc: str):
+    def on_generate_synth(self, _):
         if not self.headers:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
             return
-        self.current_process = proc
-        df = pd.DataFrame(self.raw_data, columns=self.headers)
-        func = {
-            "Profile": profile_analysis,
-            "Quality": lambda d: quality_analysis(d, self.quality_rules),
-            "Catalog": catalog_analysis,
-            "Compliance": compliance_analysis,
-        }[proc]
-        hdr, data = func(df)
-        self._display(hdr, data)
-        wx.MessageBox(upload_to_s3(proc, hdr, data), "Analysis", wx.OK | wx.ICON_INFORMATION)
+        dlg = SyntheticDataDialog(self, self.headers)
+        if dlg.ShowModal() == wx.ID_OK:
+            n, fields = dlg.get_values()
+            # simple synthetic generation: repeat the header values with counters
+            rows = []
+            for i in range(n):
+                row = []
+                for col in self.headers:
+                    if col not in fields:
+                        row.append("")
+                    else:
+                        row.append(f"Synth_{col}_{i+1}")
+                rows.append(row)
+            self._display(self.headers, rows)
+            wx.MessageBox(upload_to_s3("Synthetic", self.headers, rows), "Synthetic", wx.OK | wx.ICON_INFORMATION)
+        dlg.Destroy()
 
     def on_rules(self, _):
         if not self.headers:
@@ -323,80 +262,103 @@ class MainWindow(wx.Frame):
         hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
         data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))]
                 for r in range(self.grid.GetNumberRows())]
-        wx.MessageBox(
-            upload_to_s3(self.current_process or "Unknown", hdr, data),
-            "Upload",
-            wx.OK | wx.ICON_INFORMATION,
+        wx.MessageBox(upload_to_s3(self.current_process or "Unknown", hdr, data),
+                      "Upload", wx.OK | wx.ICON_INFORMATION)
+
+    # ───────────────────────────────────────────────── knowledge loading
+    def on_load_knowledge(self, _):
+        """Allow selecting multiple files and show their names under the toolbar."""
+        wildcard = (
+            "Knowledge files (*.txt;*.csv;*.json;*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp)|"
+            "*.txt;*.csv;*.json;*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp|"
+            "All files (*.*)|*.*"
         )
-
-    # Detect anomalies
-    def on_detect_anomalies(self, _):
-        if not self.headers or not self.raw_data:
-            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
-            return
-        df = pd.DataFrame(self.raw_data, columns=self.headers)
-        hdr, data = detect_anomalies(df)
-        self.current_process = "Anomalies"
-        self._display(hdr, data)
-        if data:
-            wx.MessageBox(upload_to_s3("Anomalies", hdr, data), "Detect Anomalies", wx.OK | wx.ICON_INFORMATION)
-        else:
-            wx.MessageBox("No anomalies detected.", "Detect Anomalies", wx.OK | wx.ICON_INFORMATION)
-
-    # Synthetic data generation
-    def on_generate_synth(self, _):
-        if not self.headers or not self.raw_data:
-            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
-            return
-
-        dlg = SyntheticDataDialog(self, self.headers)
+        dlg = wx.FileDialog(
+            self,
+            "Select Knowledge Files",
+            wildcard=wildcard,
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE,
+        )
         if dlg.ShowModal() != wx.ID_OK:
             dlg.Destroy()
             return
 
-        n, fields = dlg.get_values()
+        paths = dlg.GetPaths()
         dlg.Destroy()
-        if not fields:
-            wx.MessageBox("Select at least one field.", "No fields selected", wx.OK | wx.ICON_WARNING)
-            return
 
-        df = pd.DataFrame(self.raw_data, columns=self.headers)
-        synth = self._generate_synthetic_df(df, fields, n)
+        added = 0
+        for p in paths:
+            try:
+                base = os.path.basename(p)
+                ext = os.path.splitext(base)[1].lower()
 
-        self.headers = list(synth.columns)
-        self.raw_data = synth.values.tolist()
-        self._display(self.headers, self.raw_data)
+                # Avoid duplicates by path
+                if any(kf["path"] == p for kf in self.knowledge_files):
+                    continue
 
-        wx.MessageBox(f"Generated {n} synthetic record(s) using {len(fields)} field(s).",
-                      "Synthetic Data", wx.OK | wx.ICON_INFORMATION)
+                entry = {"name": base, "path": p, "type": "binary", "content": None}
 
-    def _generate_synthetic_df(self, df: pd.DataFrame, fields, n_rows: int) -> pd.DataFrame:
-        """Bootstrap each selected column to preserve empirical distributions."""
-        out = {}
-        for col in fields:
-            s = df[col]
-            s_nonnull = s.dropna()
-
-            if s_nonnull.empty:
-                out[col] = [""] * n_rows
-                continue
-
-            if pd.api.types.is_datetime64_any_dtype(s) or "date" in str(col).lower() or "time" in str(col).lower():
-                dt = pd.to_datetime(s_nonnull, errors="coerce").dropna()
-                if dt.empty:
-                    out[col] = s_nonnull.astype(str).sample(n=n_rows, replace=True).reset_index(drop=True).tolist()
+                if ext in {".txt", ".csv", ".json"}:
+                    try:
+                        with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                            entry["content"] = f.read(100_000)  # keep first 100 KB
+                        entry["type"] = "text"
+                    except Exception:
+                        entry["type"] = "text"
+                        entry["content"] = None
+                elif ext in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}:
+                    entry["type"] = "image"
                 else:
-                    sampled = dt.sample(n=n_rows, replace=True).reset_index(drop=True)
-                    out[col] = sampled.dt.strftime("%Y-%m-%d %H:%M:%S").tolist()
+                    entry["type"] = "binary"
+
+                self.knowledge_files.append(entry)
+                added += 1
+            except Exception:
                 continue
 
-            if pd.api.types.is_numeric_dtype(s):
-                sampled = s_nonnull.sample(n=n_rows, replace=True).reset_index(drop=True)
-                if pd.api.types.is_integer_dtype(s.dtype):
-                    sampled = sampled.round(0).astype("Int64").astype(object).where(sampled.notna(), None)
-                out[col] = sampled.tolist()
-                continue
+        self._refresh_knowledge_strip()
+        if added:
+            wx.MessageBox(f"Loaded {added} knowledge file(s).", "Knowledge", wx.OK | wx.ICON_INFORMATION)
 
-            out[col] = s_nonnull.astype(str).sample(n=n_rows, replace=True).reset_index(drop=True).tolist()
+    # ───────────────────────────────────────────────────── analyses & misc
+    def do_analysis(self, evt):
+        if not self.headers:
+            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
+            return
+        proc = evt.GetEventObject().process
+        self.current_process = proc
+        df = pd.DataFrame(self.raw_data, columns=self.headers)
+        func = {
+            "Profile": profile_analysis,
+            "Quality": lambda d: quality_analysis(d, self.quality_rules),
+            "Catalog": catalog_analysis,
+            "Compliance": compliance_analysis,
+        }[proc]
+        hdr, data = func(df)
+        self._display(hdr, data)
+        wx.MessageBox(upload_to_s3(proc, hdr, data), "Analysis", wx.OK | wx.ICON_INFORMATION)
 
-        return pd.DataFrame(out)
+    def on_detect_anomalies(self, _):
+        """Simple anomaly detector: flags empty values and overly long strings."""
+        if not self.headers:
+            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
+            return
+        df = pd.DataFrame(self.raw_data, columns=self.headers)
+
+        rows = []
+        for r_idx, row in df.iterrows():
+            for col, val in row.items():
+                s = str(val)
+                reason = None
+                rec = None
+                if s.strip() == "" or s.lower() in {"nan", "none", "null"}:
+                    reason = "Missing/blank value"
+                    rec = f"Impute or remove row; ensure '{col}' has required data"
+                elif len(s) > 128:
+                    reason = "Unusually long value"
+                    rec = f"Trim or validate length for '{col}'"
+                if reason:
+                    rows.append([r_idx + 1, col, val, reason, rec])
+
+        hdr = ["Row", "Field", "Value", "Reason", "Recommendation"]
+        self._display(hdr, rows if rows else [["-", "-", "-", "No obvious anomalies found", "-"]])
