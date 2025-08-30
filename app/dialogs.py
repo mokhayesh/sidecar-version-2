@@ -51,7 +51,7 @@ class QualityRuleDialog(wx.Dialog):
         self.field_list = wx.ListBox(pnl, choices=list(fields), style=wx.LB_EXTENDED)
         self.field_list.SetBackgroundColour(INPUT_BG)
         self.field_list.SetForegroundColour(INPUT_TXT)
-        self.field_list.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.field_list.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         fsz.Add(self.field_list, 1, wx.EXPAND | wx.ALL, 5)
         main.Add(fsz, 1, wx.EXPAND | wx.ALL, 5)
 
@@ -66,7 +66,7 @@ class QualityRuleDialog(wx.Dialog):
         self.rule_choice = wx.ComboBox(pnl, style=wx.CB_READONLY)
         self.rule_choice.SetBackgroundColour(INPUT_BG)
         self.rule_choice.SetForegroundColour(INPUT_TXT)
-        self.rule_choice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.rule_choice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         self.rule_choice.Bind(wx.EVT_COMBOBOX, self.on_pick_rule)
         g.Add(self.rule_choice, 0, wx.EXPAND)
 
@@ -77,7 +77,7 @@ class QualityRuleDialog(wx.Dialog):
         self.pattern_txt = wx.TextCtrl(pnl)
         self.pattern_txt.SetBackgroundColour(INPUT_BG)
         self.pattern_txt.SetForegroundColour(INPUT_TXT)
-        self.pattern_txt.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.pattern_txt.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         g.Add(self.pattern_txt, 0, wx.EXPAND)
         main.Add(g, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
@@ -88,7 +88,7 @@ class QualityRuleDialog(wx.Dialog):
         self.preview = rt.RichTextCtrl(pnl, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
         self.preview.SetBackgroundColour(wx.Colour(35, 35, 35))
         self.preview.SetForegroundColour(wx.Colour(230, 230, 230))
-        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         pv.Add(self.preview, 1, wx.EXPAND | wx.ALL, 4)
         main.Add(pv, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
@@ -111,7 +111,7 @@ class QualityRuleDialog(wx.Dialog):
         for b in (load_btn, assign_btn, close_btn):
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
 
         load_btn.Bind(wx.EVT_BUTTON, self.on_load_rules)
         assign_btn.Bind(wx.EVT_BUTTON, self.on_assign)
@@ -175,10 +175,10 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy Chat Dialog (high-contrast + forced white reply text)
+# Little Buddy Chat Dialog (high-contrast + knowledge files context)
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
-    def __init__(self, parent, data=None, headers=None):
+    def __init__(self, parent, data=None, headers=None, knowledge=None):
         super().__init__(
             parent,
             title="Little Buddy",
@@ -188,6 +188,7 @@ class DataBuddyDialog(wx.Dialog):
 
         self.data = data
         self.headers = headers
+        self.knowledge = knowledge or []  # list of dicts: {name, path, type, content}
 
         # High-contrast theme for readability
         self.COLORS = {
@@ -210,7 +211,7 @@ class DataBuddyDialog(wx.Dialog):
         # Title
         title = wx.StaticText(pnl, label="Little Buddy")
         title.SetForegroundColour(self.COLORS["text"])
-        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
         # (Optional) audio init protected
@@ -225,7 +226,7 @@ class DataBuddyDialog(wx.Dialog):
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
         self.voice.SetForegroundColour(self.COLORS["input_fg"])
-        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         vbox.Add(self.voice, 0, wx.EXPAND | wx.ALL, 5)
 
         # Persona selector
@@ -236,8 +237,8 @@ class DataBuddyDialog(wx.Dialog):
         )
         self.persona.SetSelection(0)
         self.persona.SetBackgroundColour(self.COLORS["input_bg"])
-        self.persona.SetForegroundColour(self.COLORS["input_fg"])
-        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+               self.persona.SetForegroundColour(self.COLORS["input_fg"])
+        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         vbox.Add(self.persona, 0, wx.EXPAND | wx.ALL, 5)
 
         # Prompt row
@@ -245,13 +246,13 @@ class DataBuddyDialog(wx.Dialog):
 
         ask_lbl = wx.StaticText(pnl, label="Ask:")
         ask_lbl.SetForegroundColour(self.COLORS["muted"])
-        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         row.Add(ask_lbl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
         self.prompt = wx.TextCtrl(pnl, style=wx.TE_PROCESS_ENTER)
         self.prompt.SetBackgroundColour(self.COLORS["input_bg"])
         self.prompt.SetForegroundColour(self.COLORS["input_fg"])
-        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         self.prompt.SetHint("Type your question and press Enter…")
         self.prompt.Bind(wx.EVT_TEXT_ENTER, self.on_ask)
         row.Add(self.prompt, 1, wx.EXPAND | wx.RIGHT, 6)
@@ -259,7 +260,7 @@ class DataBuddyDialog(wx.Dialog):
         send_btn = wx.Button(pnl, label="Send")
         send_btn.SetBackgroundColour(self.COLORS["accent"])
         send_btn.SetForegroundColour(wx.WHITE)
-        send_btn.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        send_btn.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         send_btn.Bind(wx.EVT_BUTTON, self.on_ask)
         row.Add(send_btn, 0, wx.ALIGN_CENTER_VERTICAL)
 
@@ -303,6 +304,33 @@ class DataBuddyDialog(wx.Dialog):
         finally:
             self.reply.EndStyle()
 
+    # ----- knowledge context ----------------------------------------------
+    def _build_knowledge_context(self, max_chars=1500):
+        """
+        Build a compact textual context from the loaded knowledge files:
+        - CSV/JSON/TXT: include a truncated snippet.
+        - Images/binary: include filename only.
+        """
+        if not self.knowledge:
+            return ""
+        chunks = []
+        for f in self.knowledge:
+            name = f.get("name", "file")
+            typ = (f.get("type") or "").lower()
+            content = f.get("content")
+            if content and isinstance(content, str):
+                # allocate space across files fairly
+                per_file = max(200, max_chars // max(1, len(self.knowledge)))
+                snippet = content[:min(len(content), per_file)].strip()
+                chunks.append(f"File: {name}\n{snippet}")
+            else:
+                # image or unreadable: just reference it
+                chunks.append(f"File: {name} (image or binary)")
+        text = "\n\n".join(chunks)
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n…(truncated)…"
+        return text
+
     # ----- events ----------------------------------------------------------
     def on_ask(self, _):
         q = self.prompt.GetValue().strip()
@@ -318,8 +346,14 @@ class DataBuddyDialog(wx.Dialog):
     def _answer(self, q: str):
         persona = self.persona.GetValue()
         prompt = f"As a {persona}, {q}" if persona else q
+
         if self.data:
-            prompt += "\nData sample:\n" + "; ".join(map(str, self.data[0]))
+            prompt += "\n\nData sample:\n" + "; ".join(map(str, self.data[0]))
+
+        # Include knowledge files context
+        kn = self._build_knowledge_context()
+        if kn:
+            prompt += "\n\nKnowledge files:\n" + kn
 
         try:
             resp = requests.post(
@@ -390,7 +424,7 @@ class SyntheticDataDialog(wx.Dialog):
         self.count = wx.SpinCtrl(pnl, min=1, max=1_000_000, initial=100)
         self.count.SetBackgroundColour(INPUT_BG)
         self.count.SetForegroundColour(INPUT_TXT)
-        self.count.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.count.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         s1.Add(self.count, 1, wx.ALL | wx.EXPAND, 6)
         s.Add(s1, 0, wx.EXPAND | wx.ALL, 8)
 
@@ -401,7 +435,7 @@ class SyntheticDataDialog(wx.Dialog):
         self.chk = wx.CheckListBox(pnl, choices=list(fields))
         self.chk.SetBackgroundColour(INPUT_BG)
         self.chk.SetForegroundColour(INPUT_TXT)
-        self.chk.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.chk.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         for i in range(len(fields)):
             self.chk.Check(i, True)  # default: all selected
         s2.Add(self.chk, 1, wx.ALL | wx.EXPAND, 6)
@@ -428,7 +462,7 @@ class SyntheticDataDialog(wx.Dialog):
         for b in (ok_btn, cancel_btn):
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         btns.AddButton(ok_btn)
         btns.AddButton(cancel_btn)
         btns.Realize()

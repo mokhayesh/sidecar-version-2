@@ -11,7 +11,7 @@ from app.analysis import (
     quality_analysis,
     catalog_analysis,
     compliance_analysis,
-    detect_anomalies,    # ← NEW
+    detect_anomalies,  # anomalies feature
 )
 from app.s3_utils import download_text_from_uri, upload_to_s3
 
@@ -38,6 +38,7 @@ class MainWindow(wx.Frame):
         self.headers = []
         self.current_process = ""
         self.quality_rules = {}
+        self.knowledge_files = []  # ← NEW: knowledge files available to Little Buddy
 
         self._build_ui()
         self.Centre()
@@ -49,6 +50,7 @@ class MainWindow(wx.Frame):
         BG_PANEL   = wx.Colour(32, 32, 32)
         BG_HEADER  = wx.Colour(22, 22, 22)
         TXT_PRIMARY = wx.Colour(225, 225, 225)
+        TXT_MUTED   = wx.Colour(200, 200, 200)
         ACCENT     = wx.Colour(70, 130, 180)
 
         GRID_BG      = wx.Colour(45, 45, 45)
@@ -72,11 +74,33 @@ class MainWindow(wx.Frame):
         title.SetForegroundColour(TXT_PRIMARY)
         header_sizer.Add(title, 0, wx.ALIGN_CENTER | wx.ALL, 8)
 
-        # Toolbar
+        # Toolbar row
         tb_panel = wx.Panel(header)
         tb_panel.SetBackgroundColour(BG_HEADER)
         tb_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
+        # ── NEW: Left column with "Load Knowledge Files" + filenames under it
+        left_col = wx.Panel(tb_panel)
+        left_col.SetBackgroundColour(BG_HEADER)
+        left_col_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        btn_knowledge = wx.Button(left_col, label="Load Knowledge Files")
+        btn_knowledge.SetBackgroundColour(ACCENT)
+        btn_knowledge.SetForegroundColour(wx.WHITE)
+        btn_knowledge.SetFont(wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        btn_knowledge.Bind(wx.EVT_BUTTON, self.on_load_knowledge)
+
+        self.knowledge_label = wx.StaticText(left_col, label="")
+        self.knowledge_label.SetForegroundColour(TXT_MUTED)
+        self.knowledge_label.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+
+        left_col_sizer.Add(btn_knowledge, 0, wx.ALL, 4)
+        left_col_sizer.Add(self.knowledge_label, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        left_col.SetSizer(left_col_sizer)
+
+        tb_sizer.Add(left_col, 0, wx.RIGHT, 8)
+
+        # Other toolbar buttons
         buttons = [
             ("Load File", self.on_load_file),
             ("Load from URI/S3", self.on_load_s3),
@@ -84,9 +108,7 @@ class MainWindow(wx.Frame):
             ("Quality Rule Assignment", self.on_rules),
             ("Profile", self.do_analysis, "Profile"),
             ("Quality", self.do_analysis, "Quality"),
-
-            ("Detect Anomalies", self.on_detect_anomalies),  # ← NEW BUTTON
-
+            ("Detect Anomalies", self.on_detect_anomalies),
             ("Catalog", self.do_analysis, "Catalog"),
             ("Compliance", self.do_analysis, "Compliance"),
             ("Little Buddy", self.on_buddy),
@@ -139,6 +161,57 @@ class MainWindow(wx.Frame):
         root_sizer.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
         root.SetSizer(root_sizer)
         root.Layout()
+
+    # ── Knowledge files handler ─────────────────────────────────────────────
+    def on_load_knowledge(self, _):
+        wildcard = (
+            "Supported (*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.csv;*.json;*.txt)|"
+            "*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.csv;*.json;*.txt|"
+            "All files (*.*)|*.*"
+        )
+        dlg = wx.FileDialog(
+            self,
+            "Select Knowledge Files",
+            wildcard=wildcard,
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE,
+        )
+        if dlg.ShowModal() != wx.ID_OK:
+            return
+        paths = dlg.GetPaths()
+        dlg.Destroy()
+
+        files = []
+        for p in paths:
+            name = os.path.basename(p)
+            ext = os.path.splitext(name)[1].lower()
+            entry = {"name": name, "path": p, "type": ext, "content": None}
+            try:
+                # Only read text-like files; cap size to keep prompts small
+                if ext in {".txt", ".csv", ".json"}:
+                    with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                        text = f.read()
+                    # Trim to ~100 KB per file maximum
+                    if len(text) > 100_000:
+                        text = text[:100_000] + "\n…(truncated)…"
+                    entry["content"] = text
+                else:
+                    # image or other: store a note
+                    entry["content"] = None
+            except Exception as e:
+                entry["content"] = f"(error reading file: {e})"
+            files.append(entry)
+
+        self.knowledge_files = files
+
+        # Show names under the button (multi-line)
+        label = "\n".join(f["name"] for f in self.knowledge_files)
+        self.knowledge_label.SetLabel(label)
+        # Wrap the label so long names don't blow up layout
+        self.knowledge_label.Wrap(220)
+        self.knowledge_label.GetParent().Layout()
+        self.knowledge_label.GetGrandParent().Layout()
+
+        wx.MessageBox(f"Loaded {len(files)} knowledge file(s).", "Knowledge", wx.OK | wx.ICON_INFORMATION)
 
     # Display helpers
     def _display(self, hdr, data):
@@ -223,7 +296,8 @@ class MainWindow(wx.Frame):
         QualityRuleDialog(self, self.headers, self.quality_rules).ShowModal()
 
     def on_buddy(self, _):
-        DataBuddyDialog(self, self.raw_data, self.headers).ShowModal()
+        # Pass knowledge files to the chat dialog
+        DataBuddyDialog(self, self.raw_data, self.headers, knowledge=self.knowledge_files).ShowModal()
 
     def _export(self, path, sep):
         hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
@@ -259,7 +333,7 @@ class MainWindow(wx.Frame):
             wx.OK | wx.ICON_INFORMATION,
         )
 
-    # ── New: Detect anomalies ────────────────────────────────────────────────
+    # Detect anomalies
     def on_detect_anomalies(self, _):
         if not self.headers or not self.raw_data:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
@@ -273,7 +347,7 @@ class MainWindow(wx.Frame):
         else:
             wx.MessageBox("No anomalies detected.", "Detect Anomalies", wx.OK | wx.ICON_INFORMATION)
 
-    # ── Synthetic data generation (unchanged) ───────────────────────────────
+    # Synthetic data generation (unchanged)
     def on_generate_synth(self, _):
         if not self.headers or not self.raw_data:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
