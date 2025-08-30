@@ -192,7 +192,7 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy — faster streaming, voice, image generation with fallbacks
+# Little Buddy — provider-aware streaming (OpenAI + Gemini), voice, images, STT
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None, knowledge=None):
@@ -231,7 +231,7 @@ class DataBuddyDialog(wx.Dialog):
         title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
-        # Options row — Fast Mode speeds up startup with a lighter model
+        # Options row
         opts = wx.BoxSizer(wx.HORIZONTAL)
 
         self.voice = wx.Choice(pnl, choices=["en-US-AriaNeural", "en-US-GuyNeural", "en-GB-SoniaNeural"])
@@ -247,7 +247,7 @@ class DataBuddyDialog(wx.Dialog):
         opts.Add(self.tts_checkbox, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
 
         self.fast_mode = wx.CheckBox(pnl, label="⚡ Fast Mode")
-        self.fast_mode.SetValue(True)  # ON by default for snappier UX
+        self.fast_mode.SetValue(True)
         self.fast_mode.SetForegroundColour(self.COLORS["text"])
         opts.Add(self.fast_mode, 0, wx.ALIGN_CENTER_VERTICAL)
 
@@ -364,7 +364,7 @@ class DataBuddyDialog(wx.Dialog):
             text = text[:max_chars] + "\n…(truncated)…"
         return text
 
-    # ---------- chat (streaming; Fast Mode uses fast_model if provided)
+    # ---------- chat entrypoint (provider aware)
     def on_ask(self, _):
         q = self.prompt.GetValue().strip()
         self.prompt.SetValue("")
@@ -374,9 +374,9 @@ class DataBuddyDialog(wx.Dialog):
         self._reset_reply_style()
         self._write_reply("Thinking…\n")
 
-        threading.Thread(target=self._answer_streaming, args=(q,), daemon=True).start()
+        threading.Thread(target=self._answer_dispatch, args=(q,), daemon=True).start()
 
-    def _answer_streaming(self, q: str):
+    def _answer_dispatch(self, q: str):
         persona = self.persona.GetValue()
         prompt = f"As a {persona}, {q}" if persona else q
 
@@ -387,7 +387,20 @@ class DataBuddyDialog(wx.Dialog):
         if kn:
             prompt += "\n\nKnowledge files:\n" + kn
 
-        # Choose model based on Fast Mode
+        provider = (defaults.get("provider") or "auto").lower().strip()
+        if provider == "gemini":
+            self._chat_gemini_streaming(prompt)
+            return
+
+        # default / openai / custom (OpenAI-compatible)
+        ok = self._chat_openai_streaming(prompt)
+        if not ok and provider == "auto" and defaults.get("gemini_api_key"):
+            # seamless fallback to Gemini if OpenAI fails (e.g., 401/403)
+            self._write_reply("\n\n(Falling back to Gemini…)\n", newline=False)
+            self._chat_gemini_streaming(prompt)
+
+    # ---------- OpenAI streaming
+    def _chat_openai_streaming(self, prompt: str) -> bool:
         model_default = defaults.get("default_model", "gpt-4o-mini")
         model_fast = defaults.get("fast_model", "gpt-4o-mini")
         model = model_fast if self.fast_mode.GetValue() else model_default
@@ -397,6 +410,10 @@ class DataBuddyDialog(wx.Dialog):
             "Authorization": f"Bearer {defaults.get('api_key','')}",
             "Content-Type": "application/json",
         }
+        org = (defaults.get("openai_org") or "").strip()
+        if org:
+            headers["OpenAI-Organization"] = org
+
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
@@ -406,9 +423,10 @@ class DataBuddyDialog(wx.Dialog):
         }
 
         buf = []
-
         try:
             with self.session.post(url, headers=headers, json=payload, stream=True, timeout=(8, 90), verify=False) as r:
+                if r.status_code in (401, 403):
+                    raise requests.HTTPError(f"{r.status_code} auth error", response=r)
                 r.raise_for_status()
                 for raw in r.iter_lines(decode_unicode=True):
                     if not raw:
@@ -427,12 +445,95 @@ class DataBuddyDialog(wx.Dialog):
                         continue
         except Exception as e:
             wx.CallAfter(self.reply.Clear)
-            wx.CallAfter(self._write_reply, f"Error: {e}")
-            return
+            wx.CallAfter(self._write_reply, f"Error (OpenAI): {e}")
+            return False
 
         answer = "".join(buf)
         if self.tts_checkbox.GetValue() and answer.strip():
             wx.CallAfter(lambda: self.speak(answer))
+        return True
+
+    # ---------- Gemini streaming
+    def _gemini_model(self) -> str:
+        return defaults.get("fast_model" if self.fast_mode.GetValue() else "default_model",
+                            "gemini-1.5-flash")
+
+    def _gemini_base(self) -> str:
+        return (defaults.get("gemini_text_url") or "https://generativelanguage.googleapis.com/v1beta/models").rstrip("/")
+
+    def _chat_gemini_streaming(self, prompt: str):
+        key = (defaults.get("gemini_api_key") or "").strip()
+        if not key:
+            wx.CallAfter(self.reply.Clear)
+            wx.CallAfter(self._write_reply, "Error: Gemini API key is not set in Settings.")
+            return
+
+        model = self._gemini_model()
+        base = self._gemini_base()
+        # SSE streaming endpoint
+        url = f"{base}/{model}:streamGenerateContent?alt=sse&key={key}"
+        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+
+        buf = []
+        try:
+            with self.session.post(url, headers={"Content-Type": "application/json"},
+                                   json=body, stream=True, timeout=(8, 90)) as r:
+                # If SSE not supported on account, fall back to non-streaming
+                if r.status_code == 404 or r.status_code == 400:
+                    raise requests.HTTPError("SSE not available", response=r)
+                r.raise_for_status()
+                for line in r.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                        text = self._extract_gemini_text(obj)
+                        if text:
+                            buf.append(text)
+                            wx.CallAfter(self._write_reply, text)
+                    except Exception:
+                        continue
+        except Exception:
+            # Fallback to non-streaming generateContent
+            try:
+                url2 = f"{base}/{model}:generateContent?key={key}"
+                r2 = self.session.post(url2, headers={"Content-Type": "application/json"},
+                                       json=body, timeout=90)
+                r2.raise_for_status()
+                obj = r2.json()
+                text = self._extract_gemini_text(obj) or ""
+                wx.CallAfter(self.reply.Clear)
+                wx.CallAfter(self._write_reply, text)
+                buf = [text]
+            except Exception as e2:
+                wx.CallAfter(self.reply.Clear)
+                wx.CallAfter(self._write_reply, f"Error (Gemini): {e2}")
+                return
+
+        answer = "".join(buf)
+        if self.tts_checkbox.GetValue() and answer.strip():
+            wx.CallAfter(lambda: self.speak(answer))
+
+    @staticmethod
+    def _extract_gemini_text(obj) -> str | None:
+        try:
+            cands = obj.get("candidates") or []
+            if not cands:
+                return None
+            content = cands[0].get("content") or {}
+            parts = content.get("parts") or []
+            out = []
+            for p in parts:
+                if "text" in p:
+                    out.append(p["text"])
+            return "".join(out) if out else None
+        except Exception:
+            return None
 
     # ---------- image generation with fallbacks (OpenAI → Stability → offline)
     def on_generate_image(self, _):
@@ -443,11 +544,9 @@ class DataBuddyDialog(wx.Dialog):
         threading.Thread(target=self._gen_image_worker, args=(prompt,), daemon=True).start()
 
     def _gen_image_worker(self, prompt: str):
-        # Provider preference: defaults.image_provider or env
         provider = (defaults.get("image_provider") or os.environ.get("IMAGE_PROVIDER") or "openai").lower().strip()
         tried_msgs = []
 
-        # 1) OpenAI Images
         if provider in ("openai", "auto"):
             try:
                 path = self._generate_image_openai(prompt)
@@ -456,8 +555,7 @@ class DataBuddyDialog(wx.Dialog):
             except Exception as e:
                 tried_msgs.append(f"OpenAI: {e}")
 
-        # 2) Stability AI
-        if provider in ("stability", "auto", "openai"):  # allow fallback from openai
+        if provider in ("stability", "auto", "openai"):
             try:
                 path = self._generate_image_stability(prompt)
                 wx.CallAfter(self._show_image_preview, path)
@@ -465,7 +563,6 @@ class DataBuddyDialog(wx.Dialog):
             except Exception as e:
                 tried_msgs.append(f"Stability: {e}")
 
-        # 3) Offline placeholder
         try:
             path = self._generate_image_offline(prompt)
             wx.CallAfter(self._show_image_preview, path)
@@ -511,7 +608,6 @@ class DataBuddyDialog(wx.Dialog):
         key = (defaults.get("stability_api_key") or os.environ.get("STABILITY_API_KEY") or "").strip()
         if not key:
             raise RuntimeError("No Stability API key configured (stability_api_key).")
-        # v1 text-to-image endpoint (simple)
         url = "https://api.stability.ai/v1/generation/stable-diffusion-v1-6/text-to-image"
         headers = {
             "Authorization": f"Bearer {key}",
@@ -527,7 +623,7 @@ class DataBuddyDialog(wx.Dialog):
             "steps": 30
         }
         r = self.session.post(url, headers=headers, json=body, timeout=120)
-        if r.status_code == 401 or r.status_code == 403:
+        if r.status_code in (401, 403):
             raise RuntimeError(f"{r.status_code} {r.reason}: Stability key not authorized.")
         r.raise_for_status()
         out = r.json()
@@ -542,14 +638,12 @@ class DataBuddyDialog(wx.Dialog):
         return tmp.name
 
     def _generate_image_offline(self, prompt: str) -> str:
-        # Create a legible PNG with the prompt (always succeeds)
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
         tmp.close()
         if Image and ImageDraw:
             img = Image.new("RGB", (1024, 1024), (32, 36, 44))
             draw = ImageDraw.Draw(img)
             try:
-                # Try a system font; fall back to default
                 font = ImageFont.truetype("arial.ttf", 28)
             except Exception:
                 font = ImageFont.load_default()
@@ -557,7 +651,6 @@ class DataBuddyDialog(wx.Dialog):
             draw.multiline_text((40, 40), text, fill=(220, 230, 255), font=font, spacing=6)
             img.save(tmp.name, "PNG")
         else:
-            # Fallback: write a minimal PNG from wx (no Pillow available)
             bmp = wx.Bitmap(1024, 1024)
             dc = wx.MemoryDC(bmp)
             dc.SetBackground(wx.Brush(wx.Colour(32, 36, 44)))
@@ -578,7 +671,6 @@ class DataBuddyDialog(wx.Dialog):
         pnl.SetBackgroundColour(wx.Colour(30, 30, 30))
         v = wx.BoxSizer(wx.VERTICAL)
         img = wx.Image(path, wx.BITMAP_TYPE_ANY)
-        # scale nicely into dialog
         w = min(680, img.GetWidth()); h = int(w * img.GetHeight() / max(1, img.GetWidth()))
         img = img.Scale(w, h, wx.IMAGE_QUALITY_HIGH)
         v.Add(wx.StaticBitmap(pnl, bitmap=wx.Bitmap(img)), 1, wx.ALL | wx.EXPAND, 10)
