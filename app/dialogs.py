@@ -7,7 +7,7 @@ import requests
 import wx
 import wx.richtext as rt
 
-# Optional audio / speech libs (we handle gracefully if missing)
+# Optional audio / speech libs (handled gracefully if missing)
 try:
     import pygame
 except Exception:
@@ -187,7 +187,7 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy Chat Dialog (voice enabled: TTS + STT)
+# Little Buddy Chat Dialog (voice enabled: TTS + STT) - Option A for TTS
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None, knowledge=None):
@@ -408,7 +408,19 @@ class DataBuddyDialog(wx.Dialog):
 
         wx.CallAfter(render)
 
-    # ----- TTS (edge-tts + pygame) ----------------------------------------
+    # ----- TTS (edge-tts public endpoint only) -----------------------------
+    def _clear_edge_azure_env(self):
+        """Prevent edge-tts from trying Azure mode."""
+        for k in (
+            "SPEECH_KEY", "SPEECH_REGION",
+            "AZURE_TTS_KEY", "AZURE_TTS_REGION",
+            "EDGE_TTS_KEY", "EDGE_TTS_REGION"
+        ):
+            try:
+                os.environ.pop(k, None)
+            except Exception:
+                pass
+
     def speak(self, text: str):
         if not edge_tts:
             wx.MessageBox("Text-to-speech requires the 'edge-tts' package.\nInstall with: pip install edge-tts",
@@ -425,29 +437,30 @@ class DataBuddyDialog(wx.Dialog):
         def worker():
             import asyncio
 
-            async def _synth():
+            async def _synth_edge_public():
+                # Force the public Edge endpoint (no key)
+                self._clear_edge_azure_env()
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
                 tmp.close()
                 voice = self.voice.GetStringSelection() or "en-US-GuyNeural"
+                communicate = edge_tts.Communicate(text, voice)
+                await communicate.save(tmp.name)
+                self._tts_file = tmp.name
+
+            async def _run():
                 try:
-                    communicate = edge_tts.Communicate(text, voice)
-                    await communicate.save(tmp.name)
-                    self._tts_file = tmp.name
-                except Exception as e:
+                    await _synth_edge_public()
+                except Exception as e1:
                     self._tts_file = None
-                    wx.CallAfter(wx.MessageBox, f"TTS error: {e}", "edge-tts", wx.OK | wx.ICON_ERROR)
+                    wx.CallAfter(
+                        wx.MessageBox,
+                        f"TTS error (Edge public endpoint): {e1}",
+                        "edge-tts",
+                        wx.OK | wx.ICON_ERROR,
+                    )
+                    return
 
-            try:
-                asyncio.run(_synth())
-            except RuntimeError:
-                # If a loop is already running, create a new one in a thread-safe way
-                import asyncio
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(_synth())
-                loop.close()
-
-            if self._tts_file and pygame:
+                # Play it
                 try:
                     if not pygame.mixer.get_init():
                         pygame.mixer.init()
@@ -455,6 +468,15 @@ class DataBuddyDialog(wx.Dialog):
                     pygame.mixer.music.play()
                 except Exception as e:
                     wx.CallAfter(wx.MessageBox, f"Audio playback error: {e}", "pygame", wx.OK | wx.ICON_ERROR)
+
+            # Run the async synth
+            try:
+                asyncio.run(_run())
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(_run())
+                loop.close()
 
         self._tts_thread = threading.Thread(target=worker, daemon=True)
         self._tts_thread.start()
@@ -483,8 +505,7 @@ class DataBuddyDialog(wx.Dialog):
             # Start background listening
             try:
                 recognizer = sr.Recognizer()
-                mic = sr.Microphone()  # may raise OSError if no mic
-                # Reduce ambient noise slightly
+                mic = sr.Microphone()
                 with mic as source:
                     recognizer.adjust_for_ambient_noise(source, duration=0.5)
 
@@ -494,9 +515,8 @@ class DataBuddyDialog(wx.Dialog):
                     except Exception:
                         text = ""
                     if text:
-                        # Append or replace prompt; here we replace for clarity
                         wx.CallAfter(self.prompt.SetValue, text)
-                        # Optional: auto-send once recognized
+                        # Optionally auto-send:
                         # wx.CallAfter(self.on_ask, None)
 
                 self._stop_listening = recognizer.listen_in_background(
@@ -523,8 +543,10 @@ class DataBuddyDialog(wx.Dialog):
     def on_stop_voice(self, _):
         self._stop_playback()
         self._stop_stt()
-        wx.Bell()
-        # Keep focus in the prompt for fast follow-up
+        try:
+            wx.Bell()
+        except Exception:
+            pass
         self.prompt.SetFocus()
 
 
