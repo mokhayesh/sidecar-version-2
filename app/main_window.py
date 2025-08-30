@@ -11,13 +11,14 @@ from app.analysis import (
     quality_analysis,
     catalog_analysis,
     compliance_analysis,
+    detect_anomalies,    # ← NEW
 )
 from app.s3_utils import download_text_from_uri, upload_to_s3
 
 
 class MainWindow(wx.Frame):
     def __init__(self):
-        super().__init__(None, title="Sidecar Application: Data Governance", size=(1200, 800))
+        super().__init__(None, title="Sidecar Data Quality", size=(1200, 800))
 
         # App icon (tries several common locations)
         for p in [
@@ -44,9 +45,9 @@ class MainWindow(wx.Frame):
 
     def _build_ui(self):
         # Palette
-        BG_FRAME   = wx.Colour(26, 26, 26)   # window frame
-        BG_PANEL   = wx.Colour(32, 32, 32)   # main content panel (sides)
-        BG_HEADER  = wx.Colour(22, 22, 22)   # header band (title + buttons)
+        BG_FRAME   = wx.Colour(26, 26, 26)
+        BG_PANEL   = wx.Colour(32, 32, 32)
+        BG_HEADER  = wx.Colour(22, 22, 22)
         TXT_PRIMARY = wx.Colour(225, 225, 225)
         ACCENT     = wx.Colour(70, 130, 180)
 
@@ -57,22 +58,21 @@ class MainWindow(wx.Frame):
 
         self.SetBackgroundColour(BG_FRAME)
 
-        # Root content panel
         root = wx.Panel(self)
         root.SetBackgroundColour(BG_PANEL)
         root_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # ── Header band ────────────────────────────────────────────────────
+        # Header band
         header = wx.Panel(root)
         header.SetBackgroundColour(BG_HEADER)
         header_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        title = wx.StaticText(header, label="🏍️🛺  Sidecar Application:  Data Governance")
+        title = wx.StaticText(header, label="🏍️🛺  Sidecar Data Quality")
         title.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         title.SetForegroundColour(TXT_PRIMARY)
         header_sizer.Add(title, 0, wx.ALIGN_CENTER | wx.ALL, 8)
 
-        # Toolbar (use BoxSizer so height is computed reliably)
+        # Toolbar
         tb_panel = wx.Panel(header)
         tb_panel.SetBackgroundColour(BG_HEADER)
         tb_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -80,10 +80,13 @@ class MainWindow(wx.Frame):
         buttons = [
             ("Load File", self.on_load_file),
             ("Load from URI/S3", self.on_load_s3),
-            ("Generate Synthetic Data", self.on_generate_synth),  # new button
+            ("Generate Synthetic Data", self.on_generate_synth),
             ("Quality Rule Assignment", self.on_rules),
             ("Profile", self.do_analysis, "Profile"),
             ("Quality", self.do_analysis, "Quality"),
+
+            ("Detect Anomalies", self.on_detect_anomalies),  # ← NEW BUTTON
+
             ("Catalog", self.do_analysis, "Catalog"),
             ("Compliance", self.do_analysis, "Compliance"),
             ("Little Buddy", self.on_buddy),
@@ -102,13 +105,13 @@ class MainWindow(wx.Frame):
             tb_sizer.Add(btn, 0, wx.ALL, 4)
 
         tb_panel.SetSizer(tb_sizer)
-        tb_panel.Layout()            # ensure best size is calculated
-        tb_panel.Fit()               # make panel adopt its best size
+        tb_panel.Layout()
+        tb_panel.Fit()
 
         header_sizer.Add(tb_panel, 0, wx.ALIGN_CENTER | wx.BOTTOM, 8)
         header.SetSizer(header_sizer)
 
-        # ── Menu bar ───────────────────────────────────────────────────────
+        # Menu
         mb = wx.MenuBar()
         m_file, m_set = wx.Menu(), wx.Menu()
         m_file.Append(wx.ID_EXIT, "Exit")
@@ -119,11 +122,10 @@ class MainWindow(wx.Frame):
         mb.Append(m_set, "&Settings")
         self.SetMenuBar(mb)
 
-        # ── Grid ───────────────────────────────────────────────────────────
+        # Grid
         self.grid = gridlib.Grid(root)
         self.grid.CreateGrid(0, 0)
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
-
         self.grid.SetDefaultCellBackgroundColour(GRID_BG)
         self.grid.SetDefaultCellTextColour(GRID_TXT)
         self.grid.SetGridLineColour(wx.Colour(80, 80, 80))
@@ -133,13 +135,12 @@ class MainWindow(wx.Frame):
         self.grid.SetRowLabelSize(46)
         self.grid.SetRowLabelAlignment(wx.ALIGN_CENTER, wx.ALIGN_CENTER)
 
-        # Layout root
         root_sizer.Add(header, 0, wx.EXPAND)
         root_sizer.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
         root.SetSizer(root_sizer)
         root.Layout()
 
-    # ── Display helpers ─────────────────────────────────────────────────────
+    # Display helpers
     def _display(self, hdr, data):
         self.grid.ClearGrid()
         if self.grid.GetNumberRows():
@@ -173,7 +174,7 @@ class MainWindow(wx.Frame):
         event.Skip()
         wx.CallAfter(self.adjust_grid)
 
-    # ── Menu / toolbar handlers ─────────────────────────────────────────────
+    # Menu / toolbar handlers
     def on_settings(self, _):
         SettingsWindow(self).Show()
 
@@ -258,7 +259,21 @@ class MainWindow(wx.Frame):
             wx.OK | wx.ICON_INFORMATION,
         )
 
-    # ── Synthetic data generation ───────────────────────────────────────────
+    # ── New: Detect anomalies ────────────────────────────────────────────────
+    def on_detect_anomalies(self, _):
+        if not self.headers or not self.raw_data:
+            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
+            return
+        df = pd.DataFrame(self.raw_data, columns=self.headers)
+        hdr, data = detect_anomalies(df)
+        self.current_process = "Anomalies"
+        self._display(hdr, data)
+        if data:
+            wx.MessageBox(upload_to_s3("Anomalies", hdr, data), "Detect Anomalies", wx.OK | wx.ICON_INFORMATION)
+        else:
+            wx.MessageBox("No anomalies detected.", "Detect Anomalies", wx.OK | wx.ICON_INFORMATION)
+
+    # ── Synthetic data generation (unchanged) ───────────────────────────────
     def on_generate_synth(self, _):
         if not self.headers or not self.raw_data:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
@@ -278,7 +293,6 @@ class MainWindow(wx.Frame):
         df = pd.DataFrame(self.raw_data, columns=self.headers)
         synth = self._generate_synthetic_df(df, fields, n)
 
-        # show the generated dataset
         self.headers = list(synth.columns)
         self.raw_data = synth.values.tolist()
         self._display(self.headers, self.raw_data)
@@ -297,7 +311,7 @@ class MainWindow(wx.Frame):
                 out[col] = [""] * n_rows
                 continue
 
-            if pd.api.types.is_datetime64_any_dtype(s) or "date" in col.lower() or "time" in col.lower():
+            if pd.api.types.is_datetime64_any_dtype(s) or "date" in str(col).lower() or "time" in str(col).lower():
                 dt = pd.to_datetime(s_nonnull, errors="coerce").dropna()
                 if dt.empty:
                     out[col] = s_nonnull.astype(str).sample(n=n_rows, replace=True).reset_index(drop=True).tolist()
