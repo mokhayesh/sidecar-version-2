@@ -11,7 +11,7 @@ from app.analysis import (
     quality_analysis,
     catalog_analysis,
     compliance_analysis,
-    detect_anomalies,  # anomalies feature
+    detect_anomalies,
 )
 from app.s3_utils import download_text_from_uri, upload_to_s3
 
@@ -20,7 +20,7 @@ class MainWindow(wx.Frame):
     def __init__(self):
         super().__init__(None, title="Sidecar Data Quality", size=(1200, 800))
 
-        # App icon (tries several common locations)
+        # App icon
         for p in [
             os.path.join("assets", "sidecar.ico"),
             os.path.join("assets", "sidecar-01.ico"),
@@ -38,7 +38,7 @@ class MainWindow(wx.Frame):
         self.headers = []
         self.current_process = ""
         self.quality_rules = {}
-        self.knowledge_files = []  # ← NEW: knowledge files available to Little Buddy
+        self.knowledge_files = []  # for Little Buddy
 
         self._build_ui()
         self.Centre()
@@ -74,12 +74,13 @@ class MainWindow(wx.Frame):
         title.SetForegroundColour(TXT_PRIMARY)
         header_sizer.Add(title, 0, wx.ALIGN_CENTER | wx.ALL, 8)
 
-        # Toolbar row
+        # Toolbar container (left-aligned, expandable)
         tb_panel = wx.Panel(header)
         tb_panel.SetBackgroundColour(BG_HEADER)
-        tb_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        # WrapSizer lets buttons flow to a new line if space is tight
+        tb_sizer = wx.WrapSizer(wx.HORIZONTAL)
 
-        # ── NEW: Left column with "Load Knowledge Files" + filenames under it
+        # ── Left fixed column: Load Knowledge Files + compact filename area
         left_col = wx.Panel(tb_panel)
         left_col.SetBackgroundColour(BG_HEADER)
         left_col_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -90,47 +91,55 @@ class MainWindow(wx.Frame):
         btn_knowledge.SetFont(wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         btn_knowledge.Bind(wx.EVT_BUTTON, self.on_load_knowledge)
 
-        self.knowledge_label = wx.StaticText(left_col, label="")
-        self.knowledge_label.SetForegroundColour(TXT_MUTED)
-        self.knowledge_label.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        # Small, wrapped, read-only box for filenames (fixed width prevents pushing toolbar)
+        self.knowledge_box = wx.TextCtrl(
+            left_col,
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.BORDER_NONE,
+            size=(220, 40),
+        )
+        self.knowledge_box.SetBackgroundColour(BG_HEADER)
+        self.knowledge_box.SetForegroundColour(TXT_MUTED)
+        self.knowledge_box.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
 
         left_col_sizer.Add(btn_knowledge, 0, wx.ALL, 4)
-        left_col_sizer.Add(self.knowledge_label, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        left_col_sizer.Add(self.knowledge_box, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 4)
         left_col.SetSizer(left_col_sizer)
+        # Keep the left column narrow and fixed so it doesn't consume toolbar width
+        left_col.SetMinSize((230, -1))
 
         tb_sizer.Add(left_col, 0, wx.RIGHT, 8)
 
         # Other toolbar buttons
-        buttons = [
+        def make_btn(parent, text, handler):
+            b = wx.Button(parent, label=text)
+            b.SetBackgroundColour(ACCENT)
+            b.SetForegroundColour(wx.WHITE)
+            b.SetFont(wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+            b.Bind(wx.EVT_BUTTON, handler)
+            return b
+
+        # Buttons in desired order
+        btns = [
             ("Load File", self.on_load_file),
             ("Load from URI/S3", self.on_load_s3),
             ("Generate Synthetic Data", self.on_generate_synth),
             ("Quality Rule Assignment", self.on_rules),
-            ("Profile", self.do_analysis, "Profile"),
-            ("Quality", self.do_analysis, "Quality"),
+            ("Profile", lambda e: self.do_analysis_with("Profile")),
+            ("Quality", lambda e: self.do_analysis_with("Quality")),
             ("Detect Anomalies", self.on_detect_anomalies),
-            ("Catalog", self.do_analysis, "Catalog"),
-            ("Compliance", self.do_analysis, "Compliance"),
+            ("Catalog", lambda e: self.do_analysis_with("Catalog")),
+            ("Compliance", lambda e: self.do_analysis_with("Compliance")),
             ("Little Buddy", self.on_buddy),
             ("Export CSV", self.on_export_csv),
             ("Export TXT", self.on_export_txt),
             ("Upload to S3", self.on_upload_s3),
         ]
-        for label, fn, *rest in buttons:
-            btn = wx.Button(tb_panel, label=label)
-            btn.SetBackgroundColour(ACCENT)
-            btn.SetForegroundColour(wx.WHITE)
-            btn.SetFont(wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-            btn.Bind(wx.EVT_BUTTON, fn)
-            if rest:
-                btn.process = rest[0]
-            tb_sizer.Add(btn, 0, wx.ALL, 4)
+        for label, handler in btns:
+            tb_sizer.Add(make_btn(tb_panel, label, handler), 0, wx.ALL, 4)
 
         tb_panel.SetSizer(tb_sizer)
-        tb_panel.Layout()
-        tb_panel.Fit()
-
-        header_sizer.Add(tb_panel, 0, wx.ALIGN_CENTER | wx.BOTTOM, 8)
+        # Left align and allow the toolbar to span full width
+        header_sizer.Add(tb_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         header.SetSizer(header_sizer)
 
         # Menu
@@ -186,30 +195,19 @@ class MainWindow(wx.Frame):
             ext = os.path.splitext(name)[1].lower()
             entry = {"name": name, "path": p, "type": ext, "content": None}
             try:
-                # Only read text-like files; cap size to keep prompts small
                 if ext in {".txt", ".csv", ".json"}:
                     with open(p, "r", encoding="utf-8", errors="ignore") as f:
                         text = f.read()
-                    # Trim to ~100 KB per file maximum
                     if len(text) > 100_000:
                         text = text[:100_000] + "\n…(truncated)…"
                     entry["content"] = text
-                else:
-                    # image or other: store a note
-                    entry["content"] = None
             except Exception as e:
                 entry["content"] = f"(error reading file: {e})"
             files.append(entry)
 
         self.knowledge_files = files
-
-        # Show names under the button (multi-line)
-        label = "\n".join(f["name"] for f in self.knowledge_files)
-        self.knowledge_label.SetLabel(label)
-        # Wrap the label so long names don't blow up layout
-        self.knowledge_label.Wrap(220)
-        self.knowledge_label.GetParent().Layout()
-        self.knowledge_label.GetGrandParent().Layout()
+        # Show only names (small box, won’t expand toolbar)
+        self.knowledge_box.SetValue("\n".join(f["name"] for f in files))
 
         wx.MessageBox(f"Loaded {len(files)} knowledge file(s).", "Knowledge", wx.OK | wx.ICON_INFORMATION)
 
@@ -272,11 +270,10 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Failed to load data:\n{e}", "Error", wx.OK | wx.ICON_ERROR)
 
-    def do_analysis(self, evt):
+    def do_analysis_with(self, proc: str):
         if not self.headers:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
             return
-        proc = evt.GetEventObject().process
         self.current_process = proc
         df = pd.DataFrame(self.raw_data, columns=self.headers)
         func = {
@@ -296,7 +293,6 @@ class MainWindow(wx.Frame):
         QualityRuleDialog(self, self.headers, self.quality_rules).ShowModal()
 
     def on_buddy(self, _):
-        # Pass knowledge files to the chat dialog
         DataBuddyDialog(self, self.raw_data, self.headers, knowledge=self.knowledge_files).ShowModal()
 
     def _export(self, path, sep):
@@ -347,7 +343,7 @@ class MainWindow(wx.Frame):
         else:
             wx.MessageBox("No anomalies detected.", "Detect Anomalies", wx.OK | wx.ICON_INFORMATION)
 
-    # Synthetic data generation (unchanged)
+    # Synthetic data generation
     def on_generate_synth(self, _):
         if not self.headers or not self.raw_data:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
