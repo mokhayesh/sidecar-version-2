@@ -24,6 +24,11 @@ except Exception:
     edge_tts = None
 
 try:
+    from gtts import gTTS
+except Exception:
+    gTTS = None
+
+try:
     import pyttsx3
 except Exception:
     pyttsx3 = None
@@ -83,7 +88,7 @@ class QualityRuleDialog(wx.Dialog):
         self.rule_choice = wx.ComboBox(pnl, style=wx.CB_READONLY)
         self.rule_choice.SetBackgroundColour(INPUT_BG)
         self.rule_choice.SetForegroundColour(INPUT_TXT)
-        self.rule_choice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.rule_choice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         self.rule_choice.Bind(wx.EVT_COMBOBOX, self.on_pick_rule)
         g.Add(self.rule_choice, 0, wx.EXPAND)
 
@@ -94,7 +99,7 @@ class QualityRuleDialog(wx.Dialog):
         self.pattern_txt = wx.TextCtrl(pnl)
         self.pattern_txt.SetBackgroundColour(INPUT_BG)
         self.pattern_txt.SetForegroundColour(INPUT_TXT)
-        self.pattern_txt.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.pattern_txt.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         g.Add(self.pattern_txt, 0, wx.EXPAND)
         main.Add(g, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
@@ -105,7 +110,7 @@ class QualityRuleDialog(wx.Dialog):
         self.preview = rt.RichTextCtrl(pnl, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
         self.preview.SetBackgroundColour(wx.Colour(35, 35, 35))
         self.preview.SetForegroundColour(wx.Colour(230, 230, 230))
-        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         pv.Add(self.preview, 1, wx.EXPAND | wx.ALL, 4)
         main.Add(pv, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
@@ -128,7 +133,7 @@ class QualityRuleDialog(wx.Dialog):
         for b in (load_btn, assign_btn, close_btn):
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
 
         load_btn.Bind(wx.EVT_BUTTON, self.on_load_rules)
         assign_btn.Bind(wx.EVT_BUTTON, self.on_assign)
@@ -192,7 +197,7 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy Chat Dialog (voice enabled: TTS + STT) — Edge then offline TTS
+# Little Buddy Chat Dialog (voice enabled: TTS + STT) — silent, multi-engine TTS
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None, knowledge=None):
@@ -212,7 +217,6 @@ class DataBuddyDialog(wx.Dialog):
         self._tts_thread = None
         self._listening = False
         self._stop_listening = None  # SR background stopper
-        self._offline_warned = False  # show fallback message only once
 
         # High-contrast theme
         self.COLORS = {
@@ -235,7 +239,7 @@ class DataBuddyDialog(wx.Dialog):
         # Title
         title = wx.StaticText(pnl, label="Little Buddy")
         title.SetForegroundColour(self.COLORS["text"])
-        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
         # Voice selector + options row
@@ -245,13 +249,19 @@ class DataBuddyDialog(wx.Dialog):
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
         self.voice.SetForegroundColour(self.COLORS["input_fg"])
-        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         opts.Add(self.voice, 0, wx.RIGHT | wx.EXPAND, 6)
 
         self.tts_checkbox = wx.CheckBox(pnl, label="🔊 Speak Reply")
         self.tts_checkbox.SetValue(True)
         self.tts_checkbox.SetForegroundColour(self.COLORS["text"])
         opts.Add(self.tts_checkbox, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+
+        # Inline status (no popups)
+        self.tts_status = wx.StaticText(pnl, label="TTS: idle")
+        self.tts_status.SetForegroundColour(self.COLORS["muted"])
+        self.tts_status.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        opts.Add(self.tts_status, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 12)
 
         vbox.Add(opts, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
@@ -264,7 +274,7 @@ class DataBuddyDialog(wx.Dialog):
         self.persona.SetSelection(0)
         self.persona.SetBackgroundColour(self.COLORS["input_bg"])
         self.persona.SetForegroundColour(self.COLORS["input_fg"])
-        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         vbox.Add(self.persona, 0, wx.EXPAND | wx.ALL, 5)
 
         # Prompt row
@@ -272,13 +282,13 @@ class DataBuddyDialog(wx.Dialog):
 
         ask_lbl = wx.StaticText(pnl, label="Ask:")
         ask_lbl.SetForegroundColour(self.COLORS["muted"])
-        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         row.Add(ask_lbl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
         self.prompt = wx.TextCtrl(pnl, style=wx.TE_PROCESS_ENTER)
         self.prompt.SetBackgroundColour(self.COLORS["input_bg"])
         self.prompt.SetForegroundColour(self.COLORS["input_fg"])
-        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         self.prompt.SetHint("Type your question and press Enter…")
         self.prompt.Bind(wx.EVT_TEXT_ENTER, self.on_ask)
         row.Add(self.prompt, 1, wx.EXPAND | wx.RIGHT, 6)
@@ -286,7 +296,7 @@ class DataBuddyDialog(wx.Dialog):
         send_btn = wx.Button(pnl, label="Send")
         send_btn.SetBackgroundColour(self.COLORS["accent"])
         send_btn.SetForegroundColour(wx.WHITE)
-        send_btn.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        send_btn.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         send_btn.Bind(wx.EVT_BUTTON, self.on_ask)
         row.Add(send_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
@@ -341,6 +351,13 @@ class DataBuddyDialog(wx.Dialog):
             self.reply.WriteText(text + ("\n" if newline else ""))
         finally:
             self.reply.EndStyle()
+
+    def _set_tts_status(self, msg: str):
+        try:
+            self.tts_status.SetLabel(f"TTS: {msg}")
+            self.tts_status.GetParent().Layout()
+        except Exception:
+            pass
 
     # ----- knowledge context ----------------------------------------------
     def _build_knowledge_context(self, max_chars=1500):
@@ -427,105 +444,124 @@ class DataBuddyDialog(wx.Dialog):
             except Exception:
                 pass
 
-    # ----- TTS (Edge public -> offline pyttsx3 fallback) -------------------
+    # ----- TTS (Azure -> Edge public -> gTTS -> pyttsx3) -------------------
     def speak(self, text: str):
-        # Stop any current playback first
         self._stop_playback()
 
         def worker():
-            # 1) Try Edge public endpoint (no key)
+            engine_name = "idle"
             ok = False
-            if edge_tts:
+
+            # 1) Azure Neural (if key/region provided via env or defaults)
+            key = (defaults.get("azure_tts_key") or os.environ.get("SPEECH_KEY") or "").strip()
+            region = (defaults.get("azure_tts_region") or os.environ.get("SPEECH_REGION") or "").strip()
+            if edge_tts and key and region and not ok:
                 import asyncio
 
-                async def _synth_edge_public():
+                async def _azure():
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                    tmp.close()
+                    voice = self.voice.GetStringSelection() or "en-US-GuyNeural"
+                    communicate = edge_tts.Communicate(text, voice, key=key, region=region)
+                    await communicate.save(tmp.name)
+                    return tmp.name
+
+                try:
+                    try:
+                        self._tts_file = asyncio.run(_azure())
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        loop.run_until_complete(_azure())
+                        loop.close()
+                    ok = True
+                    engine_name = "Azure"
+                except Exception:
+                    ok = False
+
+            # 2) Edge public (no key)
+            if edge_tts and not ok:
+                import asyncio
+
+                async def _edge_public():
                     self._clear_edge_azure_env()
                     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
                     tmp.close()
                     voice = self.voice.GetStringSelection() or "en-US-GuyNeural"
                     communicate = edge_tts.Communicate(text, voice)
                     await communicate.save(tmp.name)
-                    self._tts_file = tmp.name
+                    return tmp.name
 
                 try:
                     try:
-                        asyncio.run(_synth_edge_public())
+                        self._tts_file = asyncio.run(_edge_public())
                     except RuntimeError:
                         loop = asyncio.new_event_loop()
-                        loop.run_until_complete(_synth_edge_public())
+                        loop.run_until_complete(_edge_public())
                         loop.close()
                     ok = True
-                except Exception as e1:
-                    # Edge failed (401 etc.) — fall through to offline
-                    if not self._offline_warned:
-                        wx.CallAfter(
-                            wx.MessageBox,
-                            f"Online TTS unavailable ({e1}). Falling back to offline voice.",
-                            "TTS Fallback",
-                            wx.OK | wx.ICON_WARNING,
-                        )
-                        self._offline_warned = True
+                    engine_name = "Edge"
+                except Exception:
+                    ok = False
 
-            # 2) Offline fallback via pyttsx3 (Windows SAPI5)
-            if not ok:
-                if not pyttsx3:
-                    wx.CallAfter(
-                        wx.MessageBox,
-                        "Offline TTS requires 'pyttsx3'. Install with: pip install pyttsx3 pypiwin32",
-                        "TTS Not Available",
-                        wx.OK | wx.ICON_WARNING,
-                    )
-                    return
+            # 3) gTTS (good natural fallback, if available)
+            if gTTS and not ok:
+                try:
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                    tmp.close()
+                    # derive language from voice code, e.g., en-US -> 'en'
+                    voice_val = self.voice.GetStringSelection() or "en-US-GuyNeural"
+                    lang = "en"
+                    if "-" in voice_val:
+                        lang = voice_val.split("-", 1)[0].lower()
+                    gTTS(text=text, lang=lang).save(tmp.name)
+                    self._tts_file = tmp.name
+                    ok = True
+                    engine_name = "gTTS"
+                except Exception:
+                    ok = False
+
+            # 4) Offline pyttsx3 (always last resort)
+            if pyttsx3 and not ok:
                 try:
                     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
                     tmp.close()
                     engine = pyttsx3.init()
-                    # Try to pick a US/GB English voice if available
+                    # choose a reasonable English voice if present
                     try:
                         voices = engine.getProperty("voices")
                         pick = None
                         for v in voices:
                             nm = (v.name or "").lower()
                             lid = (v.id or "").lower()
-                            if any(k in nm or k in lid for k in ("zira", "hazel", "david", "zira desktop", "english")):
+                            if any(k in nm or k in lid for k in ("zira", "hazel", "david", "english")):
                                 pick = v.id
                                 break
                         if pick:
                             engine.setProperty("voice", pick)
                     except Exception:
                         pass
-                    # Save to WAV file
                     engine.save_to_file(text, tmp.name)
                     engine.runAndWait()
                     self._tts_file = tmp.name
                     ok = True
-                except Exception as e2:
-                    wx.CallAfter(
-                        wx.MessageBox,
-                        f"Offline TTS error: {e2}",
-                        "pyttsx3",
-                        wx.OK | wx.ICON_ERROR,
-                    )
-                    self._tts_file = None
+                    engine_name = "Offline"
+                except Exception:
                     ok = False
 
-            # Play audio if we have a file and pygame is present
+            # Update inline status
+            wx.CallAfter(self._set_tts_status, engine_name if ok else "error")
+
+            # Play audio if we have a file
             if ok and self._tts_file:
                 try:
                     if not pygame:
-                        wx.CallAfter(
-                            wx.MessageBox,
-                            "Audio playback requires 'pygame' (pip install pygame).",
-                            "Playback Not Available",
-                            wx.OK | wx.ICON_WARNING,
-                        )
                         return
                     if not pygame.mixer.get_init():
                         pygame.mixer.init()
                     pygame.mixer.music.load(self._tts_file)
                     pygame.mixer.music.play()
-                except Exception as e:
-                    wx.CallAfter(wx.MessageBox, f"Audio playback error: {e}", "pygame", wx.OK | wx.ICON_ERROR)
+                except Exception:
+                    pass
 
         self._tts_thread = threading.Thread(target=worker, daemon=True)
         self._tts_thread.start()
@@ -565,7 +601,7 @@ class DataBuddyDialog(wx.Dialog):
                         text = ""
                     if text:
                         wx.CallAfter(self.prompt.SetValue, text)
-                        # Optionally auto-send:
+                        # Optional auto-send:
                         # wx.CallAfter(self.on_ask, None)
 
                 self._stop_listening = recognizer.listen_in_background(
@@ -636,7 +672,7 @@ class SyntheticDataDialog(wx.Dialog):
         self.count = wx.SpinCtrl(pnl, min=1, max=1_000_000, initial=100)
         self.count.SetBackgroundColour(INPUT_BG)
         self.count.SetForegroundColour(INPUT_TXT)
-        self.count.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.count.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         s1.Add(self.count, 1, wx.ALL | wx.EXPAND, 6)
         s.Add(s1, 0, wx.EXPAND | wx.ALL, 8)
 
@@ -647,7 +683,7 @@ class SyntheticDataDialog(wx.Dialog):
         self.chk = wx.CheckListBox(pnl, choices=list(fields))
         self.chk.SetBackgroundColour(INPUT_BG)
         self.chk.SetForegroundColour(INPUT_TXT)
-        self.chk.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.chk.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         for i in range(len(fields)):
             self.chk.Check(i, True)
         s2.Add(self.chk, 1, wx.ALL | wx.EXPAND, 6)
@@ -673,7 +709,7 @@ class SyntheticDataDialog(wx.Dialog):
         for b in (ok_btn, cancel_btn):
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         btns.AddButton(ok_btn)
         btns.AddButton(cancel_btn)
         btns.Realize()
