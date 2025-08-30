@@ -248,7 +248,7 @@ class DataBuddyDialog(wx.Dialog):
         self.voice = wx.Choice(pnl, choices=["en-US-AriaNeural", "en-US-GuyNeural", "en-GB-SoniaNeural"])
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
-               self.voice.SetForegroundColour(self.COLORS["input_fg"])
+        self.voice.SetForegroundColour(self.COLORS["input_fg"])
         self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         opts.Add(self.voice, 0, wx.RIGHT | wx.EXPAND, 6)
 
@@ -508,7 +508,6 @@ class DataBuddyDialog(wx.Dialog):
                 try:
                     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
                     tmp.close()
-                    # derive language from voice code, e.g., en-US -> 'en'
                     voice_val = self.voice.GetStringSelection() or "en-US-GuyNeural"
                     lang = "en"
                     if "-" in voice_val:
@@ -526,7 +525,6 @@ class DataBuddyDialog(wx.Dialog):
                     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
                     tmp.close()
                     engine = pyttsx3.init()
-                    # choose a reasonable English voice if present
                     try:
                         voices = engine.getProperty("voices")
                         pick = None
@@ -548,10 +546,8 @@ class DataBuddyDialog(wx.Dialog):
                 except Exception:
                     ok = False
 
-            # Update inline status
             wx.CallAfter(self._set_tts_status, engine_name if ok else "error")
 
-            # Play audio if we have a file
             if ok and self._tts_file:
                 try:
                     if not pygame:
@@ -587,7 +583,6 @@ class DataBuddyDialog(wx.Dialog):
             return
 
         if not self._listening:
-            # Start background listening
             try:
                 recognizer = sr.Recognizer()
                 mic = sr.Microphone()
@@ -601,7 +596,7 @@ class DataBuddyDialog(wx.Dialog):
                         text = ""
                     if text:
                         wx.CallAfter(self.prompt.SetValue, text)
-                        # Optional auto-send:
+                        # Optionally auto-send:
                         # wx.CallAfter(self.on_ask, None)
 
                 self._stop_listening = recognizer.listen_in_background(
