@@ -8,7 +8,7 @@ import requests
 import wx
 import wx.richtext as rt
 
-# Optional audio / speech libs
+# Optional audio / speech libs (gracefully degrade if missing)
 try:
     import pygame
 except Exception:
@@ -34,11 +34,17 @@ try:
 except Exception:
     pyttsx3 = None
 
+# Optional: Pillow for offline placeholder images
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except Exception:
+    Image = ImageDraw = ImageFont = None
+
 from app.settings import defaults
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Quality Rule Assignment (unchanged style)
+# Quality Rule Assignment
 # ──────────────────────────────────────────────────────────────────────────────
 class QualityRuleDialog(wx.Dialog):
     def __init__(self, parent, fields, current_rules):
@@ -186,14 +192,14 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy: faster streaming replies + image generation + TTS/STT
+# Little Buddy — faster streaming, voice, image generation with fallbacks
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None, knowledge=None):
-        super().__init__(parent, title="Little Buddy", size=(900, 700),
+        super().__init__(parent, title="Little Buddy", size=(920, 720),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
-        self.session = requests.Session()  # keep-alive for faster first byte
+        self.session = requests.Session()  # persistent HTTP for faster first byte
         self.data = data
         self.headers = headers
         self.knowledge = knowledge or []
@@ -225,7 +231,9 @@ class DataBuddyDialog(wx.Dialog):
         title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
+        # Options row — Fast Mode speeds up startup with a lighter model
         opts = wx.BoxSizer(wx.HORIZONTAL)
+
         self.voice = wx.Choice(pnl, choices=["en-US-AriaNeural", "en-US-GuyNeural", "en-GB-SoniaNeural"])
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
@@ -236,7 +244,12 @@ class DataBuddyDialog(wx.Dialog):
         self.tts_checkbox = wx.CheckBox(pnl, label="🔊 Speak Reply")
         self.tts_checkbox.SetValue(True)
         self.tts_checkbox.SetForegroundColour(self.COLORS["text"])
-        opts.Add(self.tts_checkbox, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        opts.Add(self.tts_checkbox, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+
+        self.fast_mode = wx.CheckBox(pnl, label="⚡ Fast Mode")
+        self.fast_mode.SetValue(True)  # ON by default for snappier UX
+        self.fast_mode.SetForegroundColour(self.COLORS["text"])
+        opts.Add(self.fast_mode, 0, wx.ALIGN_CENTER_VERTICAL)
 
         self.tts_status = wx.StaticText(pnl, label="TTS: idle")
         self.tts_status.SetForegroundColour(self.COLORS["muted"])
@@ -252,8 +265,7 @@ class DataBuddyDialog(wx.Dialog):
         )
         self.persona.SetSelection(0)
         self.persona.SetBackgroundColour(self.COLORS["input_bg"])
-        this_fg = self.COLORS["input_fg"]
-        self.persona.SetForegroundColour(this_fg)
+        self.persona.SetForegroundColour(self.COLORS["input_fg"])
         self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         vbox.Add(self.persona, 0, wx.EXPAND | wx.ALL, 5)
 
@@ -265,7 +277,7 @@ class DataBuddyDialog(wx.Dialog):
 
         self.prompt = wx.TextCtrl(pnl, style=wx.TE_PROCESS_ENTER)
         self.prompt.SetBackgroundColour(self.COLORS["input_bg"])
-        self.prompt.SetForegroundColour(this_fg)
+        self.prompt.SetForegroundColour(self.COLORS["input_fg"])
         self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         self.prompt.SetHint("Type your question and press Enter…")
         self.prompt.Bind(wx.EVT_TEXT_ENTER, self.on_ask)
@@ -289,7 +301,6 @@ class DataBuddyDialog(wx.Dialog):
         self.stop_btn.Bind(wx.EVT_BUTTON, self.on_stop_voice)
         row.Add(self.stop_btn, 0, wx.ALIGN_CENTER_VERTICAL, 0)
 
-        # New: image generation button
         self.img_btn = wx.Button(pnl, label="🎨 Generate Image")
         self.img_btn.SetBackgroundColour(wx.Colour(90, 110, 160))
         self.img_btn.SetForegroundColour(wx.WHITE)
@@ -353,7 +364,7 @@ class DataBuddyDialog(wx.Dialog):
             text = text[:max_chars] + "\n…(truncated)…"
         return text
 
-    # ---------- chat
+    # ---------- chat (streaming; Fast Mode uses fast_model if provided)
     def on_ask(self, _):
         q = self.prompt.GetValue().strip()
         self.prompt.SetValue("")
@@ -366,7 +377,6 @@ class DataBuddyDialog(wx.Dialog):
         threading.Thread(target=self._answer_streaming, args=(q,), daemon=True).start()
 
     def _answer_streaming(self, q: str):
-        """Streams tokens so reply starts immediately."""
         persona = self.persona.GetValue()
         prompt = f"As a {persona}, {q}" if persona else q
 
@@ -377,13 +387,18 @@ class DataBuddyDialog(wx.Dialog):
         if kn:
             prompt += "\n\nKnowledge files:\n" + kn
 
+        # Choose model based on Fast Mode
+        model_default = defaults.get("default_model", "gpt-4o-mini")
+        model_fast = defaults.get("fast_model", "gpt-4o-mini")
+        model = model_fast if self.fast_mode.GetValue() else model_default
+
         url = defaults.get("url", "").strip()
         headers = {
             "Authorization": f"Bearer {defaults.get('api_key','')}",
             "Content-Type": "application/json",
         }
         payload = {
-            "model": defaults.get("default_model", "gpt-4o-mini"),
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": int(defaults.get("max_tokens", 800)),
             "temperature": float(defaults.get("temperature", 0.6)),
@@ -393,7 +408,7 @@ class DataBuddyDialog(wx.Dialog):
         buf = []
 
         try:
-            with self.session.post(url, headers=headers, json=payload, stream=True, timeout=(10, 90), verify=False) as r:
+            with self.session.post(url, headers=headers, json=payload, stream=True, timeout=(8, 90), verify=False) as r:
                 r.raise_for_status()
                 for raw in r.iter_lines(decode_unicode=True):
                     if not raw:
@@ -404,7 +419,6 @@ class DataBuddyDialog(wx.Dialog):
                         break
                     try:
                         obj = json.loads(raw)
-                        # OpenAI chat-completions delta format
                         delta = obj["choices"][0].get("delta", {}).get("content")
                         if delta:
                             buf.append(delta)
@@ -420,7 +434,7 @@ class DataBuddyDialog(wx.Dialog):
         if self.tts_checkbox.GetValue() and answer.strip():
             wx.CallAfter(lambda: self.speak(answer))
 
-    # ---------- image generation
+    # ---------- image generation with fallbacks (OpenAI → Stability → offline)
     def on_generate_image(self, _):
         prompt = self.prompt.GetValue().strip()
         if not prompt:
@@ -429,55 +443,149 @@ class DataBuddyDialog(wx.Dialog):
         threading.Thread(target=self._gen_image_worker, args=(prompt,), daemon=True).start()
 
     def _gen_image_worker(self, prompt: str):
-        url = defaults.get("image_generation_url", "").strip()
+        # Provider preference: defaults.image_provider or env
+        provider = (defaults.get("image_provider") or os.environ.get("IMAGE_PROVIDER") or "openai").lower().strip()
+        tried_msgs = []
+
+        # 1) OpenAI Images
+        if provider in ("openai", "auto"):
+            try:
+                path = self._generate_image_openai(prompt)
+                wx.CallAfter(self._show_image_preview, path)
+                return
+            except Exception as e:
+                tried_msgs.append(f"OpenAI: {e}")
+
+        # 2) Stability AI
+        if provider in ("stability", "auto", "openai"):  # allow fallback from openai
+            try:
+                path = self._generate_image_stability(prompt)
+                wx.CallAfter(self._show_image_preview, path)
+                return
+            except Exception as e:
+                tried_msgs.append(f"Stability: {e}")
+
+        # 3) Offline placeholder
+        try:
+            path = self._generate_image_offline(prompt)
+            wx.CallAfter(self._show_image_preview, path)
+            return
+        except Exception as e:
+            tried_msgs.append(f"Offline: {e}")
+
+        wx.CallAfter(wx.MessageBox, "Image generation failed:\n" + "\n".join(tried_msgs),
+                     "Image Error", wx.OK | wx.ICON_ERROR)
+
+    def _generate_image_openai(self, prompt: str) -> str:
+        url = (defaults.get("image_generation_url") or "https://api.openai.com/v1/images/generations").strip()
         headers = {
             "Authorization": f"Bearer {defaults.get('api_key','')}",
             "Content-Type": "application/json",
         }
-        # Try modern format first (with model), fall back to classic
         body = {
             "model": defaults.get("image_model", "gpt-image-1"),
             "prompt": prompt,
             "n": 1,
             "size": "1024x1024",
         }
-        try:
-            resp = self.session.post(url, headers=headers, json=body, timeout=120, verify=False)
-            resp.raise_for_status()
-            data = resp.json().get("data", [])
-            if not data:
-                raise RuntimeError("No image returned.")
-            b64 = data[0].get("b64_json")
-            if not b64:
-                # some providers return 'url' instead of base64
-                img_url = data[0].get("url")
-                if not img_url:
-                    raise RuntimeError("No image payload.")
-                img_bytes = requests.get(img_url, timeout=60).content
-            else:
-                img_bytes = base64.b64decode(b64)
+        resp = self.session.post(url, headers=headers, json=body, timeout=120, verify=False)
+        if resp.status_code in (401, 403):
+            raise RuntimeError(f"{resp.status_code} {resp.reason}: check API key access/billing for Images.")
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        if not data:
+            raise RuntimeError("No image data returned.")
+        b64 = data[0].get("b64_json")
+        if b64:
+            img_bytes = base64.b64decode(b64)
+        else:
+            img_url = data[0].get("url")
+            if not img_url:
+                raise RuntimeError("No image url or base64 in response.")
+            img_bytes = requests.get(img_url, timeout=60).content
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        tmp.write(img_bytes); tmp.close()
+        return tmp.name
 
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-            tmp.write(img_bytes)
-            tmp.close()
-            wx.CallAfter(self._show_image_preview, tmp.name)
-        except Exception as e:
-            wx.CallAfter(wx.MessageBox, f"Image generation failed:\n{e}", "Image Error", wx.OK | wx.ICON_ERROR)
+    def _generate_image_stability(self, prompt: str) -> str:
+        key = (defaults.get("stability_api_key") or os.environ.get("STABILITY_API_KEY") or "").strip()
+        if not key:
+            raise RuntimeError("No Stability API key configured (stability_api_key).")
+        # v1 text-to-image endpoint (simple)
+        url = "https://api.stability.ai/v1/generation/stable-diffusion-v1-6/text-to-image"
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "text_prompts": [{"text": prompt}],
+            "cfg_scale": 7,
+            "height": 1024,
+            "width": 1024,
+            "samples": 1,
+            "steps": 30
+        }
+        r = self.session.post(url, headers=headers, json=body, timeout=120)
+        if r.status_code == 401 or r.status_code == 403:
+            raise RuntimeError(f"{r.status_code} {r.reason}: Stability key not authorized.")
+        r.raise_for_status()
+        out = r.json()
+        if not out.get("artifacts"):
+            raise RuntimeError("Stability returned no artifacts.")
+        img_b64 = out["artifacts"][0].get("base64")
+        if not img_b64:
+            raise RuntimeError("Missing base64 payload from Stability.")
+        img_bytes = base64.b64decode(img_b64)
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        tmp.write(img_bytes); tmp.close()
+        return tmp.name
+
+    def _generate_image_offline(self, prompt: str) -> str:
+        # Create a legible PNG with the prompt (always succeeds)
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        tmp.close()
+        if Image and ImageDraw:
+            img = Image.new("RGB", (1024, 1024), (32, 36, 44))
+            draw = ImageDraw.Draw(img)
+            try:
+                # Try a system font; fall back to default
+                font = ImageFont.truetype("arial.ttf", 28)
+            except Exception:
+                font = ImageFont.load_default()
+            text = f"[Offline Placeholder]\n{prompt}"
+            draw.multiline_text((40, 40), text, fill=(220, 230, 255), font=font, spacing=6)
+            img.save(tmp.name, "PNG")
+        else:
+            # Fallback: write a minimal PNG from wx (no Pillow available)
+            bmp = wx.Bitmap(1024, 1024)
+            dc = wx.MemoryDC(bmp)
+            dc.SetBackground(wx.Brush(wx.Colour(32, 36, 44)))
+            dc.Clear()
+            dc.SetTextForeground(wx.Colour(220, 230, 255))
+            dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+            dc.DrawText("[Offline Placeholder]", 40, 40)
+            dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+            dc.DrawText(prompt, 40, 80)
+            dc.SelectObject(wx.NullBitmap)
+            bmp.SaveFile(tmp.name, wx.BITMAP_TYPE_PNG)
+        return tmp.name
 
     def _show_image_preview(self, path: str):
-        dlg = wx.Dialog(self, title="Generated Image", size=(700, 700),
+        dlg = wx.Dialog(self, title="Generated Image", size=(720, 740),
                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         pnl = wx.Panel(dlg)
         pnl.SetBackgroundColour(wx.Colour(30, 30, 30))
         v = wx.BoxSizer(wx.VERTICAL)
-        bmp = wx.Image(path, wx.BITMAP_TYPE_ANY).Scale(660, 620, wx.IMAGE_QUALITY_HIGH)
-        v.Add(wx.StaticBitmap(pnl, bitmap=wx.Bitmap(bmp)), 1, wx.ALL | wx.EXPAND, 10)
-
+        img = wx.Image(path, wx.BITMAP_TYPE_ANY)
+        # scale nicely into dialog
+        w = min(680, img.GetWidth()); h = int(w * img.GetHeight() / max(1, img.GetWidth()))
+        img = img.Scale(w, h, wx.IMAGE_QUALITY_HIGH)
+        v.Add(wx.StaticBitmap(pnl, bitmap=wx.Bitmap(img)), 1, wx.ALL | wx.EXPAND, 10)
         btns = wx.BoxSizer(wx.HORIZONTAL)
         save = wx.Button(pnl, label="Save As…")
         close = wx.Button(pnl, label="Close")
-        btns.Add(save, 0, wx.ALL, 6)
-        btns.Add(close, 0, wx.ALL, 6)
+        btns.Add(save, 0, wx.ALL, 6); btns.Add(close, 0, wx.ALL, 6)
         v.Add(btns, 0, wx.ALIGN_CENTER)
 
         def on_save(_):
@@ -496,7 +604,7 @@ class DataBuddyDialog(wx.Dialog):
         pnl.SetSizer(v)
         dlg.ShowModal()
 
-    # ---------- TTS (same multi-engine with inline status)
+    # ---------- TTS
     def _clear_edge_azure_env(self):
         for k in ("SPEECH_KEY", "SPEECH_REGION", "AZURE_TTS_KEY", "AZURE_TTS_REGION", "EDGE_TTS_KEY", "EDGE_TTS_REGION"):
             try:
