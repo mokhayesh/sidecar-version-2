@@ -1,13 +1,14 @@
 import os
 import re
 import json
+import base64
 import threading
 import tempfile
 import requests
 import wx
 import wx.richtext as rt
 
-# Optional audio / speech libs (handled gracefully if missing)
+# Optional audio / speech libs
 try:
     import pygame
 except Exception:
@@ -37,22 +38,18 @@ from app.settings import defaults
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Quality Rule Assignment Dialog (dark theme)
+# Quality Rule Assignment (unchanged style)
 # ──────────────────────────────────────────────────────────────────────────────
 class QualityRuleDialog(wx.Dialog):
     def __init__(self, parent, fields, current_rules):
-        super().__init__(
-            parent,
-            title="Quality Rule Assignment",
-            size=(740, 560),
-            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
-        )
+        super().__init__(parent, title="Quality Rule Assignment",
+                         size=(740, 560),
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
         self.fields = fields
         self.current_rules = current_rules
         self.loaded_rules = {}
 
-        # Theme
         BG = wx.Colour(45, 45, 45)
         PANEL = wx.Colour(50, 50, 50)
         TXT = wx.Colour(235, 235, 235)
@@ -65,11 +62,9 @@ class QualityRuleDialog(wx.Dialog):
         pnl.SetBackgroundColour(PANEL)
         main = wx.BoxSizer(wx.VERTICAL)
 
-        # Fields list
         fbox = wx.StaticBox(pnl, label="Fields")
         fbox.SetForegroundColour(TXT)
         fsz = wx.StaticBoxSizer(fbox, wx.HORIZONTAL)
-
         self.field_list = wx.ListBox(pnl, choices=list(fields), style=wx.LB_EXTENDED)
         self.field_list.SetBackgroundColour(INPUT_BG)
         self.field_list.SetForegroundColour(INPUT_TXT)
@@ -77,13 +72,12 @@ class QualityRuleDialog(wx.Dialog):
         fsz.Add(self.field_list, 1, wx.EXPAND | wx.ALL, 5)
         main.Add(fsz, 1, wx.EXPAND | wx.ALL, 5)
 
-        # Rule input
         g = wx.FlexGridSizer(2, 2, 5, 5)
         g.AddGrowableCol(1, 1)
 
-        lbl1 = wx.StaticText(pnl, label="Select loaded rule:")
-        lbl1.SetForegroundColour(TXT)
-        g.Add(lbl1, 0, wx.ALIGN_CENTER_VERTICAL)
+        s1 = wx.StaticText(pnl, label="Select loaded rule:")
+        s1.SetForegroundColour(TXT)
+        g.Add(s1, 0, wx.ALIGN_CENTER_VERTICAL)
 
         self.rule_choice = wx.ComboBox(pnl, style=wx.CB_READONLY)
         self.rule_choice.SetBackgroundColour(INPUT_BG)
@@ -92,18 +86,18 @@ class QualityRuleDialog(wx.Dialog):
         self.rule_choice.Bind(wx.EVT_COMBOBOX, self.on_pick_rule)
         g.Add(self.rule_choice, 0, wx.EXPAND)
 
-        lbl2 = wx.StaticText(pnl, label="Or enter regex pattern:")
-        lbl2.SetForegroundColour(TXT)
-        g.Add(lbl2, 0, wx.ALIGN_CENTER_VERTICAL)
+        s2 = wx.StaticText(pnl, label="Or enter regex pattern:")
+        s2.SetForegroundColour(TXT)
+        g.Add(s2, 0, wx.ALIGN_CENTER_VERTICAL)
 
         self.pattern_txt = wx.TextCtrl(pnl)
         self.pattern_txt.SetBackgroundColour(INPUT_BG)
         self.pattern_txt.SetForegroundColour(INPUT_TXT)
         self.pattern_txt.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         g.Add(self.pattern_txt, 0, wx.EXPAND)
+
         main.Add(g, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
-        # JSON preview
         pbox = wx.StaticBox(pnl, label="Loaded JSON preview")
         pbox.SetForegroundColour(TXT)
         pv = wx.StaticBoxSizer(pbox, wx.VERTICAL)
@@ -114,7 +108,6 @@ class QualityRuleDialog(wx.Dialog):
         pv.Add(self.preview, 1, wx.EXPAND | wx.ALL, 4)
         main.Add(pv, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
-        # Assignments
         abox = wx.StaticBox(pnl, label="Assignments")
         abox.SetForegroundColour(TXT)
         asz = wx.StaticBoxSizer(abox, wx.VERTICAL)
@@ -124,21 +117,17 @@ class QualityRuleDialog(wx.Dialog):
         asz.Add(self.assign_view, 1, wx.EXPAND | wx.ALL, 4)
         main.Add(asz, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
-        # Buttons
         btns = wx.BoxSizer(wx.HORIZONTAL)
         load_btn = wx.Button(pnl, label="Load Rules JSON")
         assign_btn = wx.Button(pnl, label="Assign To Selected Field(s)")
         close_btn = wx.Button(pnl, label="Save / Close")
-
         for b in (load_btn, assign_btn, close_btn):
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
             b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-
         load_btn.Bind(wx.EVT_BUTTON, self.on_load_rules)
         assign_btn.Bind(wx.EVT_BUTTON, self.on_assign)
         close_btn.Bind(wx.EVT_BUTTON, lambda _: self.EndModal(wx.ID_OK))
-
         for b in (load_btn, assign_btn, close_btn):
             btns.Add(b, 0, wx.ALL, 5)
         main.Add(btns, 0, wx.ALIGN_CENTER)
@@ -197,28 +186,23 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy Chat Dialog (voice enabled: TTS + STT) — silent, multi-engine TTS
+# Little Buddy: faster streaming replies + image generation + TTS/STT
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None, knowledge=None):
-        super().__init__(
-            parent,
-            title="Little Buddy",
-            size=(860, 660),
-            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
-        )
+        super().__init__(parent, title="Little Buddy", size=(900, 700),
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
+        self.session = requests.Session()  # keep-alive for faster first byte
         self.data = data
         self.headers = headers
-        self.knowledge = knowledge or []  # list of dicts: {name, path, type, content}
+        self.knowledge = knowledge or []
 
-        # TTS / STT state
         self._tts_file = None
         self._tts_thread = None
         self._listening = False
-        self._stop_listening = None  # SR background stopper
+        self._stop_listening = None
 
-        # High-contrast theme
         self.COLORS = {
             "bg": wx.Colour(35, 35, 35),
             "panel": wx.Colour(38, 38, 38),
@@ -236,15 +220,12 @@ class DataBuddyDialog(wx.Dialog):
         pnl.SetBackgroundColour(self.COLORS["panel"])
         vbox = wx.BoxSizer(wx.VERTICAL)
 
-        # Title
         title = wx.StaticText(pnl, label="Little Buddy")
         title.SetForegroundColour(self.COLORS["text"])
         title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
-        # Voice selector + options row
         opts = wx.BoxSizer(wx.HORIZONTAL)
-
         self.voice = wx.Choice(pnl, choices=["en-US-AriaNeural", "en-US-GuyNeural", "en-GB-SoniaNeural"])
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
@@ -257,7 +238,6 @@ class DataBuddyDialog(wx.Dialog):
         self.tts_checkbox.SetForegroundColour(self.COLORS["text"])
         opts.Add(self.tts_checkbox, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
 
-        # Inline status (no popups)
         self.tts_status = wx.StaticText(pnl, label="TTS: idle")
         self.tts_status.SetForegroundColour(self.COLORS["muted"])
         self.tts_status.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
@@ -265,7 +245,6 @@ class DataBuddyDialog(wx.Dialog):
 
         vbox.Add(opts, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
-        # Persona selector
         self.persona = wx.ComboBox(
             pnl,
             choices=["Data Architect", "Data Engineer", "Data Quality Expert", "Data Scientist", "Yoda"],
@@ -273,13 +252,12 @@ class DataBuddyDialog(wx.Dialog):
         )
         self.persona.SetSelection(0)
         self.persona.SetBackgroundColour(self.COLORS["input_bg"])
-        self.persona.SetForegroundColour(self.COLORS["input_fg"])
+        this_fg = self.COLORS["input_fg"]
+        self.persona.SetForegroundColour(this_fg)
         self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         vbox.Add(self.persona, 0, wx.EXPAND | wx.ALL, 5)
 
-        # Prompt row
         row = wx.BoxSizer(wx.HORIZONTAL)
-
         ask_lbl = wx.StaticText(pnl, label="Ask:")
         ask_lbl.SetForegroundColour(self.COLORS["muted"])
         ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
@@ -287,7 +265,7 @@ class DataBuddyDialog(wx.Dialog):
 
         self.prompt = wx.TextCtrl(pnl, style=wx.TE_PROCESS_ENTER)
         self.prompt.SetBackgroundColour(self.COLORS["input_bg"])
-        self.prompt.SetForegroundColour(self.COLORS["input_fg"])
+        self.prompt.SetForegroundColour(this_fg)
         self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         self.prompt.SetHint("Type your question and press Enter…")
         self.prompt.Bind(wx.EVT_TEXT_ENTER, self.on_ask)
@@ -296,42 +274,40 @@ class DataBuddyDialog(wx.Dialog):
         send_btn = wx.Button(pnl, label="Send")
         send_btn.SetBackgroundColour(self.COLORS["accent"])
         send_btn.SetForegroundColour(wx.WHITE)
-        send_btn.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         send_btn.Bind(wx.EVT_BUTTON, self.on_ask)
         row.Add(send_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
-        # STT: mic toggle
         self.mic_btn = wx.Button(pnl, label="🎙 Speak")
         self.mic_btn.SetBackgroundColour(wx.Colour(60, 120, 90))
         self.mic_btn.SetForegroundColour(wx.WHITE)
         self.mic_btn.Bind(wx.EVT_BUTTON, self.on_mic_toggle)
         row.Add(self.mic_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
-        # Stop button: stops TTS playback and STT listening
         self.stop_btn = wx.Button(pnl, label="Stop")
         self.stop_btn.SetBackgroundColour(wx.Colour(150, 60, 60))
         self.stop_btn.SetForegroundColour(wx.WHITE)
         self.stop_btn.Bind(wx.EVT_BUTTON, self.on_stop_voice)
-        row.Add(self.stop_btn, 0, wx.ALIGN_CENTER_VERTICAL)
+        row.Add(self.stop_btn, 0, wx.ALIGN_CENTER_VERTICAL, 0)
+
+        # New: image generation button
+        self.img_btn = wx.Button(pnl, label="🎨 Generate Image")
+        self.img_btn.SetBackgroundColour(wx.Colour(90, 110, 160))
+        self.img_btn.SetForegroundColour(wx.WHITE)
+        self.img_btn.Bind(wx.EVT_BUTTON, self.on_generate_image)
+        row.Add(self.img_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)
 
         vbox.Add(row, 0, wx.EXPAND | wx.ALL, 5)
 
-        # Reply area
-        self.reply = rt.RichTextCtrl(
-            pnl,
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.BORDER_SIMPLE
-        )
+        self.reply = rt.RichTextCtrl(pnl, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.BORDER_SIMPLE)
         self.reply.SetBackgroundColour(self.COLORS["reply_bg"])
         self.reply.SetForegroundColour(self.COLORS["reply_fg"])
         self._reset_reply_style()
         vbox.Add(self.reply, 1, wx.EXPAND | wx.ALL, 6)
 
         pnl.SetSizer(vbox)
-
-        # Initial message
         self._write_reply("Hi, I'm Little Buddy!")
 
-    # ----- styling helpers -------------------------------------------------
+    # ---------- helpers
     def _current_attr(self):
         attr = rt.RichTextAttr()
         attr.SetTextColour(self.COLORS["reply_fg"])
@@ -344,7 +320,7 @@ class DataBuddyDialog(wx.Dialog):
         self.reply.SetDefaultStyle(attr)
         self.reply.SetBasicStyle(attr)
 
-    def _write_reply(self, text: str, newline: bool = False):
+    def _write_reply(self, text, newline=False):
         attr = self._current_attr()
         self.reply.BeginStyle(attr)
         try:
@@ -352,23 +328,22 @@ class DataBuddyDialog(wx.Dialog):
         finally:
             self.reply.EndStyle()
 
-    def _set_tts_status(self, msg: str):
+    def _set_tts_status(self, msg):
         try:
             self.tts_status.SetLabel(f"TTS: {msg}")
             self.tts_status.GetParent().Layout()
         except Exception:
             pass
 
-    # ----- knowledge context ----------------------------------------------
-    def _build_knowledge_context(self, max_chars=1500):
+    def _build_knowledge_context(self, max_chars=1200):
         if not self.knowledge:
             return ""
         chunks = []
+        per_file = max(180, max_chars // max(1, len(self.knowledge)))
         for f in self.knowledge:
             name = f.get("name", "file")
             content = f.get("content")
             if content and isinstance(content, str):
-                per_file = max(200, max_chars // max(1, len(self.knowledge)))
                 snippet = content[:min(len(content), per_file)].strip()
                 chunks.append(f"File: {name}\n{snippet}")
             else:
@@ -378,7 +353,7 @@ class DataBuddyDialog(wx.Dialog):
             text = text[:max_chars] + "\n…(truncated)…"
         return text
 
-    # ----- events ----------------------------------------------------------
+    # ---------- chat
     def on_ask(self, _):
         q = self.prompt.GetValue().strip()
         self.prompt.SetValue("")
@@ -386,11 +361,12 @@ class DataBuddyDialog(wx.Dialog):
             return
         self.reply.Clear()
         self._reset_reply_style()
-        self._write_reply("Thinking...")
+        self._write_reply("Thinking…\n")
 
-        threading.Thread(target=self._answer, args=(q,), daemon=True).start()
+        threading.Thread(target=self._answer_streaming, args=(q,), daemon=True).start()
 
-    def _answer(self, q: str):
+    def _answer_streaming(self, q: str):
+        """Streams tokens so reply starts immediately."""
         persona = self.persona.GetValue()
         prompt = f"As a {persona}, {q}" if persona else q
 
@@ -401,50 +377,133 @@ class DataBuddyDialog(wx.Dialog):
         if kn:
             prompt += "\n\nKnowledge files:\n" + kn
 
+        url = defaults.get("url", "").strip()
+        headers = {
+            "Authorization": f"Bearer {defaults.get('api_key','')}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": defaults.get("default_model", "gpt-4o-mini"),
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": int(defaults.get("max_tokens", 800)),
+            "temperature": float(defaults.get("temperature", 0.6)),
+            "stream": True,
+        }
+
+        buf = []
+
         try:
-            resp = requests.post(
-                defaults["url"],
-                headers={
-                    "Authorization": f"Bearer {defaults['api_key']}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": defaults["default_model"],
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": int(defaults["max_tokens"]),
-                    "temperature": float(defaults["temperature"]),
-                },
-                timeout=60,
-                verify=False,
-            )
-            resp.raise_for_status()
-            answer = resp.json()["choices"][0]["message"]["content"]
+            with self.session.post(url, headers=headers, json=payload, stream=True, timeout=(10, 90), verify=False) as r:
+                r.raise_for_status()
+                for raw in r.iter_lines(decode_unicode=True):
+                    if not raw:
+                        continue
+                    if raw.startswith("data: "):
+                        raw = raw[6:]
+                    if raw.strip() == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(raw)
+                        # OpenAI chat-completions delta format
+                        delta = obj["choices"][0].get("delta", {}).get("content")
+                        if delta:
+                            buf.append(delta)
+                            wx.CallAfter(self._write_reply, delta)
+                    except Exception:
+                        continue
         except Exception as e:
-            answer = f"Error: {e}"
+            wx.CallAfter(self.reply.Clear)
+            wx.CallAfter(self._write_reply, f"Error: {e}")
+            return
 
-        def render():
-            self.reply.Clear()
-            self._reset_reply_style()
-            self._write_reply(answer)
-            if self.tts_checkbox.GetValue():
-                self.speak(answer)
+        answer = "".join(buf)
+        if self.tts_checkbox.GetValue() and answer.strip():
+            wx.CallAfter(lambda: self.speak(answer))
 
-        wx.CallAfter(render)
+    # ---------- image generation
+    def on_generate_image(self, _):
+        prompt = self.prompt.GetValue().strip()
+        if not prompt:
+            wx.MessageBox("Enter a description in the Ask field first.", "No Prompt", wx.OK | wx.ICON_INFORMATION)
+            return
+        threading.Thread(target=self._gen_image_worker, args=(prompt,), daemon=True).start()
 
-    # ----- TTS helpers -----------------------------------------------------
+    def _gen_image_worker(self, prompt: str):
+        url = defaults.get("image_generation_url", "").strip()
+        headers = {
+            "Authorization": f"Bearer {defaults.get('api_key','')}",
+            "Content-Type": "application/json",
+        }
+        # Try modern format first (with model), fall back to classic
+        body = {
+            "model": defaults.get("image_model", "gpt-image-1"),
+            "prompt": prompt,
+            "n": 1,
+            "size": "1024x1024",
+        }
+        try:
+            resp = self.session.post(url, headers=headers, json=body, timeout=120, verify=False)
+            resp.raise_for_status()
+            data = resp.json().get("data", [])
+            if not data:
+                raise RuntimeError("No image returned.")
+            b64 = data[0].get("b64_json")
+            if not b64:
+                # some providers return 'url' instead of base64
+                img_url = data[0].get("url")
+                if not img_url:
+                    raise RuntimeError("No image payload.")
+                img_bytes = requests.get(img_url, timeout=60).content
+            else:
+                img_bytes = base64.b64decode(b64)
+
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+            tmp.write(img_bytes)
+            tmp.close()
+            wx.CallAfter(self._show_image_preview, tmp.name)
+        except Exception as e:
+            wx.CallAfter(wx.MessageBox, f"Image generation failed:\n{e}", "Image Error", wx.OK | wx.ICON_ERROR)
+
+    def _show_image_preview(self, path: str):
+        dlg = wx.Dialog(self, title="Generated Image", size=(700, 700),
+                        style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        pnl = wx.Panel(dlg)
+        pnl.SetBackgroundColour(wx.Colour(30, 30, 30))
+        v = wx.BoxSizer(wx.VERTICAL)
+        bmp = wx.Image(path, wx.BITMAP_TYPE_ANY).Scale(660, 620, wx.IMAGE_QUALITY_HIGH)
+        v.Add(wx.StaticBitmap(pnl, bitmap=wx.Bitmap(bmp)), 1, wx.ALL | wx.EXPAND, 10)
+
+        btns = wx.BoxSizer(wx.HORIZONTAL)
+        save = wx.Button(pnl, label="Save As…")
+        close = wx.Button(pnl, label="Close")
+        btns.Add(save, 0, wx.ALL, 6)
+        btns.Add(close, 0, wx.ALL, 6)
+        v.Add(btns, 0, wx.ALIGN_CENTER)
+
+        def on_save(_):
+            s = wx.FileDialog(dlg, "Save Image", wildcard="PNG|*.png", style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
+            if s.ShowModal() == wx.ID_OK:
+                try:
+                    with open(path, "rb") as fsrc, open(s.GetPath(), "wb") as fdst:
+                        fdst.write(fsrc.read())
+                    wx.MessageBox("Saved.", "Image", wx.OK | wx.ICON_INFORMATION)
+                except Exception as e:
+                    wx.MessageBox(f"Failed to save: {e}", "Error", wx.OK | wx.ICON_ERROR)
+            s.Destroy()
+
+        save.Bind(wx.EVT_BUTTON, on_save)
+        close.Bind(wx.EVT_BUTTON, lambda e: dlg.Destroy())
+        pnl.SetSizer(v)
+        dlg.ShowModal()
+
+    # ---------- TTS (same multi-engine with inline status)
     def _clear_edge_azure_env(self):
-        """Prevent edge-tts from switching to Azure mode when no key is set."""
-        for k in (
-            "SPEECH_KEY", "SPEECH_REGION",
-            "AZURE_TTS_KEY", "AZURE_TTS_REGION",
-            "EDGE_TTS_KEY", "EDGE_TTS_REGION"
-        ):
+        for k in ("SPEECH_KEY", "SPEECH_REGION", "AZURE_TTS_KEY", "AZURE_TTS_REGION", "EDGE_TTS_KEY", "EDGE_TTS_REGION"):
             try:
                 os.environ.pop(k, None)
             except Exception:
                 pass
 
-    # ----- TTS (Azure -> Edge public -> gTTS -> pyttsx3) -------------------
     def speak(self, text: str):
         self._stop_playback()
 
@@ -452,7 +511,6 @@ class DataBuddyDialog(wx.Dialog):
             engine_name = "idle"
             ok = False
 
-            # 1) Azure Neural (if key/region provided via env or defaults)
             key = (defaults.get("azure_tts_key") or os.environ.get("SPEECH_KEY") or "").strip()
             region = (defaults.get("azure_tts_region") or os.environ.get("SPEECH_REGION") or "").strip()
             if edge_tts and key and region and not ok:
@@ -478,7 +536,6 @@ class DataBuddyDialog(wx.Dialog):
                 except Exception:
                     ok = False
 
-            # 2) Edge public (no key)
             if edge_tts and not ok:
                 import asyncio
 
@@ -503,15 +560,12 @@ class DataBuddyDialog(wx.Dialog):
                 except Exception:
                     ok = False
 
-            # 3) gTTS (good natural fallback, if available)
             if gTTS and not ok:
                 try:
                     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
                     tmp.close()
                     voice_val = self.voice.GetStringSelection() or "en-US-GuyNeural"
-                    lang = "en"
-                    if "-" in voice_val:
-                        lang = voice_val.split("-", 1)[0].lower()
+                    lang = voice_val.split("-", 1)[0].lower() if "-" in voice_val else "en"
                     gTTS(text=text, lang=lang).save(tmp.name)
                     self._tts_file = tmp.name
                     ok = True
@@ -519,25 +573,11 @@ class DataBuddyDialog(wx.Dialog):
                 except Exception:
                     ok = False
 
-            # 4) Offline pyttsx3 (always last resort)
             if pyttsx3 and not ok:
                 try:
                     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
                     tmp.close()
                     engine = pyttsx3.init()
-                    try:
-                        voices = engine.getProperty("voices")
-                        pick = None
-                        for v in voices:
-                            nm = (v.name or "").lower()
-                            lid = (v.id or "").lower()
-                            if any(k in nm or k in lid for k in ("zira", "hazel", "david", "english")):
-                                pick = v.id
-                                break
-                        if pick:
-                            engine.setProperty("voice", pick)
-                    except Exception:
-                        pass
                     engine.save_to_file(text, tmp.name)
                     engine.runAndWait()
                     self._tts_file = tmp.name
@@ -547,7 +587,6 @@ class DataBuddyDialog(wx.Dialog):
                     ok = False
 
             wx.CallAfter(self._set_tts_status, engine_name if ok else "error")
-
             if ok and self._tts_file:
                 try:
                     if not pygame:
@@ -575,7 +614,7 @@ class DataBuddyDialog(wx.Dialog):
                 pass
         self._tts_file = None
 
-    # ----- STT (speech_recognition) ---------------------------------------
+    # ---------- STT
     def on_mic_toggle(self, _):
         if not sr:
             wx.MessageBox("Speech-to-text requires 'SpeechRecognition'.\nInstall with: pip install SpeechRecognition",
@@ -596,12 +635,8 @@ class DataBuddyDialog(wx.Dialog):
                         text = ""
                     if text:
                         wx.CallAfter(self.prompt.SetValue, text)
-                        # Optionally auto-send:
-                        # wx.CallAfter(self.on_ask, None)
 
-                self._stop_listening = recognizer.listen_in_background(
-                    mic, callback, phrase_time_limit=12
-                )
+                self._stop_listening = recognizer.listen_in_background(mic, callback, phrase_time_limit=12)
                 self._listening = True
                 self.mic_btn.SetLabel("Stop Mic")
             except Exception as e:
@@ -619,7 +654,6 @@ class DataBuddyDialog(wx.Dialog):
         self._listening = False
         self.mic_btn.SetLabel("🎙 Speak")
 
-    # ----- Stop all voice (button) ----------------------------------------
     def on_stop_voice(self, _):
         self._stop_playback()
         self._stop_stt()
@@ -631,19 +665,13 @@ class DataBuddyDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Synthetic Data Dialog (choose record count and fields)
+# Synthetic Data Dialog
 # ──────────────────────────────────────────────────────────────────────────────
 class SyntheticDataDialog(wx.Dialog):
-    """Popup to choose how many synthetic rows to generate and which fields to include."""
     def __init__(self, parent, fields):
-        super().__init__(
-            parent,
-            title="Generate Synthetic Data",
-            size=(520, 520),
-            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
-        )
+        super().__init__(parent, title="Generate Synthetic Data", size=(520, 520),
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
-        # Theme
         BG = wx.Colour(38, 38, 38)
         PANEL = wx.Colour(38, 38, 38)
         TXT = wx.Colour(235, 235, 235)
@@ -660,7 +688,6 @@ class SyntheticDataDialog(wx.Dialog):
         s = wx.BoxSizer(wx.VERTICAL)
         pnl.SetSizer(s)
 
-        # Count
         box1 = wx.StaticBox(pnl, label="How many records?")
         box1.SetForegroundColour(TXT)
         s1 = wx.StaticBoxSizer(box1, wx.HORIZONTAL)
@@ -671,7 +698,6 @@ class SyntheticDataDialog(wx.Dialog):
         s1.Add(self.count, 1, wx.ALL | wx.EXPAND, 6)
         s.Add(s1, 0, wx.EXPAND | wx.ALL, 8)
 
-        # Fields
         box2 = wx.StaticBox(pnl, label="Choose fields to include")
         box2.SetForegroundColour(TXT)
         s2 = wx.StaticBoxSizer(box2, wx.VERTICAL)
@@ -697,7 +723,6 @@ class SyntheticDataDialog(wx.Dialog):
 
         s.Add(s2, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
-        # Buttons
         btns = wx.StdDialogButtonSizer()
         ok_btn = wx.Button(pnl, wx.ID_OK)
         cancel_btn = wx.Button(pnl, wx.ID_CANCEL)

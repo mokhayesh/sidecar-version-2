@@ -1,10 +1,9 @@
 import os
-import csv
 import wx
 import wx.grid as gridlib
 import pandas as pd
 
-from app.settings import SettingsWindow, save_defaults, defaults
+from app.settings import SettingsWindow, defaults
 from app.dialogs import QualityRuleDialog, DataBuddyDialog, SyntheticDataDialog
 from app.analysis import (
     detect_and_split_data,
@@ -18,12 +17,13 @@ from app.s3_utils import download_text_from_uri, upload_to_s3
 
 class MainWindow(wx.Frame):
     def __init__(self):
-        super().__init__(None, title="Sidecar Data Quality", size=(1120, 780))
+        super().__init__(None, title="Sidecar Data Quality", size=(1200, 820))
+        self.SetDoubleBuffered(True)
 
-        # App icon (upper-left corner)
+        # App/taskbar icon
         try:
-            icon = wx.Icon("assets/sidecar-01.ico", wx.BITMAP_TYPE_ICO)
-            self.SetIcon(icon)
+            ico = wx.Icon("assets/sidecar-01.ico", wx.BITMAP_TYPE_ICO)
+            self.SetIcon(ico)
         except Exception:
             pass
 
@@ -31,9 +31,7 @@ class MainWindow(wx.Frame):
         self.headers = []
         self.current_process = ""
         self.quality_rules = {}
-
-        # Knowledge files live here: list[dict(name,path,type,content?)]
-        self.knowledge_files = []
+        self.knowledge_files = []  # list[{name, path, type, content?}]
 
         self._build_ui()
         self.Centre()
@@ -41,17 +39,30 @@ class MainWindow(wx.Frame):
 
     # ────────────────────────────────────────────────────────────────── UI
     def _build_ui(self):
-        pnl = wx.Panel(self)
-        pnl.SetBackgroundColour(wx.Colour(40, 40, 40))
-        vbox = wx.BoxSizer(wx.VERTICAL)
+        root = wx.Panel(self)
+        root.SetDoubleBuffered(True)
+        root.SetBackgroundColour(wx.Colour(40, 40, 40))
+        outer = wx.BoxSizer(wx.VERTICAL)
 
-        # Title row
-        title = wx.StaticText(pnl, label="🏍️🛺 Sidecar Data Quality")
+        # Header: icon bitmap + title text (no emoji -> fixes glyph glitches)
+        header = wx.Panel(root)
+        header.SetBackgroundColour(wx.Colour(24, 24, 24))
+        header.SetDoubleBuffered(True)
+        hsz = wx.BoxSizer(wx.HORIZONTAL)
+
+        bmp = self._load_logo_bitmap(size=(24, 24))
+        if bmp:
+            hsz.Add(wx.StaticBitmap(header, bitmap=bmp), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 8)
+
+        title = wx.StaticText(header, label="Sidecar Data Quality")
         title.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        title.SetForegroundColour(wx.Colour(230, 230, 230))
-        vbox.Add(title, 0, wx.ALIGN_CENTER | wx.ALL, 8)
+        title.SetForegroundColour(wx.Colour(235, 235, 235))
+        hsz.Add(title, 0, wx.LEFT | wx.ALIGN_CENTER_VERTICAL, 6)
 
-        # Menu
+        header.SetSizer(hsz)
+        outer.Add(header, 0, wx.EXPAND)
+
+        # Menubar
         mb = wx.MenuBar()
         m_file, m_set = wx.Menu(), wx.Menu()
         m_file.Append(wx.ID_EXIT, "Exit")
@@ -62,9 +73,10 @@ class MainWindow(wx.Frame):
         mb.Append(m_set, "&Settings")
         self.SetMenuBar(mb)
 
-        # Toolbar (dark chip row)
-        toolbar_bg = wx.Panel(pnl)
+        # Toolbar (chips)
+        toolbar_bg = wx.Panel(root)
         toolbar_bg.SetBackgroundColour(wx.Colour(28, 28, 28))
+        toolbar_bg.SetDoubleBuffered(True)
         tb = wx.WrapSizer(wx.HORIZONTAL)
         toolbar_bg.SetSizer(tb)
 
@@ -79,7 +91,6 @@ class MainWindow(wx.Frame):
             tb.Add(btn, 0, wx.ALL, 4)
             return btn
 
-        # Buttons (order matters)
         self.btn_load_knowledge = make_btn("Load Knowledge Files", self.on_load_knowledge)
         make_btn("Load File", self.on_load_file)
         make_btn("Load from URI/S3", self.on_load_s3)
@@ -87,7 +98,6 @@ class MainWindow(wx.Frame):
         make_btn("Quality Rule Assignment", self.on_rules)
         make_btn("Profile", self.do_analysis, "Profile")
         make_btn("Quality", self.do_analysis, "Quality")
-        # Detect Anomalies button
         make_btn("Detect Anomalies", self.on_detect_anomalies)
         make_btn("Catalog", self.do_analysis, "Catalog")
         make_btn("Compliance", self.do_analysis, "Compliance")
@@ -95,29 +105,34 @@ class MainWindow(wx.Frame):
         make_btn("Export CSV", self.on_export_csv)
         make_btn("Export TXT", self.on_export_txt)
         make_btn("Upload to S3", self.on_upload_s3)
+        outer.Add(toolbar_bg, 0, wx.EXPAND)
 
-        vbox.Add(toolbar_bg, 0, wx.EXPAND)
-
-        # Knowledge strip (separate row so it never overlaps toolbar)
-        strip = wx.Panel(pnl)
+        # Knowledge strip (separate row)
+        strip = wx.Panel(root)
         strip.SetBackgroundColour(wx.Colour(36, 36, 36))
-        strip_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        strip.SetSizer(strip_sizer)
+        strip.SetDoubleBuffered(True)
+        ss = wx.BoxSizer(wx.HORIZONTAL)
+        strip.SetSizer(ss)
 
         lbl = wx.StaticText(strip, label="Knowledge Files:")
         lbl.SetForegroundColour(wx.Colour(180, 200, 225))
         lbl.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        strip_sizer.Add(lbl, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
+        ss.Add(lbl, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
 
-        self.knowledge_label = wx.StaticText(strip, label="None")
+        # Start empty to avoid stray "None" artifacts overlapping header
+        self.knowledge_label = wx.StaticText(strip, label="")
         self.knowledge_label.SetForegroundColour(wx.Colour(215, 215, 215))
         self.knowledge_label.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-        strip_sizer.Add(self.knowledge_label, 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
-
-        vbox.Add(strip, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 2)
+        ss.Add(self.knowledge_label, 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
+        outer.Add(strip, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 2)
 
         # Data grid
-        self.grid = gridlib.Grid(pnl)
+        grid_panel = wx.Panel(root)
+        grid_panel.SetBackgroundColour(wx.Colour(40, 40, 40))
+        grid_panel.SetDoubleBuffered(True)
+        gsz = wx.BoxSizer(wx.VERTICAL)
+
+        self.grid = gridlib.Grid(grid_panel)
         self.grid.CreateGrid(0, 0)
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
         self.grid.SetDefaultCellBackgroundColour(wx.Colour(55, 55, 55))
@@ -125,17 +140,33 @@ class MainWindow(wx.Frame):
         self.grid.SetLabelBackgroundColour(wx.Colour(80, 80, 80))
         self.grid.SetLabelTextColour(wx.Colour(240, 240, 240))
         self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
+        gsz.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
+        grid_panel.SetSizer(gsz)
 
-        pnl.SetSizer(vbox)
+        outer.Add(grid_panel, 1, wx.EXPAND)
+        root.SetSizer(outer)
 
-    # ─────────────────────────────────────────────────────── knowledge strip
+    def _load_logo_bitmap(self, size=(24, 24)) -> wx.Bitmap | None:
+        path_png = "assets/sidecar-01.png"
+        path_ico = "assets/sidecar-01.ico"
+        try:
+            if os.path.exists(path_png):
+                img = wx.Image(path_png, wx.BITMAP_TYPE_ANY).Scale(size[0], size[1], wx.IMAGE_QUALITY_HIGH)
+                return wx.Bitmap(img)
+            if os.path.exists(path_ico):
+                icon = wx.Icon(path_ico, wx.BITMAP_TYPE_ICO)
+                bmp = wx.Bitmap(icon)
+                if bmp.IsOk():
+                    img = bmp.ConvertToImage().Scale(size[0], size[1], wx.IMAGE_QUALITY_HIGH)
+                    return wx.Bitmap(img)
+        except Exception:
+            pass
+        return None
+
+    # ───────────────────────────────────────────────────── knowledge strip
     def _refresh_knowledge_strip(self):
-        if not self.knowledge_files:
-            txt = "None"
-        else:
-            names = [kf["name"] for kf in self.knowledge_files]
-            txt = "   •   ".join(names)
+        names = [kf["name"] for kf in self.knowledge_files]
+        txt = "   •   ".join(names)
         self.knowledge_label.SetLabel(txt)
         try:
             width = self.GetClientSize().GetWidth() - 150
@@ -211,15 +242,11 @@ class MainWindow(wx.Frame):
         dlg = SyntheticDataDialog(self, self.headers)
         if dlg.ShowModal() == wx.ID_OK:
             n, fields = dlg.get_values()
-            # simple synthetic generation: repeat the header values with counters
             rows = []
             for i in range(n):
                 row = []
                 for col in self.headers:
-                    if col not in fields:
-                        row.append("")
-                    else:
-                        row.append(f"Synth_{col}_{i+1}")
+                    row.append(f"Synth_{col}_{i+1}" if col in fields else "")
                 rows.append(row)
             self._display(self.headers, rows)
             wx.MessageBox(upload_to_s3("Synthetic", self.headers, rows), "Synthetic", wx.OK | wx.ICON_INFORMATION)
@@ -267,7 +294,6 @@ class MainWindow(wx.Frame):
 
     # ───────────────────────────────────────────────── knowledge loading
     def on_load_knowledge(self, _):
-        """Allow selecting multiple files and show their names under the toolbar."""
         wildcard = (
             "Knowledge files (*.txt;*.csv;*.json;*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp)|"
             "*.txt;*.csv;*.json;*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp|"
@@ -292,7 +318,6 @@ class MainWindow(wx.Frame):
                 base = os.path.basename(p)
                 ext = os.path.splitext(base)[1].lower()
 
-                # Avoid duplicates by path
                 if any(kf["path"] == p for kf in self.knowledge_files):
                     continue
 
@@ -301,7 +326,7 @@ class MainWindow(wx.Frame):
                 if ext in {".txt", ".csv", ".json"}:
                     try:
                         with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                            entry["content"] = f.read(100_000)  # keep first 100 KB
+                            entry["content"] = f.read(100_000)
                         entry["type"] = "text"
                     except Exception:
                         entry["type"] = "text"
@@ -339,10 +364,10 @@ class MainWindow(wx.Frame):
         wx.MessageBox(upload_to_s3(proc, hdr, data), "Analysis", wx.OK | wx.ICON_INFORMATION)
 
     def on_detect_anomalies(self, _):
-        """Simple anomaly detector: flags empty values and overly long strings."""
         if not self.headers:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
             return
+        import numpy as np
         df = pd.DataFrame(self.raw_data, columns=self.headers)
 
         rows = []
