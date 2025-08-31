@@ -181,11 +181,10 @@ class MainWindow(wx.Frame):
             header_s.Add(icon_panel, 0, wx.ALIGN_CENTER_VERTICAL)
             right_pad_width = bmp.GetWidth() + 16
         else:
-            # keep some margin even if the image is missing
             header_s.AddSpacer(16)
             right_pad_width = 16
 
-        # Center: a container with a stretch-left and stretch-right so the title centers
+        # Center: container with stretchers so the title centers
         center_panel = wx.Panel(header)
         center_panel.SetBackgroundColour(wx.Colour(26, 26, 26))
         center_panel.SetDoubleBuffered(True)
@@ -200,9 +199,10 @@ class MainWindow(wx.Frame):
         csz.AddStretchSpacer(1)
         center_panel.SetSizer(csz)
 
-        header_s.Add(center_panel, 1, wx.EXPAND | wx.ALIGN_CENTER_VERTICAL)
+        # FIX: don't combine wx.EXPAND with alignment flags (asserts on Windows)
+        header_s.Add(center_panel, 1, wx.EXPAND)
 
-        # Right: spacer same width as left icon to keep true visual centering
+        # Right: spacer same width as left icon to keep visual centering
         header_s.AddSpacer(right_pad_width)
 
         header.SetSizer(header_s)
