@@ -30,9 +30,6 @@ ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
 # -------------------------- Cross-version wx font helper ---------------------
 def _font(size: int, weight: str = "normal", family=wx.FONTFAMILY_SWISS) -> wx.Font:
-    """
-    Create a wx.Font that works across old/new wxPython versions.
-    """
     style = getattr(wx, "FONTSTYLE_NORMAL", wx.NORMAL)
     weight_map = {
         "normal": getattr(wx, "FONTWEIGHT_NORMAL", wx.NORMAL),
@@ -42,7 +39,7 @@ def _font(size: int, weight: str = "normal", family=wx.FONTFAMILY_SWISS) -> wx.F
     }
     return wx.Font(size, family, style, weight_map.get(weight, weight_map["normal"]))
 
-# -------------------------- Synthetic data helpers ---------------------------
+# --------------------------- Synthetic data helpers ---------------------------
 _FIRST_NAMES = [
     "Alex","Sam","Taylor","Jordan","Casey","Jamie","Riley","Avery","Cameron",
     "Morgan","Harper","Quinn","Reese","Sawyer","Skyler","Rowan","Elliot","Logan",
@@ -118,8 +115,8 @@ def synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
 # --------------------------- Header media panel ------------------------------
 class HeaderMedia(wx.Panel):
     """
-    Tries to show MP4 (WebView2 HTML5 video), then MediaCtrl, then image/GIF,
-    else shows a visible placeholder with instructions.
+    Tries GIF (animated) via wx.adv.AnimationCtrl, then MP4 via WebView2,
+    then MP4 via wx.media.MediaCtrl, then PNG/JPG/ICO, else placeholder.
     """
     def __init__(self, parent, width=220, height=120):
         super().__init__(parent)
@@ -129,10 +126,16 @@ class HeaderMedia(wx.Panel):
         self.SetBackgroundColour(wx.Colour(26, 26, 26))
 
         s = wx.BoxSizer(wx.VERTICAL)
+        loaded_desc = None
+        shown = False
 
         # Candidate files
-        vid_candidates, img_candidates = [], []
+        gif_candidates, vid_candidates, img_candidates = [], [], []
         for d in (BASE_DIR, ASSETS_DIR, APP_DIR, os.getcwd()):
+            gif_candidates += [
+                os.path.join(d, "sidecar.gif"),
+                os.path.join(d, "sidecar-01.gif"),
+            ]
             vid_candidates += [
                 os.path.join(d, "sidecar.mp4"),
                 os.path.join(d, "sidecar-01.mp4"),
@@ -142,19 +145,30 @@ class HeaderMedia(wx.Panel):
                 os.path.join(d, "sidecar-01.png"),
                 os.path.join(d, "sidecar.jpg"),
                 os.path.join(d, "sidecar.png"),
-                os.path.join(d, "sidecar-01.gif"),
-                os.path.join(d, "sidecar.gif"),
                 os.path.join(d, "sidecar-01.ico"),
                 os.path.join(d, "sidecar.ico"),
             ]
 
+        gif = next((p for p in gif_candidates if os.path.exists(p)), None)
         mp4 = next((p for p in vid_candidates if os.path.exists(p)), None)
         chosen_img = next((p for p in img_candidates if os.path.exists(p)), None)
 
-        loaded_desc = None
-        shown = False
+        # ---- 1) Animated GIF (reliable and lightweight) ----
+        if gif and not shown:
+            try:
+                import wx.adv as adv
+                anim = adv.Animation()
+                if anim.LoadFile(gif, wx.BITMAP_TYPE_GIF) and anim.IsOk():
+                    ctrl = adv.AnimationCtrl(self, -1, anim, size=(self.width, self.height), style=wx.NO_BORDER)
+                    ctrl.SetBackgroundColour(wx.Colour(26, 26, 26))
+                    ctrl.Play()
+                    s.Add(ctrl, 0, wx.ALL, 0)
+                    loaded_desc = f"Header: GIF ({gif})"
+                    shown = True
+            except Exception:
+                shown = False
 
-        # ---- 1) WebView2 (HTML5 video) ----
+        # ---- 2) MP4 via WebView2 (HTML5 video) ----
         if mp4 and not shown:
             try:
                 import wx.html2 as webview
@@ -183,17 +197,15 @@ class HeaderMedia(wx.Panel):
             except Exception:
                 shown = False
 
-        # ---- 2) wx.media.MediaCtrl ----
+        # ---- 3) MP4 via wx.media.MediaCtrl (requires codecs) ----
         if mp4 and not shown:
             try:
                 import wx.media as wxmedia
-                self.mc = wxmedia.MediaCtrl(self)
-                ok = self.mc.Load(mp4)
-                if ok:
+                self.mc = wxmedia.MediaCtrl(self, style=wx.NO_BORDER)
+                if self.mc.Load(mp4):
                     self.mc.SetInitialSize((self.width, self.height))
                     self.mc.SetVolume(0.0)
                     self.mc.Play()
-                    # Loop
                     self.Bind(wxmedia.EVT_MEDIA_FINISHED, lambda e: self.mc.Play())
                     s.Add(self.mc, 0, wx.ALL, 0)
                     loaded_desc = f"Header: MP4 via MediaCtrl ({mp4})"
@@ -201,7 +213,7 @@ class HeaderMedia(wx.Panel):
             except Exception:
                 shown = False
 
-        # ---- 3) Static image / GIF ----
+        # ---- 4) Static PNG/JPG/ICO ----
         if not shown and chosen_img:
             bmp = self._load_bitmap_exact_size(chosen_img, self.width, self.height)
             if bmp and bmp.IsOk():
@@ -209,16 +221,16 @@ class HeaderMedia(wx.Panel):
                 loaded_desc = f"Header: Image ({chosen_img})"
                 shown = True
 
-        # ---- 4) Placeholder ----
+        # ---- 5) Placeholder with clear instructions ----
         if not shown:
             ph = wx.Panel(self, size=(self.width, self.height))
             ph.SetBackgroundColour(wx.Colour(32, 32, 32))
             phs = wx.BoxSizer(wx.VERTICAL)
             msg = wx.StaticText(
                 ph,
-                label=("No header media found or playable.\n"
-                       "Place sidecar.mp4 (H.264/AAC) or sidecar-01.jpg\n"
-                       f"in:\n• {BASE_DIR}\n• {ASSETS_DIR}\n• {APP_DIR}")
+                label=("No header media found/playable.\n"
+                       "Add sidecar.gif or sidecar.mp4 (H.264/AAC)\n"
+                       "to the project root or /assets folder.")
             )
             msg.SetForegroundColour(wx.Colour(235, 235, 235))
             msg.SetFont(_font(9, "bold"))
@@ -232,6 +244,7 @@ class HeaderMedia(wx.Panel):
 
         self.SetSizer(s)
 
+        # Always show what happened in the status bar
         frame = self.GetTopLevelParent()
         try:
             frame.SetStatusText(loaded_desc or "", 0)
