@@ -152,7 +152,6 @@ class HeaderMedia(wx.Panel):
         if not used and webview is not None and os.path.exists(mp4_path):
             try:
                 wv = webview.WebView.New(self, style=wx.NO_BORDER)
-                # Minimal HTML that autoplays a muted looping video
                 abs_mp4 = os.path.abspath(mp4_path).replace("\\", "/")
                 html = f"""
                 <html>
@@ -319,7 +318,7 @@ class MainWindow(wx.Frame):
             btn = wx.Button(toolbar_panel, label=text)
             btn.SetBackgroundColour(wx.Colour(70, 130, 180))
             btn.SetForegroundColour(wx.WHITE)
-            btn.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+            btn.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
             btn.Bind(wx.EVT_BUTTON, handler)
             if process:
                 btn.process = process
