@@ -20,6 +20,15 @@ from app.s3_utils import download_text_from_uri, upload_to_s3
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# App metadata (credits & naming)
+# ──────────────────────────────────────────────────────────────────────────────
+APP_NAME = "Sidecar Application: Data Governance"
+APP_VERSION = "1.0"
+APP_AUTHOR = "Salah Aldin Mokhayesh"
+APP_COMPANY = "Aldin AI LLC"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Synthetic data helpers (no external deps)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -112,12 +121,12 @@ def synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Main Window with “safe” centered header
+# Main Window with “safe” centered header + status bar & About
 # ──────────────────────────────────────────────────────────────────────────────
 
 class MainWindow(wx.Frame):
     def __init__(self):
-        super().__init__(None, title="Sidecar Application: Data Governance", size=(1200, 820))
+        super().__init__(None, title=APP_NAME, size=(1200, 820))
 
         # Title-bar icon
         try:
@@ -135,6 +144,12 @@ class MainWindow(wx.Frame):
         self._build_ui()
         self.Centre()
         self.Show()
+
+        # Status bar (credits bottom-right)
+        sb = self.CreateStatusBar(2)
+        # Stretch first field, fixed second for the credit text
+        self.SetStatusWidths([-1, 420])
+        self.SetStatusText(f"v{APP_VERSION}  |  Created by {APP_AUTHOR} ({APP_COMPANY})", 1)
 
     def _load_bitmap_scaled(self, target_h: int) -> wx.Bitmap | None:
         # Load and scale the left header image to a target height
@@ -170,7 +185,7 @@ class MainWindow(wx.Frame):
         header.SetDoubleBuffered(True)
         header_s = wx.BoxSizer(wx.HORIZONTAL)
 
-        # Left: icon inside its own fixed-size panel (prevents overlap)
+        # Left: icon inside its own fixed-size panel
         icon_panel = wx.Panel(header)
         icon_panel.SetBackgroundColour(wx.Colour(26, 26, 26))
         icon_panel_s = wx.BoxSizer(wx.VERTICAL)
@@ -191,7 +206,7 @@ class MainWindow(wx.Frame):
         csz = wx.BoxSizer(wx.HORIZONTAL)
         csz.AddStretchSpacer(1)
 
-        title = wx.StaticText(center_panel, label="Sidecar Application:  Data Governance")
+        title = wx.StaticText(center_panel, label=APP_NAME)
         title.SetForegroundColour(wx.Colour(240, 240, 240))
         title.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         csz.Add(title, 0, wx.ALIGN_CENTER_VERTICAL)
@@ -199,7 +214,7 @@ class MainWindow(wx.Frame):
         csz.AddStretchSpacer(1)
         center_panel.SetSizer(csz)
 
-        # FIX: don't combine wx.EXPAND with alignment flags (asserts on Windows)
+        # Don't combine EXPAND with alignment flags in a BoxSizer (Windows asserts)
         header_s.Add(center_panel, 1, wx.EXPAND)
 
         # Right: spacer same width as left icon to keep visual centering
@@ -210,13 +225,18 @@ class MainWindow(wx.Frame):
 
         # ── Menu bar
         mb = wx.MenuBar()
-        m_file, m_set = wx.Menu(), wx.Menu()
+        m_file, m_set, m_help = wx.Menu(), wx.Menu(), wx.Menu()
         m_file.Append(wx.ID_EXIT, "Exit")
         self.Bind(wx.EVT_MENU, lambda _: self.Close(), id=wx.ID_EXIT)
         m_set.Append(wx.ID_PREFERENCES, "Settings")
         self.Bind(wx.EVT_MENU, self.on_settings, id=wx.ID_PREFERENCES)
+        # Help → About (shows credits and version)
+        about_item = m_help.Append(wx.ID_ABOUT, "About")
+        self.Bind(wx.EVT_MENU, self.on_about, about_item)
+
         mb.Append(m_file, "&File")
         mb.Append(m_set, "&Settings")
+        mb.Append(m_help, "&Help")
         self.SetMenuBar(mb)
 
         # ── Toolbar panel
@@ -285,6 +305,17 @@ class MainWindow(wx.Frame):
         root_v.Add(grid_panel, 1, wx.EXPAND)
 
         root.SetSizer(root_v)
+
+    # ───────── About dialog
+    def on_about(self, _):
+        msg = (
+            f"{APP_NAME}\n\n"
+            f"Version: {APP_VERSION}\n"
+            f"Created by {APP_AUTHOR} ({APP_COMPANY})"
+        )
+        dlg = wx.MessageDialog(self, msg, "About", wx.OK | wx.ICON_INFORMATION)
+        dlg.ShowModal()
+        dlg.Destroy()
 
     # ───────── Knowledge
     def _refresh_knowledge_label(self):
