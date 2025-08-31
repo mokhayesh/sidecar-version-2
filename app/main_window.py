@@ -28,6 +28,20 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.abspath(os.path.join(APP_DIR, os.pardir))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
+# -------------------------- Cross-version wx font helper ---------------------
+def _font(size: int, weight: str = "normal", family=wx.FONTFAMILY_SWISS) -> wx.Font:
+    """
+    Create a wx.Font that works across old/new wxPython versions.
+    """
+    style = getattr(wx, "FONTSTYLE_NORMAL", wx.NORMAL)
+    weight_map = {
+        "normal": getattr(wx, "FONTWEIGHT_NORMAL", wx.NORMAL),
+        "bold":   getattr(wx, "FONTWEIGHT_BOLD",   wx.BOLD),
+        "medium": getattr(wx, "FONTWEIGHT_MEDIUM",
+                          getattr(wx, "FONTWEIGHT_NORMAL", wx.NORMAL)),
+    }
+    return wx.Font(size, family, style, weight_map.get(weight, weight_map["normal"]))
+
 # -------------------------- Synthetic data helpers ---------------------------
 _FIRST_NAMES = [
     "Alex","Sam","Taylor","Jordan","Casey","Jamie","Riley","Avery","Cameron",
@@ -207,7 +221,7 @@ class HeaderMedia(wx.Panel):
                        f"in:\n• {BASE_DIR}\n• {ASSETS_DIR}\n• {APP_DIR}")
             )
             msg.SetForegroundColour(wx.Colour(235, 235, 235))
-            msg.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
+            msg.SetFont(_font(9, "bold"))
             msg.Wrap(self.width - 10)
             phs.AddStretchSpacer()
             phs.Add(msg, 0, wx.ALIGN_CENTER | wx.LEFT | wx.RIGHT, 6)
@@ -288,7 +302,7 @@ class MainWindow(wx.Frame):
 
         title = wx.StaticText(center_panel, label=APP_NAME)
         title.SetForegroundColour(wx.Colour(240, 240, 240))
-        title.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(_font(16, "bold"))
         csz.Add(title, 0, wx.ALIGN_CENTER_VERTICAL)
 
         csz.AddStretchSpacer(1)
@@ -317,7 +331,7 @@ class MainWindow(wx.Frame):
             btn = wx.Button(toolbar_panel, label=text)
             btn.SetBackgroundColour(wx.Colour(70, 130, 180))
             btn.SetForegroundColour(wx.WHITE)
-            btn.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+            btn.SetFont(_font(9, "normal"))
             btn.Bind(wx.EVT_BUTTON, handler)
             if process:
                 btn.process = process
@@ -347,7 +361,7 @@ class MainWindow(wx.Frame):
         info_s = wx.BoxSizer(wx.HORIZONTAL)
         self.knowledge_lbl = wx.StaticText(info_panel, label="Knowledge Files: (none)")
         self.knowledge_lbl.SetForegroundColour(wx.Colour(200, 200, 200))
-        self.knowledge_lbl.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.knowledge_lbl.SetFont(_font(9, "normal"))
         info_s.Add(self.knowledge_lbl, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
         info_panel.SetSizer(info_s)
         root_v.Add(info_panel, 0, wx.EXPAND)
@@ -364,7 +378,7 @@ class MainWindow(wx.Frame):
         self.grid.SetDefaultCellTextColour(wx.Colour(230, 230, 230))
         self.grid.SetLabelBackgroundColour(wx.Colour(80, 80, 80))
         self.grid.SetLabelTextColour(wx.Colour(245, 245, 245))
-        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
+        self.grid.SetLabelFont(_font(9, "bold"))
         grid_s.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
 
         grid_panel.SetSizer(grid_s)
