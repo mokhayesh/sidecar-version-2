@@ -20,7 +20,7 @@ from app.s3_utils import download_text_from_uri, upload_to_s3
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Helpers for synthetic data generation (no external deps)
+# Synthetic data helpers (no external deps)
 # ──────────────────────────────────────────────────────────────────────────────
 
 _FIRST_NAMES = [
@@ -117,7 +117,7 @@ def synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
 
 class MainWindow(wx.Frame):
     def __init__(self):
-        super().__init__(None, title="Sidecar Data Quality", size=(1200, 820))
+        super().__init__(None, title="Sidecar Application: Data Governance", size=(1200, 820))
 
         # Window icon (title bar)
         try:
@@ -142,13 +142,14 @@ class MainWindow(wx.Frame):
         root.SetBackgroundColour(wx.Colour(40, 40, 40))
         root_v = wx.BoxSizer(wx.VERTICAL)
 
-        # Header bar (separate panel to avoid WrapSizer collisions)
+        # Header bar (separate panel)
         header = wx.Panel(root)
         header.SetBackgroundColour(wx.Colour(26, 26, 26))
         hbox = wx.BoxSizer(wx.HORIZONTAL)
 
-        # Header icon bitmap (instead of emoji)
+        # Left: sidecar icon (bitmap) in a fixed container
         bmp = None
+        bmp_w = bmp_h = 0
         for candidate in ("assets/sidecar-01.png", "assets/sidecar-01.ico"):
             if os.path.exists(candidate):
                 try:
@@ -156,17 +157,38 @@ class MainWindow(wx.Frame):
                         bmp = wx.Bitmap(candidate, wx.BITMAP_TYPE_ICO)
                     else:
                         bmp = wx.Bitmap(candidate)
+                    bmp_w, bmp_h = bmp.GetWidth(), bmp.GetHeight()
                     break
                 except Exception:
                     bmp = None
+        left_box = wx.BoxSizer(wx.VERTICAL)
         if bmp:
-            hbox.Add(wx.StaticBitmap(header, bitmap=bmp), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
+            left_box.Add(wx.StaticBitmap(header, bitmap=bmp), 0, wx.ALL, 8)
+            hbox.Add(left_box, 0, wx.ALIGN_CENTER_VERTICAL)
+        else:
+            # keep some breathing space even if icon missing
+            hbox.AddSpacer(16)
 
-        title = wx.StaticText(header, label="Sidecar Data Quality")
+        # Center: perfectly centered title
+        # Trick: add a stretch spacer, then title, then another stretch spacer
+        # and finally a right-side dummy spacer matching icon width to balance.
+        hbox.AddStretchSpacer(1)
+
+        title = wx.StaticText(header, label="Sidecar Application:  Data Governance")
         title.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         title.SetForegroundColour(wx.Colour(240, 240, 240))
-        hbox.Add(title, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
-        hbox.AddStretchSpacer()
+        hbox.Add(title, 0, wx.ALIGN_CENTER_VERTICAL)
+
+        hbox.AddStretchSpacer(1)
+
+        # Right-balancer: invisible spacer with same width as the left icon area
+        if bmp_w > 0:
+            pad = wx.Panel(header, size=(bmp_w + 16, bmp_h))
+            pad.SetBackgroundColour(wx.Colour(26, 26, 26))
+            hbox.Add(pad, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 0)
+        else:
+            hbox.AddSpacer(16)
+
         header.SetSizer(hbox)
         root_v.Add(header, 0, wx.EXPAND)
 
@@ -181,7 +203,7 @@ class MainWindow(wx.Frame):
         mb.Append(m_set, "&Settings")
         self.SetMenuBar(mb)
 
-        # Toolbar panel (own background/sizer)
+        # Toolbar panel
         toolbar_panel = wx.Panel(root)
         toolbar_panel.SetBackgroundColour(wx.Colour(48, 48, 48))
         tools = wx.WrapSizer(wx.HORIZONTAL)
@@ -214,7 +236,7 @@ class MainWindow(wx.Frame):
         toolbar_panel.SetSizer(tools)
         root_v.Add(toolbar_panel, 0, wx.EXPAND)
 
-        # Knowledge banner panel (kept separate so it can't overlap the header)
+        # Knowledge banner panel
         info_panel = wx.Panel(root)
         info_panel.SetBackgroundColour(wx.Colour(40, 40, 40))
         info_s = wx.BoxSizer(wx.HORIZONTAL)
