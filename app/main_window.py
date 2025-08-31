@@ -5,16 +5,19 @@ from datetime import datetime, timedelta
 
 import wx
 import wx.grid as gridlib
+import wx.media as wxmedia  # for looping MP4 in the header
 import pandas as pd
 
-from app.settings import SettingsWindow
+from app.settings import SettingsWindow, defaults
 from app.dialogs import QualityRuleDialog, DataBuddyDialog, SyntheticDataDialog
 from app.analysis import (
     detect_and_split_data,
     profile_analysis,
     quality_analysis,
-    catalog_analysis,
+    catalog_analysis,     # kept for completeness (AI catalog calls into ai_* below)
     compliance_analysis,
+    ai_catalog_analysis,  # AI-powered
+    ai_detect_anomalies,  # AI-powered
 )
 from app.s3_utils import download_text_from_uri, upload_to_s3
 
@@ -29,9 +32,47 @@ APP_COMPANY = "Aldin AI LLC"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Tiny looping video panel for the header (uses wx.media)
+# ──────────────────────────────────────────────────────────────────────────────
+class LoopingVideo(wx.Panel):
+    """
+    A small, muted, looping MP4 player used in the header.
+    We give it a fixed footprint so the centered title stays visually centered.
+    """
+    def __init__(self, parent, path: str, target_h: int = 120, fixed_w: int = 160):
+        super().__init__(parent)
+        self.SetBackgroundColour(wx.Colour(26, 26, 26))
+        self.mc = wxmedia.MediaCtrl(self, style=wx.NO_BORDER)
+        s = wx.BoxSizer(wx.VERTICAL)
+        s.Add(self.mc, 0, wx.ALL, 0)
+        self.SetSizer(s)
+
+        # Fixed footprint for layout stability
+        self.SetMinSize((fixed_w, target_h))
+        self.mc.SetMinSize((fixed_w, target_h))
+
+        # Looping behavior
+        self.mc.Bind(wxmedia.EVT_MEDIA_LOADED, self._on_loaded)
+        self.mc.Bind(wxmedia.EVT_MEDIA_FINISHED, self._on_finished)
+
+        # Try loading the video (may fail if codec not available)
+        self._loaded = self.mc.Load(path)
+
+    def _on_loaded(self, _evt):
+        try:
+            self.mc.SetVolume(0.0)  # silent loop
+        except Exception:
+            pass
+        self.mc.Play()
+
+    def _on_finished(self, _evt):
+        # Loop forever
+        self.mc.Play()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Synthetic data helpers (no external deps)
 # ──────────────────────────────────────────────────────────────────────────────
-
 _FIRST_NAMES = [
     "Alex", "Sam", "Taylor", "Jordan", "Casey", "Jamie", "Riley", "Avery", "Cameron",
     "Morgan", "Harper", "Quinn", "Reese", "Sawyer", "Skyler", "Rowan", "Elliot",
@@ -121,14 +162,13 @@ def synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Main Window with “safe” centered header + status bar & About
+# Main Window with centered header + looping MP4 on the left
 # ──────────────────────────────────────────────────────────────────────────────
-
 class MainWindow(wx.Frame):
     def __init__(self):
         super().__init__(None, title=APP_NAME, size=(1200, 820))
 
-        # Title-bar icon
+        # Title-bar icon must be .ico (OS requirement)
         try:
             icon = wx.Icon("assets/sidecar-01.ico", wx.BITMAP_TYPE_ICO)
             self.SetIcon(icon)
@@ -146,13 +186,12 @@ class MainWindow(wx.Frame):
         self.Show()
 
         # Status bar (credits bottom-right)
-        sb = self.CreateStatusBar(2)
-        # Stretch first field, fixed second for the credit text
+        self.CreateStatusBar(2)
         self.SetStatusWidths([-1, 420])
         self.SetStatusText(f"v{APP_VERSION}  |  Created by {APP_AUTHOR} ({APP_COMPANY})", 1)
 
     def _load_bitmap_scaled(self, target_h: int) -> wx.Bitmap | None:
-        # Load and scale the left header image to a target height
+        """Fallback static image if MP4 not available."""
         for p in ("assets/sidecar-01.png", "assets/sidecar-01.jpg", "assets/sidecar-01.jpeg", "assets/sidecar-01.ico"):
             if os.path.exists(p):
                 try:
@@ -179,25 +218,42 @@ class MainWindow(wx.Frame):
         root.SetDoubleBuffered(True)
         root_v = wx.BoxSizer(wx.VERTICAL)
 
-        # ── Header panel with fixed left icon, centered title, right spacer
+        # ── Header panel with fixed left video, centered title, right spacer
         header = wx.Panel(root)
         header.SetBackgroundColour(wx.Colour(26, 26, 26))
         header.SetDoubleBuffered(True)
         header_s = wx.BoxSizer(wx.HORIZONTAL)
 
-        # Left: icon inside its own fixed-size panel
+        # Left: video (mp4) inside its own fixed-size panel; fallback to image if missing
         icon_panel = wx.Panel(header)
         icon_panel.SetBackgroundColour(wx.Colour(26, 26, 26))
         icon_panel_s = wx.BoxSizer(wx.VERTICAL)
-        bmp = self._load_bitmap_scaled(120)
-        if bmp and bmp.IsOk():
-            icon_panel_s.Add(wx.StaticBitmap(icon_panel, bitmap=bmp), 0, wx.ALL, 8)
-            icon_panel.SetSizer(icon_panel_s)
-            header_s.Add(icon_panel, 0, wx.ALIGN_CENTER_VERTICAL)
-            right_pad_width = bmp.GetWidth() + 16
+
+        mp4_path = os.path.join("assets", "sidecar.mp4")
+        right_pad_width = 16  # default spacer
+
+        if os.path.exists(mp4_path):
+            try:
+                video = LoopingVideo(icon_panel, mp4_path, target_h=120, fixed_w=160)
+                icon_panel_s.Add(video, 0, wx.ALL, 8)
+                right_pad_width = 160 + 16
+            except Exception:
+                bmp = self._load_bitmap_scaled(120)
+                if bmp and bmp.IsOk():
+                    icon_panel_s.Add(wx.StaticBitmap(icon_panel, bitmap=bmp), 0, wx.ALL, 8)
+                    right_pad_width = bmp.GetWidth() + 16
+                else:
+                    icon_panel_s.AddSpacer(16)
         else:
-            header_s.AddSpacer(16)
-            right_pad_width = 16
+            bmp = self._load_bitmap_scaled(120)
+            if bmp and bmp.IsOk():
+                icon_panel_s.Add(wx.StaticBitmap(icon_panel, bitmap=bmp), 0, wx.ALL, 8)
+                right_pad_width = bmp.GetWidth() + 16
+            else:
+                icon_panel_s.AddSpacer(16)
+
+        icon_panel.SetSizer(icon_panel_s)
+        header_s.Add(icon_panel, 0, wx.ALIGN_CENTER_VERTICAL)
 
         # Center: container with stretchers so the title centers
         center_panel = wx.Panel(header)
@@ -214,10 +270,10 @@ class MainWindow(wx.Frame):
         csz.AddStretchSpacer(1)
         center_panel.SetSizer(csz)
 
-        # Don't combine EXPAND with alignment flags in a BoxSizer (Windows asserts)
+        # Do not combine EXPAND with alignment flags in BoxSizer on Windows
         header_s.Add(center_panel, 1, wx.EXPAND)
 
-        # Right: spacer same width as left icon to keep visual centering
+        # Right: spacer same width as left media to keep visual centering
         header_s.AddSpacer(right_pad_width)
 
         header.SetSizer(header_s)
@@ -230,10 +286,8 @@ class MainWindow(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _: self.Close(), id=wx.ID_EXIT)
         m_set.Append(wx.ID_PREFERENCES, "Settings")
         self.Bind(wx.EVT_MENU, self.on_settings, id=wx.ID_PREFERENCES)
-        # Help → About (shows credits and version)
         about_item = m_help.Append(wx.ID_ABOUT, "About")
         self.Bind(wx.EVT_MENU, self.on_about, about_item)
-
         mb.Append(m_file, "&File")
         mb.Append(m_set, "&Settings")
         mb.Append(m_help, "&Help")
@@ -255,6 +309,7 @@ class MainWindow(wx.Frame):
                 btn.process = process
             tools.Add(btn, 0, wx.ALL, 4)
 
+        # Order chosen to avoid overlap issues when knowledge files list grows
         add_btn("Load Knowledge Files", self.on_load_knowledge)
         add_btn("Load File", self.on_load_file)
         add_btn("Load from URI/S3", self.on_load_s3)
@@ -262,8 +317,8 @@ class MainWindow(wx.Frame):
         add_btn("Quality Rule Assignment", self.on_rules)
         add_btn("Profile", self.do_analysis, "Profile")
         add_btn("Quality", self.do_analysis, "Quality")
-        add_btn("Detect Anomalies", self.on_detect_anomalies)
-        add_btn("Catalog", self.do_analysis, "Catalog")
+        add_btn("Detect Anomalies", self.on_detect_anomalies)   # AI-backed
+        add_btn("Catalog", self.do_analysis, "Catalog")          # AI-backed via map
         add_btn("Compliance", self.do_analysis, "Compliance")
         add_btn("Little Buddy", self.on_buddy)
         add_btn("Export CSV", self.on_export_csv)
@@ -317,7 +372,7 @@ class MainWindow(wx.Frame):
         dlg.ShowModal()
         dlg.Destroy()
 
-    # ───────── Knowledge
+    # ───────── Knowledge files
     def _refresh_knowledge_label(self):
         if not self.knowledge_files:
             self.knowledge_lbl.SetLabel("Knowledge Files: (none)")
@@ -417,12 +472,15 @@ class MainWindow(wx.Frame):
         proc = evt.GetEventObject().process
         self.current_process = proc
         df = pd.DataFrame(self.raw_data, columns=self.headers)
+
+        # Route Catalog through AI; others as before
         func = {
             "Profile": profile_analysis,
             "Quality": lambda d: quality_analysis(d, self.quality_rules),
-            "Catalog": catalog_analysis,
-            "Compliance": compliance_analysis,
+            "Catalog": lambda d: ai_catalog_analysis(d, defaults),   # AI-backed
+            "Compliance": compliance_analysis
         }[proc]
+
         hdr, data = func(df)
         self._display(hdr, data)
         wx.MessageBox(upload_to_s3(proc, hdr, data), "Analysis", wx.OK | wx.ICON_INFORMATION)
@@ -462,47 +520,14 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Generation failed: {e}", "Error", wx.OK | wx.ICON_ERROR)
 
-    # ───────── Simple anomaly detector (baseline)
+    # ───────── AI Anomalies (with fallback inside ai_detect_anomalies)
     def on_detect_anomalies(self, _):
         if not self.headers:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
             return
         df = pd.DataFrame(self.raw_data, columns=self.headers)
-
-        findings = []
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        for col in df.columns:
-            s = df[col].astype(str).str.strip()
-            blanks = int((s == "").sum())
-            nulls = int((s.str.lower() == "nan").sum())
-            numeric = pd.to_numeric(df[col], errors="coerce")
-            if numeric.notna().any():
-                neg = int((numeric < 0).sum())
-                std = numeric.std(skipna=True) or 0
-                huge = int((numeric > numeric.mean(skipna=True) + 6*std).sum())
-            else:
-                neg = huge = 0
-
-            bad_email = 0
-            if "email" in col.lower():
-                bad_email = int(~s.str.contains(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", regex=True, na=True).sum())
-
-            if blanks or nulls or neg or huge or bad_email:
-                reason = []
-                if blanks: reason.append(f"{blanks} blank")
-                if nulls: reason.append(f"{nulls} 'nan'")
-                if neg: reason.append(f"{neg} negative")
-                if huge: reason.append(f"{huge} outlier")
-                if bad_email: reason.append(f"{bad_email} invalid email")
-                rec = "Review source, add validation, and backfill where possible."
-                findings.append([col, " | ".join(reason), rec, now])
-
-        if not findings:
-            findings = [["(none)", "No obvious anomalies found", "No action", now]]
-
-        hdr = ["Field", "Reason", "Recommendation", "Detected At"]
-        self._display(hdr, findings)
+        hdr, rows = ai_detect_anomalies(df, defaults)
+        self._display(hdr, rows)
 
     # ───────── Export / Upload
     def _export(self, path, sep):
