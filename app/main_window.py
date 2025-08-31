@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import random
 
 import wx
@@ -14,28 +14,21 @@ from app.analysis import (
     quality_analysis,
     catalog_analysis,
     compliance_analysis,
-    ai_catalog_analysis,   # AI-powered Catalog
-    ai_detect_anomalies,   # AI-powered Anomaly detection
+    ai_catalog_analysis,   # AI-powered
+    ai_detect_anomalies,   # AI-powered
 )
 from app.s3_utils import download_text_from_uri, upload_to_s3
 
-# -----------------------------------------------------------------------------
-# App metadata
-# -----------------------------------------------------------------------------
 APP_NAME = "Sidecar Application: Data Governance"
 APP_VERSION = "1.0"
 APP_AUTHOR = "Salah Aldin Mokhayesh"
 APP_COMPANY = "Aldin AI LLC"
 
-# Project paths
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.abspath(os.path.join(APP_DIR, os.pardir))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
-
-# -----------------------------------------------------------------------------
-# Cross-version wx Font helper (no direct wx.FONTSTYLE usage)
-# -----------------------------------------------------------------------------
+# -------------------------- Cross-version wx font helper ---------------------
 def _font(size: int, weight: str = "normal", family=wx.FONTFAMILY_SWISS) -> wx.Font:
     style = getattr(wx, "FONTSTYLE_NORMAL", wx.NORMAL)
     weight_map = {
@@ -46,10 +39,7 @@ def _font(size: int, weight: str = "normal", family=wx.FONTFAMILY_SWISS) -> wx.F
     }
     return wx.Font(size, family, style, weight_map.get(weight, weight_map["normal"]))
 
-
-# -----------------------------------------------------------------------------
-# Synthetic data helpers
-# -----------------------------------------------------------------------------
+# --------------------------- Synthetic data helpers ---------------------------
 _FIRST_NAMES = [
     "Alex","Sam","Taylor","Jordan","Casey","Jamie","Riley","Avery","Cameron",
     "Morgan","Harper","Quinn","Reese","Sawyer","Skyler","Rowan","Elliot","Logan",
@@ -70,11 +60,9 @@ _STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN"
            "OK","OR","PA","RI","SC","SD","TN","TX","UT","VA","VT","WA","WI","WV","WY"]
 _DOMAINS = ["example.com","mail.com","test.org","demo.net","sample.io","data.dev"]
 
-
 def _slugify(s: str) -> str:
     import re as _re
     return _re.sub(r"[^a-z0-9]+","-", s.lower()).strip("-")
-
 
 def infer_field_type(col: str) -> str:
     name = col.lower().strip()
@@ -89,7 +77,6 @@ def infer_field_type(col: str) -> str:
     if name.endswith("_id") or name == "id": return "id"
     if any(tok in name for tok in ("number","count","qty","age","zip","score")): return "number"
     return "text"
-
 
 def synth_value(kind: str, i: int) -> str:
     import random as _r
@@ -118,7 +105,6 @@ def synth_value(kind: str, i: int) -> str:
     if kind == "number": return str(_r.randint(0, 1000))
     return f"{_slugify(kind) or 'value'}_{i}"
 
-
 def synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
     df = pd.DataFrame(index=range(n))
     for col in columns:
@@ -126,14 +112,11 @@ def synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
         df[col] = [synth_value(kind, i+1) for i in range(n)]
     return df
 
-
-# -----------------------------------------------------------------------------
-# Simple, robust header media: static image only (PNG/JPG/ICO)
-# -----------------------------------------------------------------------------
+# --------------------------- Header media panel ------------------------------
 class HeaderMedia(wx.Panel):
     """
-    Load a static PNG/JPG/ICO for the header (scaled to fit). If none found,
-    show a clear placeholder and write diagnostics to the status bar.
+    Tries GIF (animated) via wx.adv.AnimationCtrl, then MP4 via WebView2,
+    then MP4 via wx.media.MediaCtrl, then PNG/JPG/ICO, else placeholder.
     """
     def __init__(self, parent, width=220, height=120):
         super().__init__(parent)
@@ -143,59 +126,128 @@ class HeaderMedia(wx.Panel):
         self.SetBackgroundColour(wx.Colour(26, 26, 26))
 
         s = wx.BoxSizer(wx.VERTICAL)
+        loaded_desc = None
+        shown = False
 
-        # Search candidates in several common locations
-        candidates = []
+        # Candidate files
+        gif_candidates, vid_candidates, img_candidates = [], [], []
         for d in (BASE_DIR, ASSETS_DIR, APP_DIR, os.getcwd()):
-            candidates += [
-                os.path.join(d, "sidecar-01.png"),
+            gif_candidates += [
+                os.path.join(d, "sidecar.gif"),
+                os.path.join(d, "sidecar-01.gif"),
+            ]
+            vid_candidates += [
+                os.path.join(d, "sidecar.mp4"),
+                os.path.join(d, "sidecar-01.mp4"),
+            ]
+            img_candidates += [
                 os.path.join(d, "sidecar-01.jpg"),
-                os.path.join(d, "sidecar.png"),
+                os.path.join(d, "sidecar-01.png"),
                 os.path.join(d, "sidecar.jpg"),
+                os.path.join(d, "sidecar.png"),
                 os.path.join(d, "sidecar-01.ico"),
                 os.path.join(d, "sidecar.ico"),
             ]
 
-        chosen = next((p for p in candidates if os.path.exists(p)), None)
-        loaded_desc = None
+        gif = next((p for p in gif_candidates if os.path.exists(p)), None)
+        mp4 = next((p for p in vid_candidates if os.path.exists(p)), None)
+        chosen_img = next((p for p in img_candidates if os.path.exists(p)), None)
 
-        if chosen:
-            bmp = self._load_bitmap_exact_size(chosen, self.width, self.height)
+        # ---- 1) Animated GIF (reliable and lightweight) ----
+        if gif and not shown:
+            try:
+                import wx.adv as adv
+                anim = adv.Animation()
+                if anim.LoadFile(gif, wx.BITMAP_TYPE_GIF) and anim.IsOk():
+                    ctrl = adv.AnimationCtrl(self, -1, anim, size=(self.width, self.height), style=wx.NO_BORDER)
+                    ctrl.SetBackgroundColour(wx.Colour(26, 26, 26))
+                    ctrl.Play()
+                    s.Add(ctrl, 0, wx.ALL, 0)
+                    loaded_desc = f"Header: GIF ({gif})"
+                    shown = True
+            except Exception:
+                shown = False
+
+        # ---- 2) MP4 via WebView2 (HTML5 video) ----
+        if mp4 and not shown:
+            try:
+                import wx.html2 as webview
+                wv = webview.WebView.New(self, size=(self.width, self.height), style=wx.NO_BORDER)
+                mp4_url = "file:///" + mp4.replace("\\", "/")
+                html = f"""
+                <html>
+                  <head>
+                    <meta name="viewport" content="width=device-width, initial-scale=1">
+                    <style>
+                      html,body{{margin:0;background:#1a1a1a;}}
+                      video{{display:block;width:{self.width}px;height:{self.height}px;object-fit:cover}}
+                    </style>
+                  </head>
+                  <body>
+                    <video autoplay muted loop playsinline>
+                      <source src="{mp4_url}" type="video/mp4">
+                    </video>
+                  </body>
+                </html>
+                """
+                wv.SetPage(html, "")
+                s.Add(wv, 0, wx.ALL, 0)
+                loaded_desc = f"Header: MP4 via WebView2 ({mp4})"
+                shown = True
+            except Exception:
+                shown = False
+
+        # ---- 3) MP4 via wx.media.MediaCtrl (requires codecs) ----
+        if mp4 and not shown:
+            try:
+                import wx.media as wxmedia
+                self.mc = wxmedia.MediaCtrl(self, style=wx.NO_BORDER)
+                if self.mc.Load(mp4):
+                    self.mc.SetInitialSize((self.width, self.height))
+                    self.mc.SetVolume(0.0)
+                    self.mc.Play()
+                    self.Bind(wxmedia.EVT_MEDIA_FINISHED, lambda e: self.mc.Play())
+                    s.Add(self.mc, 0, wx.ALL, 0)
+                    loaded_desc = f"Header: MP4 via MediaCtrl ({mp4})"
+                    shown = True
+            except Exception:
+                shown = False
+
+        # ---- 4) Static PNG/JPG/ICO ----
+        if not shown and chosen_img:
+            bmp = self._load_bitmap_exact_size(chosen_img, self.width, self.height)
             if bmp and bmp.IsOk():
-                img = wx.StaticBitmap(self, bitmap=bmp)
-                s.Add(img, 0, wx.ALL, 0)
-                loaded_desc = f"Loaded header: {chosen}"
-            else:
-                chosen = None  # fallback to placeholder
+                s.Add(wx.StaticBitmap(self, bitmap=bmp), 0, wx.ALL, 0)
+                loaded_desc = f"Header: Image ({chosen_img})"
+                shown = True
 
-        if not chosen:
+        # ---- 5) Placeholder with clear instructions ----
+        if not shown:
             ph = wx.Panel(self, size=(self.width, self.height))
             ph.SetBackgroundColour(wx.Colour(32, 32, 32))
             phs = wx.BoxSizer(wx.VERTICAL)
-
             msg = wx.StaticText(
                 ph,
-                label=("No header image found.\n"
-                       "Add sidecar-01.png / sidecar-01.jpg (or sidecar.png/jpg/ico)\n"
-                       "to the project root or /assets and restart.")
+                label=("No header media found/playable.\n"
+                       "Add sidecar.gif or sidecar.mp4 (H.264/AAC)\n"
+                       "to the project root or /assets folder.")
             )
             msg.SetForegroundColour(wx.Colour(235, 235, 235))
             msg.SetFont(_font(9, "bold"))
-            msg.Wrap(self.width - 12)
-
+            msg.Wrap(self.width - 10)
             phs.AddStretchSpacer()
             phs.Add(msg, 0, wx.ALIGN_CENTER | wx.LEFT | wx.RIGHT, 6)
             phs.AddStretchSpacer()
             ph.SetSizer(phs)
-            s.Add(ph, 1, wx.EXPAND | wx.ALL, 0)
-            loaded_desc = "Header: no image file found"
+            s.Add(ph, 1, wx.EXPAND)
+            loaded_desc = "Header: no media found"
 
         self.SetSizer(s)
 
-        # Put diagnostics in the status bar (right column)
+        # Always show what happened in the status bar
         frame = self.GetTopLevelParent()
         try:
-            frame.SetStatusText(loaded_desc, 1)
+            frame.SetStatusText(loaded_desc or "", 0)
         except Exception:
             pass
 
@@ -210,15 +262,11 @@ class HeaderMedia(wx.Panel):
         except Exception:
             return None
 
-
-# -----------------------------------------------------------------------------
-# Main Window
-# -----------------------------------------------------------------------------
+# ------------------------------- Main Window --------------------------------
 class MainWindow(wx.Frame):
     def __init__(self):
         super().__init__(None, title=APP_NAME, size=(1200, 820))
 
-        # Window icon
         try:
             for ic in (
                 os.path.join(ASSETS_DIR, "sidecar-01.ico"),
@@ -241,19 +289,16 @@ class MainWindow(wx.Frame):
         self.Centre()
         self.Show()
 
-        # Status bar: [0]=diagnostics, [1]=version/credit
         self.CreateStatusBar(2)
         self.SetStatusWidths([-1, 420])
         self.SetStatusText(f"v{APP_VERSION}  |  Created by {APP_AUTHOR} ({APP_COMPANY})", 1)
 
-    # UI -----------------------------------------------------------------------
     def _build_ui(self):
         root = wx.Panel(self)
         root.SetBackgroundColour(wx.Colour(40, 40, 40))
         root.SetDoubleBuffered(True)
         root_v = wx.BoxSizer(wx.VERTICAL)
 
-        # Header (media + centered title)
         header = wx.Panel(root)
         header.SetBackgroundColour(wx.Colour(26, 26, 26))
         header.SetDoubleBuffered(True)
@@ -279,7 +324,6 @@ class MainWindow(wx.Frame):
         header.SetSizer(header_s)
         root_v.Add(header, 0, wx.EXPAND)
 
-        # Menu bar
         mb = wx.MenuBar()
         m_file, m_set, m_help = wx.Menu(), wx.Menu(), wx.Menu()
         m_file.Append(wx.ID_EXIT, "Exit")
@@ -291,7 +335,6 @@ class MainWindow(wx.Frame):
         mb.Append(m_file, "&File"); mb.Append(m_set, "&Settings"); mb.Append(m_help, "&Help")
         self.SetMenuBar(mb)
 
-        # Toolbar
         toolbar_panel = wx.Panel(root)
         toolbar_panel.SetBackgroundColour(wx.Colour(48, 48, 48))
         toolbar_panel.SetDoubleBuffered(True)
@@ -325,7 +368,6 @@ class MainWindow(wx.Frame):
         toolbar_panel.SetSizer(tools)
         root_v.Add(toolbar_panel, 0, wx.EXPAND)
 
-        # Knowledge files label
         info_panel = wx.Panel(root)
         info_panel.SetBackgroundColour(wx.Colour(40, 40, 40))
         info_panel.SetDoubleBuffered(True)
@@ -337,7 +379,6 @@ class MainWindow(wx.Frame):
         info_panel.SetSizer(info_s)
         root_v.Add(info_panel, 0, wx.EXPAND)
 
-        # Data grid
         grid_panel = wx.Panel(root)
         grid_panel.SetBackgroundColour(wx.Colour(40, 40, 40))
         grid_panel.SetDoubleBuffered(True)
@@ -358,7 +399,7 @@ class MainWindow(wx.Frame):
 
         root.SetSizer(root_v)
 
-    # Handlers -----------------------------------------------------------------
+    # ------------------------------ Handlers ------------------------------
     def on_about(self, _):
         msg = f"{APP_NAME}\n\nVersion: {APP_VERSION}\nCreated by {APP_AUTHOR} ({APP_COMPANY})"
         wx.MessageBox(msg, "About", wx.OK | wx.ICON_INFORMATION)
@@ -534,7 +575,6 @@ class MainWindow(wx.Frame):
                 for r in range(self.grid.GetNumberRows())]
         wx.MessageBox(upload_to_s3(self.current_process or "Unknown", hdr, data),
                       "Upload", wx.OK | wx.ICON_INFORMATION)
-
 
 if __name__ == "__main__":
     app = wx.App(False)
