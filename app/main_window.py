@@ -69,7 +69,6 @@ def infer_field_type(col: str) -> str:
         return "date"
     if name.endswith("_id") or name == "id":
         return "id"
-    # crude numeric heuristic
     if any(tok in name for tok in ("number","count","qty","age","zip","score")):
         return "number"
     return "text"
@@ -88,7 +87,6 @@ def synth_value(kind: str, i: int) -> str:
     if kind == "last_name":
         return random.choice(_LAST_NAMES)
     if kind == "middle_name":
-        # 50% single initial; 50% name
         return random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") if random.random() < 0.5 else random.choice(_FIRST_NAMES)
     if kind == "address":
         num = random.randint(100, 9999)
@@ -99,7 +97,6 @@ def synth_value(kind: str, i: int) -> str:
         zipc = random.randint(10000, 99999)
         return f"{num} {st} {typ}, {city}, {state} {zipc}"
     if kind == "amount":
-        # amounts in the 1000 - 100k range with cents
         return f"{random.uniform(1000, 100000):.2f}"
     if kind == "date":
         base = datetime.now() - timedelta(days=random.randint(0, 4*365))
@@ -108,7 +105,6 @@ def synth_value(kind: str, i: int) -> str:
         return f"{random.randint(10_000_000, 99_999_999)}"
     if kind == "number":
         return str(random.randint(0, 1000))
-    # default text
     return f"{_slugify(kind) or 'value'}_{i}"
 
 def synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
@@ -208,7 +204,7 @@ class MainWindow(wx.Frame):
         self.grid.SetDefaultCellTextColour(wx.Colour(230, 230, 230))
         self.grid.SetLabelBackgroundColour(wx.Colour(80, 80, 80))
         self.grid.SetLabelTextColour(wx.Colour(245, 245, 245))
-        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
+        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 6)
 
         pnl.SetSizer(vbox)
@@ -370,7 +366,6 @@ class MainWindow(wx.Frame):
             s = df[col].astype(str).str.strip()
             blanks = int((s == "").sum())
             nulls = int((s.str.lower() == "nan").sum())
-            # simple numeric anomaly: negative or huge values
             numeric = pd.to_numeric(df[col], errors="coerce")
             if numeric.notna().any():
                 neg = int((numeric < 0).sum())
@@ -378,7 +373,6 @@ class MainWindow(wx.Frame):
             else:
                 neg = huge = 0
 
-            # email format issues
             bad_email = 0
             if "email" in col.lower():
                 bad_email = int(~s.str.contains(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", regex=True, na=True).sum())
