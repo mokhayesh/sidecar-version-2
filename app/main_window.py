@@ -179,7 +179,7 @@ class HeaderMedia(wx.Panel):
             except Exception:
                 used = False
 
-        # 3) PNG/JPG/ICO (with proper ICO scaling)
+        # 3) PNG/JPG/ICO (robust load + scaling)
         if not used:
             bmp = self._load_bitmap_scaled(image_candidates, height)
             if bmp and bmp.IsOk():
@@ -210,17 +210,18 @@ class HeaderMedia(wx.Panel):
         self.SetSizer(s)
 
     def _load_bitmap_scaled(self, paths, target_h: int) -> wx.Bitmap | None:
+        """Load first existing image using auto-detected type and scale by height."""
         for p in paths:
             if os.path.exists(p):
                 try:
-                    if p.lower().endswith(".ico"):
-                        img = wx.Image(p, wx.BITMAP_TYPE_ICO)
-                    else:
-                        img = wx.Image(p)  # auto-detect
+                    img = wx.Image(p, wx.BITMAP_TYPE_ANY)  # auto-detect JPG/PNG/GIF/ICO
+                    if not img.IsOk():
+                        continue
                     bw, bh = img.GetWidth(), img.GetHeight()
                     if bh > 0 and target_h > 0:
                         scale = target_h / float(bh)
-                        sw, sh = int(bw * scale), int(bh * scale)
+                        sw = max(1, int(bw * scale))
+                        sh = max(1, int(bh * scale))
                         img = img.Scale(sw, sh, wx.IMAGE_QUALITY_HIGH)
                     return wx.Bitmap(img)
                 except Exception:
@@ -549,5 +550,8 @@ class MainWindow(wx.Frame):
 
 if __name__ == "__main__":
     app = wx.App(False)
+    # Ensure JPG/PNG/GIF/ICO handlers are available on all platforms
+    if hasattr(wx, "InitAllImageHandlers"):
+        wx.InitAllImageHandlers()
     MainWindow()
     app.MainLoop()
