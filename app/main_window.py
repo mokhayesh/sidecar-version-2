@@ -5,8 +5,18 @@ from datetime import datetime, timedelta
 
 import wx
 import wx.grid as gridlib
-import wx.media as wxmedia  # for looping MP4 in the header
 import pandas as pd
+
+# Optional modules for richer header media
+try:
+    import wx.html2 as webview  # HTML5 video via Edge WebView2
+except Exception:
+    webview = None
+
+try:
+    import wx.adv as wxadv  # GIF animation fallback
+except Exception:
+    wxadv = None
 
 from app.settings import SettingsWindow, defaults
 from app.dialogs import QualityRuleDialog, DataBuddyDialog, SyntheticDataDialog
@@ -14,7 +24,7 @@ from app.analysis import (
     detect_and_split_data,
     profile_analysis,
     quality_analysis,
-    catalog_analysis,     # kept for completeness (AI catalog calls into ai_* below)
+    catalog_analysis,     # kept for completeness
     compliance_analysis,
     ai_catalog_analysis,  # AI-powered
     ai_detect_anomalies,  # AI-powered
@@ -29,45 +39,6 @@ APP_NAME = "Sidecar Application: Data Governance"
 APP_VERSION = "1.0"
 APP_AUTHOR = "Salah Aldin Mokhayesh"
 APP_COMPANY = "Aldin AI LLC"
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Tiny looping video panel for the header (uses wx.media)
-# ──────────────────────────────────────────────────────────────────────────────
-class LoopingVideo(wx.Panel):
-    """
-    A small, muted, looping MP4 player used in the header.
-    We give it a fixed footprint so the centered title stays visually centered.
-    """
-    def __init__(self, parent, path: str, target_h: int = 120, fixed_w: int = 160):
-        super().__init__(parent)
-        self.SetBackgroundColour(wx.Colour(26, 26, 26))
-        self.mc = wxmedia.MediaCtrl(self, style=wx.NO_BORDER)
-        s = wx.BoxSizer(wx.VERTICAL)
-        s.Add(self.mc, 0, wx.ALL, 0)
-        self.SetSizer(s)
-
-        # Fixed footprint for layout stability
-        self.SetMinSize((fixed_w, target_h))
-        self.mc.SetMinSize((fixed_w, target_h))
-
-        # Looping behavior
-        self.mc.Bind(wxmedia.EVT_MEDIA_LOADED, self._on_loaded)
-        self.mc.Bind(wxmedia.EVT_MEDIA_FINISHED, self._on_finished)
-
-        # Try loading the video (may fail if codec not available)
-        self._loaded = self.mc.Load(path)
-
-    def _on_loaded(self, _evt):
-        try:
-            self.mc.SetVolume(0.0)  # silent loop
-        except Exception:
-            pass
-        self.mc.Play()
-
-    def _on_finished(self, _evt):
-        # Loop forever
-        self.mc.Play()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -162,7 +133,104 @@ def synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Main Window with centered header + looping MP4 on the left
+# Header media panel: HTML5 video (WebView2) -> GIF -> static image
+# ──────────────────────────────────────────────────────────────────────────────
+class HeaderMedia(wx.Panel):
+    def __init__(self, parent, width=160, height=120):
+        super().__init__(parent)
+        self.SetMinSize((width, height))
+        self.SetBackgroundColour(wx.Colour(26, 26, 26))
+        s = wx.BoxSizer(wx.VERTICAL)
+
+        assets = "assets"
+        mp4_path = os.path.join(assets, "sidecar.mp4")
+        gif_path = os.path.join(assets, "sidecar.gif")
+
+        used = False
+
+        # 1) Try WebView2 HTML5 video
+        if not used and webview is not None and os.path.exists(mp4_path):
+            try:
+                wv = webview.WebView.New(self, style=wx.NO_BORDER)
+                # Minimal HTML that autoplays a muted looping video
+                abs_mp4 = os.path.abspath(mp4_path).replace("\\", "/")
+                html = f"""
+                <html>
+                  <head>
+                    <meta http-equiv='X-UA-Compatible' content='IE=edge'/>
+                    <style>
+                      html, body {{
+                        margin: 0; padding: 0; overflow: hidden;
+                        background: #1a1a1a;
+                      }}
+                      video {{
+                        width: {width}px; height: {height}px;
+                        object-fit: cover;
+                        display: block;
+                        background: #1a1a1a;
+                      }}
+                    </style>
+                  </head>
+                  <body>
+                    <video autoplay loop muted playsinline>
+                      <source src="file:///{abs_mp4}" type="video/mp4"/>
+                    </video>
+                  </body>
+                </html>
+                """
+                wv.SetPage(html, "")
+                wv.SetMinSize((width, height))
+                s.Add(wv, 0, wx.ALL, 0)
+                used = True
+            except Exception:
+                used = False
+
+        # 2) Try GIF animation
+        if not used and wxadv is not None and os.path.exists(gif_path):
+            try:
+                anim = wxadv.Animation(gif_path)
+                ctrl = wxadv.AnimationCtrl(self, -1, anim, style=wx.NO_BORDER)
+                ctrl.SetMinSize((width, height))
+                ctrl.Play()
+                s.Add(ctrl, 0, wx.ALL, 0)
+                used = True
+            except Exception:
+                used = False
+
+        # 3) Fallback static image
+        if not used:
+            bmp = self._load_bitmap_scaled(height)
+            if bmp and bmp.IsOk():
+                s.Add(wx.StaticBitmap(self, bitmap=bmp), 0, wx.ALL, 0)
+            else:
+                s.AddSpacer(height)
+
+        self.SetSizer(s)
+
+    def _load_bitmap_scaled(self, target_h: int) -> wx.Bitmap | None:
+        for p in ("assets/sidecar-01.png", "assets/sidecar-01.jpg", "assets/sidecar-01.jpeg", "assets/sidecar-01.ico"):
+            if os.path.exists(p):
+                try:
+                    if p.endswith(".ico"):
+                        bmp = wx.Bitmap(p, wx.BITMAP_TYPE_ICO)
+                    else:
+                        bmp = wx.Bitmap(p)
+                    if target_h > 0 and bmp.IsOk():
+                        img = bmp.ConvertToImage()
+                        bw, bh = img.GetWidth(), img.GetHeight()
+                        if bh > 0:
+                            scale = min(target_h / bh, 1.0)
+                            sw, sh = int(bw * scale), int(bh * scale)
+                            img = img.Scale(sw, sh, wx.IMAGE_QUALITY_HIGH)
+                            return wx.Bitmap(img)
+                        return bmp
+                except Exception:
+                    return None
+        return None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Main Window
 # ──────────────────────────────────────────────────────────────────────────────
 class MainWindow(wx.Frame):
     def __init__(self):
@@ -190,72 +258,22 @@ class MainWindow(wx.Frame):
         self.SetStatusWidths([-1, 420])
         self.SetStatusText(f"v{APP_VERSION}  |  Created by {APP_AUTHOR} ({APP_COMPANY})", 1)
 
-    def _load_bitmap_scaled(self, target_h: int) -> wx.Bitmap | None:
-        """Fallback static image if MP4 not available."""
-        for p in ("assets/sidecar-01.png", "assets/sidecar-01.jpg", "assets/sidecar-01.jpeg", "assets/sidecar-01.ico"):
-            if os.path.exists(p):
-                try:
-                    if p.endswith(".ico"):
-                        bmp = wx.Bitmap(p, wx.BITMAP_TYPE_ICO)
-                    else:
-                        bmp = wx.Bitmap(p)
-                    if target_h > 0 and bmp.IsOk():
-                        img = bmp.ConvertToImage()
-                        bw, bh = img.GetWidth(), img.GetHeight()
-                        if bh > 0:
-                            scale = min(target_h / bh, 1.0)
-                            sw, sh = int(bw * scale), int(bh * scale)
-                            img = img.Scale(sw, sh, wx.IMAGE_QUALITY_HIGH)
-                            return wx.Bitmap(img)
-                        return bmp
-                except Exception:
-                    return None
-        return None
-
     def _build_ui(self):
         root = wx.Panel(self)
         root.SetBackgroundColour(wx.Colour(40, 40, 40))
         root.SetDoubleBuffered(True)
         root_v = wx.BoxSizer(wx.VERTICAL)
 
-        # ── Header panel with fixed left video, centered title, right spacer
+        # ── Header panel with fixed left media, centered title, right spacer
         header = wx.Panel(root)
         header.SetBackgroundColour(wx.Colour(26, 26, 26))
         header.SetDoubleBuffered(True)
         header_s = wx.BoxSizer(wx.HORIZONTAL)
 
-        # Left: video (mp4) inside its own fixed-size panel; fallback to image if missing
-        icon_panel = wx.Panel(header)
-        icon_panel.SetBackgroundColour(wx.Colour(26, 26, 26))
-        icon_panel_s = wx.BoxSizer(wx.VERTICAL)
+        media_w, media_h = 160, 120
+        media_left = HeaderMedia(header, width=media_w, height=media_h)
+        header_s.Add(media_left, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 8)
 
-        mp4_path = os.path.join("assets", "sidecar.mp4")
-        right_pad_width = 16  # default spacer
-
-        if os.path.exists(mp4_path):
-            try:
-                video = LoopingVideo(icon_panel, mp4_path, target_h=120, fixed_w=160)
-                icon_panel_s.Add(video, 0, wx.ALL, 8)
-                right_pad_width = 160 + 16
-            except Exception:
-                bmp = self._load_bitmap_scaled(120)
-                if bmp and bmp.IsOk():
-                    icon_panel_s.Add(wx.StaticBitmap(icon_panel, bitmap=bmp), 0, wx.ALL, 8)
-                    right_pad_width = bmp.GetWidth() + 16
-                else:
-                    icon_panel_s.AddSpacer(16)
-        else:
-            bmp = self._load_bitmap_scaled(120)
-            if bmp and bmp.IsOk():
-                icon_panel_s.Add(wx.StaticBitmap(icon_panel, bitmap=bmp), 0, wx.ALL, 8)
-                right_pad_width = bmp.GetWidth() + 16
-            else:
-                icon_panel_s.AddSpacer(16)
-
-        icon_panel.SetSizer(icon_panel_s)
-        header_s.Add(icon_panel, 0, wx.ALIGN_CENTER_VERTICAL)
-
-        # Center: container with stretchers so the title centers
         center_panel = wx.Panel(header)
         center_panel.SetBackgroundColour(wx.Colour(26, 26, 26))
         center_panel.SetDoubleBuffered(True)
@@ -269,12 +287,10 @@ class MainWindow(wx.Frame):
 
         csz.AddStretchSpacer(1)
         center_panel.SetSizer(csz)
-
-        # Do not combine EXPAND with alignment flags in BoxSizer on Windows
         header_s.Add(center_panel, 1, wx.EXPAND)
 
-        # Right: spacer same width as left media to keep visual centering
-        header_s.AddSpacer(right_pad_width)
+        # right spacer equals media width to visually center title
+        header_s.AddSpacer(media_w + 16)
 
         header.SetSizer(header_s)
         root_v.Add(header, 0, wx.EXPAND)
@@ -303,13 +319,12 @@ class MainWindow(wx.Frame):
             btn = wx.Button(toolbar_panel, label=text)
             btn.SetBackgroundColour(wx.Colour(70, 130, 180))
             btn.SetForegroundColour(wx.WHITE)
-            btn.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+            btn.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
             btn.Bind(wx.EVT_BUTTON, handler)
             if process:
                 btn.process = process
             tools.Add(btn, 0, wx.ALL, 4)
 
-        # Order chosen to avoid overlap issues when knowledge files list grows
         add_btn("Load Knowledge Files", self.on_load_knowledge)
         add_btn("Load File", self.on_load_file)
         add_btn("Load from URI/S3", self.on_load_s3)
