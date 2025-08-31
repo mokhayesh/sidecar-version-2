@@ -8,7 +8,7 @@ import pandas as pd
 import requests
 
 # ──────────────────────────────────────────────────────────────────────────────
-# CSV/Parsing helpers you already had
+# CSV/Parsing helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
 def detect_and_split_data(text: str):
@@ -26,7 +26,7 @@ def _split_words(col: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Profile / Quality / Catalog / Compliance (original logic stays)
+# Profile / Quality / Catalog / Compliance (original logic)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def profile_analysis(df: pd.DataFrame):
@@ -150,7 +150,7 @@ def compliance_analysis(_df: pd.DataFrame):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Baseline rule-based anomaly detector (used when AI unavailable)
+# Baseline rule-based anomaly detector (fallback)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _rule_based_anomalies(df: pd.DataFrame):
@@ -255,16 +255,12 @@ def _llm_json(defaults: dict, prompt: str, model: str | None = None, timeout=60)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# AI Catalog & AI Anomalies
+# AI Catalog & AI Anomalies (with fallbacks)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def ai_catalog_analysis(df: pd.DataFrame, defaults: dict):
-    """
-    Uses the configured LLM to generate a data catalog.
-    Falls back to heuristic catalog if the call fails.
-    """
+    """LLM-backed catalog; falls back to heuristic if the call fails."""
     try:
-        # compact schema & samples
         preview_rows = min(12, len(df))
         sample = df.head(preview_rows).astype(str).to_dict(orient="records")
         schema = []
@@ -307,15 +303,11 @@ def ai_catalog_analysis(df: pd.DataFrame, defaults: dict):
         return hdr, rows
 
     except Exception:
-        # fallback to heuristic
         return catalog_analysis(df)
 
 
 def ai_detect_anomalies(df: pd.DataFrame, defaults: dict):
-    """
-    Uses the configured LLM to detect anomalies with reasons & remediation.
-    Falls back to rule-based detection if the call fails.
-    """
+    """LLM-backed anomaly detection; falls back to rule-based if the call fails."""
     try:
         preview_rows = min(30, len(df))
         sample = df.head(preview_rows).astype(str).to_dict(orient="records")
@@ -335,8 +327,8 @@ def ai_detect_anomalies(df: pd.DataFrame, defaults: dict):
             "{ \"items\": [ {\"field\": str, \"reason\": str, \"recommendation\": str} ] }\n"
             "Reasons should be specific (e.g., 'outliers > 6 sigma', 'invalid email format', 'suspicious zero balance').\n"
             "Recommendations should be actionable (e.g., 'validate format with regex', 'clip to 3σ', 'backfill from source').\n\n"
-            f\"Quick stats per column: {json.dumps(quick, ensure_ascii=False)}\n\n"
-            f\"Sample rows (strings): {json.dumps(sample, ensure_ascii=False)}\n\n"
+            f"Quick stats per column: {json.dumps(quick, ensure_ascii=False)}\n\n"
+            f"Sample rows (strings): {json.dumps(sample, ensure_ascii=False)}\n\n"
             "Output ONLY valid JSON."
         )
 
