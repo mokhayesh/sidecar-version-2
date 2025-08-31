@@ -76,14 +76,12 @@ def _detect_anomalies_simple(df: pd.DataFrame):
                 reasons.append(f"{outl} possible outliers")
                 recs.append("Review thresholds; consider winsorization or robust scaling.")
         else:
-            # date-like
             if "date" in col.lower() or "timestamp" in col.lower():
                 parsed = pd.to_datetime(s, errors="coerce")
                 bad = int(parsed.isna().sum())
                 if bad:
                     reasons.append(f"{bad} unparseable dates")
                     recs.append("Normalize date formats; parse with a single standard.")
-            # email-like
             if col in email_like:
                 ok = s.astype(str).str.contains(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", na=False)
                 bad = int((~ok).sum())
@@ -91,7 +89,6 @@ def _detect_anomalies_simple(df: pd.DataFrame):
                     reasons.append(f"{bad} invalid emails")
                     recs.append("Validate email structure or correct user input.")
 
-        # uniqueness heuristic
         if s.nunique(dropna=True) < len(s) * 0.2:
             reasons.append("low uniqueness")
             recs.append("Check if this field should be categorical; if not, investigate duplication.")
@@ -115,39 +112,65 @@ ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
 
 # --------------------------------
-# Header with GIF-first media
+# Header with GIF-first media (fits correctly)
 # --------------------------------
 class HeaderMedia(wx.Panel):
     """
-    Prefer an animated GIF (sidecar.gif) using wx.adv.AnimationCtrl.
-    Falls back to static PNG/JPG/ICO and finally a placeholder.
-    Writes what it loaded to StatusBar (field 1).
+    Prefer an animated GIF (assets/sidecar.gif) using wx.adv.AnimationCtrl.
+    It reads the GIF's natural size and resizes this panel to match,
+    so nothing is cropped or stretched. If no GIF, falls back to static PNG/JPG/ICO.
     """
-    def __init__(self, parent, width=220, height=120):
+    def __init__(self, parent, max_w=360, max_h=180):
         super().__init__(parent)
-        self.width, self.height = width, height
-        self.SetMinSize((width, height))
         self.SetBackgroundColour(wx.Colour(26, 26, 26))
-
         s = wx.BoxSizer(wx.VERTICAL)
-        self.anim_ctrl = None  # keep ref to avoid GC
-        loaded_desc = None
 
-        # 1) GIF first — you said you renamed to sidecar.gif
-        search_dirs = [ASSETS_DIR, BASE_DIR, APP_DIR, os.getcwd()]
-        gif_names = ["sidecar.gif"]
-        gif_path = next(
-            (os.path.join(d, n) for d in search_dirs for n in gif_names if os.path.exists(os.path.join(d, n))),
-            None
-        )
+        loaded_desc = None
+        self.anim_ctrl = None
+
+        # 1) GIF first — 'sidecar.gif'
+        gif_path = None
+        for d in (ASSETS_DIR, BASE_DIR, APP_DIR, os.getcwd()):
+            p = os.path.join(d, "sidecar.gif")
+            if os.path.exists(p):
+                gif_path = p
+                break
 
         if gif_path:
             try:
                 anim = adv.Animation(gif_path)
                 if anim.IsOk():
-                    self.anim_ctrl = adv.AnimationCtrl(self, -1, anim)
+                    # Read natural size and clamp by max bounds (letterbox with panel, no scaling).
+                    nat_size = anim.GetSize() if hasattr(anim, "GetSize") else wx.Size(320, 214)
+                    w, h = nat_size.width, nat_size.height
+                    # Clamp panel size if desired (we don't scale the GIF; we give it the room it needs).
+                    w = min(w, max_w)
+                    h = min(h, max_h)
+
+                    # If the GIF is bigger than the clamp, center it inside the given area
+                    self.SetMinSize((w, h))
+                    self.SetSize((w, h))
+
+                    self.anim_ctrl = adv.AnimationCtrl(self, -1, anim, pos=(0, 0))
+                    self.anim_ctrl.SetBackgroundColour(wx.Colour(26, 26, 26))
                     self.anim_ctrl.Play()
-                    s.Add(self.anim_ctrl, 0, wx.ALL, 0)
+
+                    # Center the GIF inside the panel if panel > gif dims
+                    gif_w, gif_h = nat_size.width, nat_size.height
+                    if (w > gif_w) or (h > gif_h):
+                        hs = wx.BoxSizer(wx.VERTICAL)
+                        hs.AddStretchSpacer()
+                        row = wx.BoxSizer(wx.HORIZONTAL)
+                        row.AddStretchSpacer()
+                        row.Add(self.anim_ctrl, 0, wx.ALIGN_CENTER)
+                        row.AddStretchSpacer()
+                        hs.Add(row, 0, wx.ALIGN_CENTER)
+                        hs.AddStretchSpacer()
+                        self.SetSizer(hs)
+                    else:
+                        s.Add(self.anim_ctrl, 0, wx.ALIGN_LEFT | wx.ALIGN_TOP, 0)
+                        self.SetSizer(s)
+
                     loaded_desc = f"Header (GIF): {gif_path}"
                 else:
                     gif_path = None
@@ -155,11 +178,12 @@ class HeaderMedia(wx.Panel):
                 gif_path = None
                 loaded_desc = f"GIF load error: {e}"
 
-        # 2) If no GIF, try static bitmap and scale once
         if not gif_path:
-            bitmap_candidates = []
-            for d in search_dirs:
-                bitmap_candidates += [
+            # 2) Static bitmap fallback (scaled to fit area neatly)
+            bmp = None
+            candidates = []
+            for d in (ASSETS_DIR, BASE_DIR, APP_DIR, os.getcwd()):
+                candidates += [
                     os.path.join(d, "sidecar-01.png"),
                     os.path.join(d, "sidecar.png"),
                     os.path.join(d, "sidecar-01.jpg"),
@@ -167,36 +191,36 @@ class HeaderMedia(wx.Panel):
                     os.path.join(d, "sidecar-01.ico"),
                     os.path.join(d, "sidecar.ico"),
                 ]
-            chosen = next((p for p in bitmap_candidates if os.path.exists(p)), None)
+            chosen = next((p for p in candidates if os.path.exists(p)), None)
             if chosen:
-                bmp = self._load_bitmap_exact_size(chosen, self.width, self.height)
-                if bmp and bmp.IsOk():
-                    s.Add(wx.StaticBitmap(self, bitmap=bmp), 0, wx.ALL, 0)
-                    loaded_desc = f"Header (image): {chosen}"
-                else:
-                    chosen = None
-
-            # 3) Final fallback: placeholder
-            if not chosen:
-                ph = wx.Panel(self, size=(self.width, self.height))
+                bmp = self._load_bitmap_fit(chosen, max_w, max_h)
+            if bmp and bmp.IsOk():
+                self.SetMinSize((bmp.GetWidth(), bmp.GetHeight()))
+                s.Add(wx.StaticBitmap(self, bitmap=bmp), 0, wx.ALL, 0)
+                self.SetSizer(s)
+                loaded_desc = f"Header (image): {chosen}"
+            else:
+                # 3) Final placeholder
+                self.SetMinSize((max_w, max_h))
+                ph = wx.Panel(self, size=(max_w, max_h))
                 ph.SetBackgroundColour(wx.Colour(32, 32, 32))
-                msg = wx.StaticText(
-                    ph,
-                    label="Add assets/sidecar.gif"
-                )
+                msg = wx.StaticText(ph, label="Add assets/sidecar.gif")
                 msg.SetForegroundColour(wx.Colour(235, 235, 235))
                 msg.SetFont(_font(9, "bold"))
                 hs = wx.BoxSizer(wx.VERTICAL)
                 hs.AddStretchSpacer()
-                hs.Add(msg, 0, wx.ALIGN_CENTER | wx.LEFT | wx.RIGHT, 6)
+                row = wx.BoxSizer(wx.HORIZONTAL)
+                row.AddStretchSpacer()
+                row.Add(msg, 0, wx.ALIGN_CENTER)
+                row.AddStretchSpacer()
+                hs.Add(row, 0, wx.ALIGN_CENTER)
                 hs.AddStretchSpacer()
                 ph.SetSizer(hs)
                 s.Add(ph, 1, wx.EXPAND | wx.ALL, 0)
+                self.SetSizer(s)
                 loaded_desc = "Header: no media found"
 
-        self.SetSizer(s)
-
-        # status bar diagnostics
+        # status bar diagnostics (right slot)
         frame = self.GetTopLevelParent()
         try:
             frame.SetStatusText(loaded_desc or "Header ready", 1)
@@ -204,12 +228,19 @@ class HeaderMedia(wx.Panel):
             pass
 
     @staticmethod
-    def _load_bitmap_exact_size(path: str, w: int, h: int) -> wx.Bitmap | None:
+    def _load_bitmap_fit(path: str, max_w: int, max_h: int) -> wx.Bitmap | None:
         try:
             img = wx.Image(path, wx.BITMAP_TYPE_ANY)
             if not img.IsOk():
                 return None
-            img = img.Scale(max(1, w), max(1, h), wx.IMAGE_QUALITY_HIGH)
+            iw, ih = img.GetWidth(), img.GetHeight()
+            if iw == 0 or ih == 0:
+                return None
+            # Scale preserving aspect ratio to fit inside max_w x max_h
+            scale = min(max_w / iw, max_h / ih, 1.0)
+            w = max(1, int(iw * scale))
+            h = max(1, int(ih * scale))
+            img = img.Scale(w, h, wx.IMAGE_QUALITY_HIGH)
             return wx.Bitmap(img)
         except Exception:
             return None
@@ -221,6 +252,8 @@ class HeaderMedia(wx.Panel):
 class MainWindow(wx.Frame):
     def __init__(self):
         super().__init__(None, title="Sidecar Application: Data Governance", size=(1200, 780))
+
+        self._set_window_icon()  # <<< fix broken icon issue
 
         # status bar with 2 fields: left free, right for diagnostics
         sb = self.CreateStatusBar(2)
@@ -236,6 +269,23 @@ class MainWindow(wx.Frame):
         self.Centre()
         self.Show()
 
+    def _set_window_icon(self):
+        """Load a proper .ico (no emojis) to avoid icon glitches on Windows."""
+        ico = None
+        candidates = []
+        for d in (ASSETS_DIR, BASE_DIR, APP_DIR, os.getcwd()):
+            candidates += [os.path.join(d, "sidecar.ico"), os.path.join(d, "sidecar-01.ico")]
+        for p in candidates:
+            if os.path.exists(p):
+                try:
+                    ico = wx.Icon(p, wx.BITMAP_TYPE_ICO)
+                    if ico.IsOk():
+                        self.SetIcon(ico)
+                        return
+                except Exception:
+                    pass
+        # Fallback: do nothing if we can't load an icon.
+
     # ----------------------------
     # UI
     # ----------------------------
@@ -244,13 +294,13 @@ class MainWindow(wx.Frame):
         root.SetBackgroundColour(wx.Colour(26, 26, 26))
         main = wx.BoxSizer(wx.VERTICAL)
 
-        # Header (GIF left + centered title)
+        # Header (GIF/media left + centered title)
         header = wx.Panel(root)
         header.SetBackgroundColour(wx.Colour(26, 26, 26))
         header_s = wx.BoxSizer(wx.HORIZONTAL)
 
-        # Left: media
-        media = HeaderMedia(header, width=220, height=120)
+        # Left: media (fit within 360x180; your GIF is 320x214 and will be letterboxed vertically)
+        media = HeaderMedia(header, max_w=360, max_h=180)
         header_s.Add(media, 0, wx.ALL, 0)
 
         # Center: title
@@ -414,7 +464,6 @@ class MainWindow(wx.Frame):
         names = [os.path.basename(p) for p in self.knowledge_files]
         self.klabel.SetLabel("Knowledge Files: " + (",  ".join(names) if names else "(none)"))
 
-        # status bar note
         try:
             self.SetStatusText(f"Added {added} knowledge file(s). Total: {len(self.knowledge_files)}", 1)
         except Exception:
@@ -448,7 +497,7 @@ class MainWindow(wx.Frame):
             return
         dlg = SyntheticDataDialog(self, self.headers)
         if dlg.ShowModal() == wx.ID_OK:
-            df = dlg.get_dataframe()  # dialog returns a DataFrame
+            df = dlg.get_dataframe()
             hdr = list(df.columns)
             rows = df.astype(str).values.tolist()
             self._display(hdr, rows)
