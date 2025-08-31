@@ -1,6 +1,4 @@
 import os
-import io
-import csv
 import re
 import random
 from datetime import datetime, timedelta
@@ -9,14 +7,14 @@ import wx
 import wx.grid as gridlib
 import pandas as pd
 
-from app.settings import SettingsWindow, save_defaults, defaults
+from app.settings import SettingsWindow
 from app.dialogs import QualityRuleDialog, DataBuddyDialog, SyntheticDataDialog
 from app.analysis import (
     detect_and_split_data,
     profile_analysis,
     quality_analysis,
     catalog_analysis,
-    compliance_analysis
+    compliance_analysis,
 )
 from app.s3_utils import download_text_from_uri, upload_to_s3
 
@@ -49,7 +47,6 @@ def _slugify(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
 
 def infer_field_type(col: str) -> str:
-    """Infer a simple semantic type from a column name."""
     name = col.lower().strip()
     if "email" in name:
         return "email"
@@ -74,7 +71,6 @@ def infer_field_type(col: str) -> str:
     return "text"
 
 def synth_value(kind: str, i: int) -> str:
-    """Create a realistic-ish value by type."""
     if kind == "email":
         first = random.choice(_FIRST_NAMES).lower()
         last = random.choice(_LAST_NAMES).lower()
@@ -108,7 +104,6 @@ def synth_value(kind: str, i: int) -> str:
     return f"{_slugify(kind) or 'value'}_{i}"
 
 def synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
-    """Generate n rows for the provided column list, using inferred types."""
     df = pd.DataFrame(index=range(n))
     for col in columns:
         kind = infer_field_type(col)
@@ -124,7 +119,7 @@ class MainWindow(wx.Frame):
     def __init__(self):
         super().__init__(None, title="Sidecar Data Quality", size=(1200, 820))
 
-        # App icon (top-left)
+        # Window icon (title bar)
         try:
             icon = wx.Icon("assets/sidecar-01.ico", wx.BITMAP_TYPE_ICO)
             self.SetIcon(icon)
@@ -136,67 +131,106 @@ class MainWindow(wx.Frame):
         self.current_process = ""
         self.quality_rules = {}
         self.knowledge_files = []  # [{name, content|path}]
+
         self._build_ui()
         self.Centre()
         self.Show()
 
     # ───────── UI
     def _build_ui(self):
-        pnl = wx.Panel(self)
-        pnl.SetBackgroundColour(wx.Colour(40, 40, 40))
-        vbox = wx.BoxSizer(wx.VERTICAL)
+        root = wx.Panel(self)
+        root.SetBackgroundColour(wx.Colour(40, 40, 40))
+        root_v = wx.BoxSizer(wx.VERTICAL)
 
-        # Title
-        title = wx.StaticText(pnl, label="🏍️🛺  Sidecar Data Quality")
-        title.SetFont(wx.Font(15, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        # Header bar (separate panel to avoid WrapSizer collisions)
+        header = wx.Panel(root)
+        header.SetBackgroundColour(wx.Colour(26, 26, 26))
+        hbox = wx.BoxSizer(wx.HORIZONTAL)
+
+        # Header icon bitmap (instead of emoji)
+        bmp = None
+        for candidate in ("assets/sidecar-01.png", "assets/sidecar-01.ico"):
+            if os.path.exists(candidate):
+                try:
+                    if candidate.endswith(".ico"):
+                        bmp = wx.Bitmap(candidate, wx.BITMAP_TYPE_ICO)
+                    else:
+                        bmp = wx.Bitmap(candidate)
+                    break
+                except Exception:
+                    bmp = None
+        if bmp:
+            hbox.Add(wx.StaticBitmap(header, bitmap=bmp), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
+
+        title = wx.StaticText(header, label="Sidecar Data Quality")
+        title.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         title.SetForegroundColour(wx.Colour(240, 240, 240))
-        vbox.Add(title, 0, wx.ALIGN_CENTER | wx.ALL, 8)
+        hbox.Add(title, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
+        hbox.AddStretchSpacer()
+        header.SetSizer(hbox)
+        root_v.Add(header, 0, wx.EXPAND)
 
-        # Menu
+        # Menu bar
         mb = wx.MenuBar()
         m_file, m_set = wx.Menu(), wx.Menu()
         m_file.Append(wx.ID_EXIT, "Exit")
         self.Bind(wx.EVT_MENU, lambda _: self.Close(), id=wx.ID_EXIT)
         m_set.Append(wx.ID_PREFERENCES, "Settings")
         self.Bind(wx.EVT_MENU, self.on_settings, id=wx.ID_PREFERENCES)
-        mb.Append(m_file, "&File"); mb.Append(m_set, "&Settings"); self.SetMenuBar(mb)
+        mb.Append(m_file, "&File")
+        mb.Append(m_set, "&Settings")
+        self.SetMenuBar(mb)
 
-        # Toolbar row
-        buttons = [
-            ("Load Knowledge Files", self.on_load_knowledge),
-            ("Load File", self.on_load_file),
-            ("Load from URI/S3", self.on_load_s3),
-            ("Generate Synthetic Data", self.on_generate_synth),
-            ("Quality Rule Assignment", self.on_rules),
-            ("Profile", self.do_analysis, "Profile"),
-            ("Quality", self.do_analysis, "Quality"),
-            ("Detect Anomalies", self.on_detect_anomalies),
-            ("Catalog", self.do_analysis, "Catalog"),
-            ("Compliance", self.do_analysis, "Compliance"),
-            ("Little Buddy", self.on_buddy),
-            ("Export CSV", self.on_export_csv),
-            ("Export TXT", self.on_export_txt),
-            ("Upload to S3", self.on_upload_s3),
-        ]
-        toolbar = wx.WrapSizer(wx.HORIZONTAL)
-        for label, fn, *rest in buttons:
-            btn = wx.Button(pnl, label=label)
+        # Toolbar panel (own background/sizer)
+        toolbar_panel = wx.Panel(root)
+        toolbar_panel.SetBackgroundColour(wx.Colour(48, 48, 48))
+        tools = wx.WrapSizer(wx.HORIZONTAL)
+
+        def add_btn(text, handler, process=None):
+            btn = wx.Button(toolbar_panel, label=text)
             btn.SetBackgroundColour(wx.Colour(70, 130, 180))
             btn.SetForegroundColour(wx.WHITE)
             btn.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-            btn.Bind(wx.EVT_BUTTON, fn)
-            if rest:
-                btn.process = rest[0]
-            toolbar.Add(btn, 0, wx.ALL, 3)
-        vbox.Add(toolbar, 0, wx.ALIGN_LEFT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+            btn.Bind(wx.EVT_BUTTON, handler)
+            if process:
+                btn.process = process
+            tools.Add(btn, 0, wx.ALL, 4)
 
-        # Knowledge file list
-        self.knowledge_lbl = wx.StaticText(pnl, label="Knowledge Files: (none)")
+        add_btn("Load Knowledge Files", self.on_load_knowledge)
+        add_btn("Load File", self.on_load_file)
+        add_btn("Load from URI/S3", self.on_load_s3)
+        add_btn("Generate Synthetic Data", self.on_generate_synth)
+        add_btn("Quality Rule Assignment", self.on_rules)
+        add_btn("Profile", self.do_analysis, "Profile")
+        add_btn("Quality", self.do_analysis, "Quality")
+        add_btn("Detect Anomalies", self.on_detect_anomalies)
+        add_btn("Catalog", self.do_analysis, "Catalog")
+        add_btn("Compliance", self.do_analysis, "Compliance")
+        add_btn("Little Buddy", self.on_buddy)
+        add_btn("Export CSV", self.on_export_csv)
+        add_btn("Export TXT", self.on_export_txt)
+        add_btn("Upload to S3", self.on_upload_s3)
+
+        toolbar_panel.SetSizer(tools)
+        root_v.Add(toolbar_panel, 0, wx.EXPAND)
+
+        # Knowledge banner panel (kept separate so it can't overlap the header)
+        info_panel = wx.Panel(root)
+        info_panel.SetBackgroundColour(wx.Colour(40, 40, 40))
+        info_s = wx.BoxSizer(wx.HORIZONTAL)
+        self.knowledge_lbl = wx.StaticText(info_panel, label="Knowledge Files: (none)")
         self.knowledge_lbl.SetForegroundColour(wx.Colour(200, 200, 200))
-        vbox.Add(self.knowledge_lbl, 0, wx.LEFT | wx.BOTTOM, 6)
+        self.knowledge_lbl.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        info_s.Add(self.knowledge_lbl, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
+        info_panel.SetSizer(info_s)
+        root_v.Add(info_panel, 0, wx.EXPAND)
 
-        # Grid
-        self.grid = gridlib.Grid(pnl)
+        # Grid panel
+        grid_panel = wx.Panel(root)
+        grid_panel.SetBackgroundColour(wx.Colour(40, 40, 40))
+        grid_s = wx.BoxSizer(wx.VERTICAL)
+
+        self.grid = gridlib.Grid(grid_panel)
         self.grid.CreateGrid(0, 0)
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
         # dark theme grid
@@ -205,20 +239,57 @@ class MainWindow(wx.Frame):
         self.grid.SetLabelBackgroundColour(wx.Colour(80, 80, 80))
         self.grid.SetLabelTextColour(wx.Colour(245, 245, 245))
         self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 6)
+        grid_s.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
 
-        pnl.SetSizer(vbox)
+        grid_panel.SetSizer(grid_s)
+        root_v.Add(grid_panel, 1, wx.EXPAND)
+
+        root.SetSizer(root_v)
+
+    # ───────── Knowledge
+    def _refresh_knowledge_label(self):
+        if not self.knowledge_files:
+            self.knowledge_lbl.SetLabel("Knowledge Files: (none)")
+        else:
+            names = "  ·  ".join([k["name"] for k in self.knowledge_files])
+            self.knowledge_lbl.SetLabel(f"Knowledge Files:  {names}")
+        self.knowledge_lbl.GetParent().Layout()
+
+    def on_load_knowledge(self, _):
+        dlg = wx.FileDialog(
+            self,
+            "Select Knowledge Files",
+            wildcard=("All Supported|*.txt;*.json;*.csv;*.png;*.jpg;*.jpeg;*.gif|"
+                      "Text|*.txt|JSON|*.json|CSV|*.csv|Images|*.png;*.jpg;*.jpeg;*.gif"),
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE
+        )
+        if dlg.ShowModal() != wx.ID_OK:
+            return
+        paths = dlg.GetPaths()
+        dlg.Destroy()
+
+        for p in paths:
+            name = os.path.basename(p)
+            ext = os.path.splitext(name)[1].lower()
+            try:
+                if ext in (".png",".jpg",".jpeg",".gif",".bmp",".tif",".tiff"):
+                    self.knowledge_files.append({"name": name, "path": p})
+                else:
+                    content = open(p, "r", encoding="utf-8", errors="ignore").read()
+                    self.knowledge_files.append({"name": name, "content": content})
+            except Exception:
+                self.knowledge_files.append({"name": name, "path": p})
+
+        self._refresh_knowledge_label()
 
     # ───────── Grid helpers
     def _display(self, hdr, data):
-        # clear
         self.grid.ClearGrid()
         if self.grid.GetNumberRows():
             self.grid.DeleteRows(0, self.grid.GetNumberRows())
         if self.grid.GetNumberCols():
             self.grid.DeleteCols(0, self.grid.GetNumberCols())
 
-        # setup
         self.grid.AppendCols(len(hdr))
         for i, h in enumerate(hdr):
             self.grid.SetColLabelValue(i, h)
@@ -227,7 +298,6 @@ class MainWindow(wx.Frame):
         for r, row in enumerate(data):
             for c, val in enumerate(row):
                 self.grid.SetCellValue(r, c, str(val))
-
         self.adjust_grid()
 
     def adjust_grid(self):
@@ -269,37 +339,6 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Failed to load data:\n{e}", "Error", wx.OK | wx.ICON_ERROR)
 
-    def on_load_knowledge(self, _):
-        dlg = wx.FileDialog(self, "Select Knowledge Files",
-                            wildcard="All Supported|*.txt;*.json;*.csv;*.png;*.jpg;*.jpeg;*.gif|"
-                                     "Text|*.txt|JSON|*.json|CSV|*.csv|Images|*.png;*.jpg;*.jpeg;*.gif",
-                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE)
-        if dlg.ShowModal() != wx.ID_OK:
-            return
-        paths = dlg.GetPaths()
-        dlg.Destroy()
-
-        for p in paths:
-            name = os.path.basename(p)
-            try:
-                if os.path.splitext(name)[1].lower() in (".png",".jpg",".jpeg",".gif",".bmp",".tif",".tiff"):
-                    # store as path only (binary)
-                    self.knowledge_files.append({"name": name, "path": p})
-                else:
-                    content = open(p, "r", encoding="utf-8", errors="ignore").read()
-                    self.knowledge_files.append({"name": name, "content": content})
-            except Exception:
-                self.knowledge_files.append({"name": name, "path": p})
-
-        self._refresh_knowledge_label()
-
-    def _refresh_knowledge_label(self):
-        if not self.knowledge_files:
-            self.knowledge_lbl.SetLabel("Knowledge Files: (none)")
-            return
-        names = "  ·  ".join([k["name"] for k in self.knowledge_files])
-        self.knowledge_lbl.SetLabel(f"Knowledge Files:  {names}")
-
     def do_analysis(self, evt):
         if not self.headers:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
@@ -311,7 +350,7 @@ class MainWindow(wx.Frame):
             "Profile": profile_analysis,
             "Quality": lambda d: quality_analysis(d, self.quality_rules),
             "Catalog": catalog_analysis,
-            "Compliance": compliance_analysis
+            "Compliance": compliance_analysis,
         }[proc]
         hdr, data = func(df)
         self._display(hdr, data)
@@ -340,7 +379,7 @@ class MainWindow(wx.Frame):
         dlg.Destroy()
 
         if not selected:
-            selected = list(self.headers)  # default to all
+            selected = list(self.headers)
 
         try:
             df = synth_dataframe(n, selected)
@@ -352,7 +391,7 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Generation failed: {e}", "Error", wx.OK | wx.ICON_ERROR)
 
-    # ───────── Simple anomaly detector (placeholder)
+    # ───────── Simple anomaly detector (baseline)
     def on_detect_anomalies(self, _):
         if not self.headers:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
@@ -369,7 +408,8 @@ class MainWindow(wx.Frame):
             numeric = pd.to_numeric(df[col], errors="coerce")
             if numeric.notna().any():
                 neg = int((numeric < 0).sum())
-                huge = int((numeric > numeric.mean(skipna=True) + 6*(numeric.std(skipna=True) or 0)).sum())
+                std = numeric.std(skipna=True) or 0
+                huge = int((numeric > numeric.mean(skipna=True) + 6*std).sum())
             else:
                 neg = huge = 0
 
