@@ -1,12 +1,16 @@
+# app/main_window.py
+
 import os
-from datetime import datetime, timedelta
-import random
+import csv
+from datetime import datetime
 
 import wx
+import wx.adv as adv               # GIF via AnimationCtrl
 import wx.grid as gridlib
 import pandas as pd
 
-from app.settings import SettingsWindow, defaults
+# ---- local modules ----
+from app.settings import SettingsWindow, defaults, save_defaults
 from app.dialogs import QualityRuleDialog, DataBuddyDialog, SyntheticDataDialog
 from app.analysis import (
     detect_and_split_data,
@@ -14,240 +18,188 @@ from app.analysis import (
     quality_analysis,
     catalog_analysis,
     compliance_analysis,
-    ai_catalog_analysis,   # AI-powered
-    ai_detect_anomalies,   # AI-powered
 )
 from app.s3_utils import download_text_from_uri, upload_to_s3
 
-APP_NAME = "Sidecar Application: Data Governance"
-APP_VERSION = "1.0"
-APP_AUTHOR = "Salah Aldin Mokhayesh"
-APP_COMPANY = "Aldin AI LLC"
 
+# -----------------------------
+# Utility: fonts (avoid wx.FONTSTYLE typo)
+# -----------------------------
+def _font(size=10, weight="normal"):
+    w = {
+        "normal": wx.FONTWEIGHT_NORMAL,
+        "medium": getattr(wx, "FONTWEIGHT_MEDIUM", wx.FONTWEIGHT_NORMAL),
+        "bold": wx.FONTWEIGHT_BOLD,
+    }.get(weight, wx.FONTWEIGHT_NORMAL)
+    return wx.Font(pointSize=size,
+                   family=wx.FONTFAMILY_SWISS,
+                   style=wx.FONTSTYLE_NORMAL,
+                   weight=w)
+
+
+# -----------------------------
+# Minimal anomaly detection (local)
+# -----------------------------
+def _detect_anomalies_simple(df: pd.DataFrame):
+    """
+    Returns (headers, rows) with simple reasons + recommendations.
+    """
+    out_rows = []
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    email_like = df.columns[df.columns.str.contains("email", case=False, regex=True)]
+
+    for col in df.columns:
+        s = df[col]
+        reasons = []
+        recs = []
+
+        # blanks
+        empties = int((s.astype(str).str.strip() == "").sum())
+        if empties:
+            reasons.append(f"{empties} blank values")
+            recs.append("Fill missing values or drop rows if appropriate.")
+
+        # nulls
+        nulls = int(s.isnull().sum())
+        if nulls:
+            reasons.append(f"{nulls} nulls")
+            recs.append("Impute nulls or enforce NOT NULL constraint.")
+
+        # type checks
+        if pd.api.types.is_numeric_dtype(s):
+            vals = pd.to_numeric(s, errors="coerce")
+            zden = vals.std(ddof=0) if vals.std(ddof=0) else 1
+            z = (vals - vals.mean()) / zden
+            outl = int((z.abs() > 3).sum())
+            if outl:
+                reasons.append(f"{outl} possible outliers")
+                recs.append("Review thresholds; consider winsorization or robust scaling.")
+        else:
+            # date-like
+            if "date" in col.lower() or "timestamp" in col.lower():
+                parsed = pd.to_datetime(s, errors="coerce")
+                bad = int(parsed.isna().sum())
+                if bad:
+                    reasons.append(f"{bad} unparseable dates")
+                    recs.append("Normalize date formats; parse with a single standard.")
+            # email-like
+            if col in email_like:
+                ok = s.astype(str).str.contains(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", na=False)
+                bad = int((~ok).sum())
+                if bad:
+                    reasons.append(f"{bad} invalid emails")
+                    recs.append("Validate email structure or correct user input.")
+
+        # uniqueness heuristic
+        if s.nunique(dropna=True) < len(s) * 0.2:
+            reasons.append("low uniqueness")
+            recs.append("Check if this field should be categorical; if not, investigate duplication.")
+
+        if not reasons:
+            reasons = ["No major anomalies detected"]
+            recs = ["Monitor periodically"]
+
+        out_rows.append([col, "; ".join(reasons), "; ".join(sorted(set(recs))), now])
+
+    hdr = ["Field", "Reason", "Recommendation", "Analysis Date"]
+    return hdr, out_rows
+
+
+# --------------------------------
+# Paths we’ll search for media
+# --------------------------------
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.abspath(os.path.join(APP_DIR, os.pardir))
+BASE_DIR = os.path.dirname(APP_DIR)
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
-# -------------------------- Cross-version wx font helper ---------------------
-def _font(size: int, weight: str = "normal", family=wx.FONTFAMILY_SWISS) -> wx.Font:
-    style = getattr(wx, "FONTSTYLE_NORMAL", wx.NORMAL)
-    weight_map = {
-        "normal": getattr(wx, "FONTWEIGHT_NORMAL", wx.NORMAL),
-        "bold":   getattr(wx, "FONTWEIGHT_BOLD",   wx.BOLD),
-        "medium": getattr(wx, "FONTWEIGHT_MEDIUM",
-                          getattr(wx, "FONTWEIGHT_NORMAL", wx.NORMAL)),
-    }
-    return wx.Font(size, family, style, weight_map.get(weight, weight_map["normal"]))
 
-# --------------------------- Synthetic data helpers ---------------------------
-_FIRST_NAMES = [
-    "Alex","Sam","Taylor","Jordan","Casey","Jamie","Riley","Avery","Cameron",
-    "Morgan","Harper","Quinn","Reese","Sawyer","Skyler","Rowan","Elliot","Logan",
-    "Mason","Olivia","Liam","Emma","Noah","Sophia","James","Amelia"
-]
-_LAST_NAMES = [
-    "Smith","Johnson","Williams","Brown","Jones","Miller","Davis","Garcia","Rodriguez",
-    "Wilson","Martinez","Anderson","Taylor","Thomas","Hernandez","Moore","Martin","Jackson",
-    "Thompson","White","Lopez","Lee","Gonzalez"
-]
-_STREETS = [
-    "Oak","Maple","Pine","Cedar","Elm","Walnut","Willow","Ash","Birch","Cherry",
-    "Lake","Hill","River","Sunset","Highland","Meadow","Forest","Glen","Fairview",
-]
-_CITIES = ["Austin","Seattle","Denver","Chicago","Miami","Phoenix","Boston","Portland","Dallas","Atlanta"]
-_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA",
-           "MA","MD","ME","MI","MN","MO","MS","MT","NC","ND","NE","NH","NJ","NM","NV","NY","OH",
-           "OK","OR","PA","RI","SC","SD","TN","TX","UT","VA","VT","WA","WI","WV","WY"]
-_DOMAINS = ["example.com","mail.com","test.org","demo.net","sample.io","data.dev"]
-
-def _slugify(s: str) -> str:
-    import re as _re
-    return _re.sub(r"[^a-z0-9]+","-", s.lower()).strip("-")
-
-def infer_field_type(col: str) -> str:
-    name = col.lower().strip()
-    if "email" in name: return "email"
-    if "phone" in name or "tel" in name: return "phone"
-    if "first" in name and "name" in name: return "first_name"
-    if "last" in name and "name" in name: return "last_name"
-    if "middle" in name and "name" in name: return "middle_name"
-    if "address" in name: return "address"
-    if any(k in name for k in ("amount","balance","price","total")): return "amount"
-    if "date" in name or "timestamp" in name: return "date"
-    if name.endswith("_id") or name == "id": return "id"
-    if any(tok in name for tok in ("number","count","qty","age","zip","score")): return "number"
-    return "text"
-
-def synth_value(kind: str, i: int) -> str:
-    import random as _r
-    if kind == "email":
-        first = _r.choice(_FIRST_NAMES).lower()
-        last  = _r.choice(_LAST_NAMES).lower()
-        dom   = _r.choice(_DOMAINS)
-        return f"{first}.{last}{i}@{dom}"
-    if kind == "phone":
-        return f"{_r.randint(200,989):03d}-{_r.randint(200,989):03d}-{_r.randint(1000,9999):04d}"
-    if kind == "first_name":  return _r.choice(_FIRST_NAMES)
-    if kind == "last_name":   return _r.choice(_LAST_NAMES)
-    if kind == "middle_name": return _r.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-    if kind == "address":
-        num = _r.randint(100, 9999)
-        st  = _r.choice(_STREETS)
-        typ = _r.choice(["St","Ave","Rd","Blvd","Ln","Way"])
-        city = _r.choice(_CITIES); state = _r.choice(_STATES); zipc = _r.randint(10000,99999)
-        return f"{num} {st} {typ}, {city}, {state} {zipc}"
-    if kind == "amount": return f"{_r.uniform(1000,100000):.2f}"
-    if kind == "date":
-        from datetime import datetime as _dt, timedelta as _td
-        base = _dt.now() - _td(days=_r.randint(0, 4*365))
-        return base.strftime("%Y-%m-%d")
-    if kind == "id": return f"{_r.randint(10_000_000, 99_999_999)}"
-    if kind == "number": return str(_r.randint(0, 1000))
-    return f"{_slugify(kind) or 'value'}_{i}"
-
-def synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
-    df = pd.DataFrame(index=range(n))
-    for col in columns:
-        kind = infer_field_type(col)
-        df[col] = [synth_value(kind, i+1) for i in range(n)]
-    return df
-
-# --------------------------- Header media panel ------------------------------
+# --------------------------------
+# Header with GIF-first media
+# --------------------------------
 class HeaderMedia(wx.Panel):
     """
-    Tries GIF (animated) via wx.adv.AnimationCtrl, then MP4 via WebView2,
-    then MP4 via wx.media.MediaCtrl, then PNG/JPG/ICO, else placeholder.
+    Prefer an animated GIF (sidecar.gif) using wx.adv.AnimationCtrl.
+    Falls back to static PNG/JPG/ICO and finally a placeholder.
+    Writes what it loaded to StatusBar (field 1).
     """
     def __init__(self, parent, width=220, height=120):
         super().__init__(parent)
-        self.width = width
-        self.height = height
+        self.width, self.height = width, height
         self.SetMinSize((width, height))
         self.SetBackgroundColour(wx.Colour(26, 26, 26))
 
         s = wx.BoxSizer(wx.VERTICAL)
+        self.anim_ctrl = None  # keep ref to avoid GC
         loaded_desc = None
-        shown = False
 
-        # Candidate files
-        gif_candidates, vid_candidates, img_candidates = [], [], []
-        for d in (BASE_DIR, ASSETS_DIR, APP_DIR, os.getcwd()):
-            gif_candidates += [
-                os.path.join(d, "sidecar.gif"),
-                os.path.join(d, "sidecar-01.gif"),
-            ]
-            vid_candidates += [
-                os.path.join(d, "sidecar.mp4"),
-                os.path.join(d, "sidecar-01.mp4"),
-            ]
-            img_candidates += [
-                os.path.join(d, "sidecar-01.jpg"),
-                os.path.join(d, "sidecar-01.png"),
-                os.path.join(d, "sidecar.jpg"),
-                os.path.join(d, "sidecar.png"),
-                os.path.join(d, "sidecar-01.ico"),
-                os.path.join(d, "sidecar.ico"),
-            ]
+        # 1) GIF first — you said you renamed to sidecar.gif
+        search_dirs = [ASSETS_DIR, BASE_DIR, APP_DIR, os.getcwd()]
+        gif_names = ["sidecar.gif"]
+        gif_path = next(
+            (os.path.join(d, n) for d in search_dirs for n in gif_names if os.path.exists(os.path.join(d, n))),
+            None
+        )
 
-        gif = next((p for p in gif_candidates if os.path.exists(p)), None)
-        mp4 = next((p for p in vid_candidates if os.path.exists(p)), None)
-        chosen_img = next((p for p in img_candidates if os.path.exists(p)), None)
-
-        # ---- 1) Animated GIF (reliable and lightweight) ----
-        if gif and not shown:
+        if gif_path:
             try:
-                import wx.adv as adv
-                anim = adv.Animation()
-                if anim.LoadFile(gif, wx.BITMAP_TYPE_GIF) and anim.IsOk():
-                    ctrl = adv.AnimationCtrl(self, -1, anim, size=(self.width, self.height), style=wx.NO_BORDER)
-                    ctrl.SetBackgroundColour(wx.Colour(26, 26, 26))
-                    ctrl.Play()
-                    s.Add(ctrl, 0, wx.ALL, 0)
-                    loaded_desc = f"Header: GIF ({gif})"
-                    shown = True
-            except Exception:
-                shown = False
+                anim = adv.Animation(gif_path)
+                if anim.IsOk():
+                    self.anim_ctrl = adv.AnimationCtrl(self, -1, anim)
+                    self.anim_ctrl.Play()
+                    s.Add(self.anim_ctrl, 0, wx.ALL, 0)
+                    loaded_desc = f"Header (GIF): {gif_path}"
+                else:
+                    gif_path = None
+            except Exception as e:
+                gif_path = None
+                loaded_desc = f"GIF load error: {e}"
 
-        # ---- 2) MP4 via WebView2 (HTML5 video) ----
-        if mp4 and not shown:
-            try:
-                import wx.html2 as webview
-                wv = webview.WebView.New(self, size=(self.width, self.height), style=wx.NO_BORDER)
-                mp4_url = "file:///" + mp4.replace("\\", "/")
-                html = f"""
-                <html>
-                  <head>
-                    <meta name="viewport" content="width=device-width, initial-scale=1">
-                    <style>
-                      html,body{{margin:0;background:#1a1a1a;}}
-                      video{{display:block;width:{self.width}px;height:{self.height}px;object-fit:cover}}
-                    </style>
-                  </head>
-                  <body>
-                    <video autoplay muted loop playsinline>
-                      <source src="{mp4_url}" type="video/mp4">
-                    </video>
-                  </body>
-                </html>
-                """
-                wv.SetPage(html, "")
-                s.Add(wv, 0, wx.ALL, 0)
-                loaded_desc = f"Header: MP4 via WebView2 ({mp4})"
-                shown = True
-            except Exception:
-                shown = False
+        # 2) If no GIF, try static bitmap and scale once
+        if not gif_path:
+            bitmap_candidates = []
+            for d in search_dirs:
+                bitmap_candidates += [
+                    os.path.join(d, "sidecar-01.png"),
+                    os.path.join(d, "sidecar.png"),
+                    os.path.join(d, "sidecar-01.jpg"),
+                    os.path.join(d, "sidecar.jpg"),
+                    os.path.join(d, "sidecar-01.ico"),
+                    os.path.join(d, "sidecar.ico"),
+                ]
+            chosen = next((p for p in bitmap_candidates if os.path.exists(p)), None)
+            if chosen:
+                bmp = self._load_bitmap_exact_size(chosen, self.width, self.height)
+                if bmp and bmp.IsOk():
+                    s.Add(wx.StaticBitmap(self, bitmap=bmp), 0, wx.ALL, 0)
+                    loaded_desc = f"Header (image): {chosen}"
+                else:
+                    chosen = None
 
-        # ---- 3) MP4 via wx.media.MediaCtrl (requires codecs) ----
-        if mp4 and not shown:
-            try:
-                import wx.media as wxmedia
-                self.mc = wxmedia.MediaCtrl(self, style=wx.NO_BORDER)
-                if self.mc.Load(mp4):
-                    self.mc.SetInitialSize((self.width, self.height))
-                    self.mc.SetVolume(0.0)
-                    self.mc.Play()
-                    self.Bind(wxmedia.EVT_MEDIA_FINISHED, lambda e: self.mc.Play())
-                    s.Add(self.mc, 0, wx.ALL, 0)
-                    loaded_desc = f"Header: MP4 via MediaCtrl ({mp4})"
-                    shown = True
-            except Exception:
-                shown = False
-
-        # ---- 4) Static PNG/JPG/ICO ----
-        if not shown and chosen_img:
-            bmp = self._load_bitmap_exact_size(chosen_img, self.width, self.height)
-            if bmp and bmp.IsOk():
-                s.Add(wx.StaticBitmap(self, bitmap=bmp), 0, wx.ALL, 0)
-                loaded_desc = f"Header: Image ({chosen_img})"
-                shown = True
-
-        # ---- 5) Placeholder with clear instructions ----
-        if not shown:
-            ph = wx.Panel(self, size=(self.width, self.height))
-            ph.SetBackgroundColour(wx.Colour(32, 32, 32))
-            phs = wx.BoxSizer(wx.VERTICAL)
-            msg = wx.StaticText(
-                ph,
-                label=("No header media found/playable.\n"
-                       "Add sidecar.gif or sidecar.mp4 (H.264/AAC)\n"
-                       "to the project root or /assets folder.")
-            )
-            msg.SetForegroundColour(wx.Colour(235, 235, 235))
-            msg.SetFont(_font(9, "bold"))
-            msg.Wrap(self.width - 10)
-            phs.AddStretchSpacer()
-            phs.Add(msg, 0, wx.ALIGN_CENTER | wx.LEFT | wx.RIGHT, 6)
-            phs.AddStretchSpacer()
-            ph.SetSizer(phs)
-            s.Add(ph, 1, wx.EXPAND)
-            loaded_desc = "Header: no media found"
+            # 3) Final fallback: placeholder
+            if not chosen:
+                ph = wx.Panel(self, size=(self.width, self.height))
+                ph.SetBackgroundColour(wx.Colour(32, 32, 32))
+                msg = wx.StaticText(
+                    ph,
+                    label="Add assets/sidecar.gif"
+                )
+                msg.SetForegroundColour(wx.Colour(235, 235, 235))
+                msg.SetFont(_font(9, "bold"))
+                hs = wx.BoxSizer(wx.VERTICAL)
+                hs.AddStretchSpacer()
+                hs.Add(msg, 0, wx.ALIGN_CENTER | wx.LEFT | wx.RIGHT, 6)
+                hs.AddStretchSpacer()
+                ph.SetSizer(hs)
+                s.Add(ph, 1, wx.EXPAND | wx.ALL, 0)
+                loaded_desc = "Header: no media found"
 
         self.SetSizer(s)
 
-        # Always show what happened in the status bar
+        # status bar diagnostics
         frame = self.GetTopLevelParent()
         try:
-            frame.SetStatusText(loaded_desc or "", 0)
+            frame.SetStatusText(loaded_desc or "Header ready", 1)
         except Exception:
             pass
 
@@ -262,196 +214,149 @@ class HeaderMedia(wx.Panel):
         except Exception:
             return None
 
-# ------------------------------- Main Window --------------------------------
+
+# --------------------------------
+# Main window
+# --------------------------------
 class MainWindow(wx.Frame):
     def __init__(self):
-        super().__init__(None, title=APP_NAME, size=(1200, 820))
+        super().__init__(None, title="Sidecar Application: Data Governance", size=(1200, 780))
 
-        try:
-            for ic in (
-                os.path.join(ASSETS_DIR, "sidecar-01.ico"),
-                os.path.join(BASE_DIR, "sidecar-01.ico"),
-                os.path.join(BASE_DIR, "sidecar.ico"),
-            ):
-                if os.path.exists(ic):
-                    self.SetIcon(wx.Icon(ic, wx.BITMAP_TYPE_ICO))
-                    break
-        except Exception:
-            pass
+        # status bar with 2 fields: left free, right for diagnostics
+        sb = self.CreateStatusBar(2)
+        sb.SetStatusWidths([-1, 500])
 
-        self.raw_data: list[list[str]] = []
-        self.headers: list[str] = []
+        self.raw_data = []
+        self.headers = []
         self.current_process = ""
         self.quality_rules = {}
-        self.knowledge_files = []
+        self.knowledge_files = []  # for Little Buddy reference
 
         self._build_ui()
         self.Centre()
         self.Show()
 
-        self.CreateStatusBar(2)
-        self.SetStatusWidths([-1, 420])
-        self.SetStatusText(f"v{APP_VERSION}  |  Created by {APP_AUTHOR} ({APP_COMPANY})", 1)
-
+    # ----------------------------
+    # UI
+    # ----------------------------
     def _build_ui(self):
         root = wx.Panel(self)
-        root.SetBackgroundColour(wx.Colour(40, 40, 40))
-        root.SetDoubleBuffered(True)
-        root_v = wx.BoxSizer(wx.VERTICAL)
+        root.SetBackgroundColour(wx.Colour(26, 26, 26))
+        main = wx.BoxSizer(wx.VERTICAL)
 
+        # Header (GIF left + centered title)
         header = wx.Panel(root)
         header.SetBackgroundColour(wx.Colour(26, 26, 26))
-        header.SetDoubleBuffered(True)
         header_s = wx.BoxSizer(wx.HORIZONTAL)
 
-        media_left = HeaderMedia(header, width=220, height=120)
-        header_s.Add(media_left, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 8)
+        # Left: media
+        media = HeaderMedia(header, width=220, height=120)
+        header_s.Add(media, 0, wx.ALL, 0)
 
-        center_panel = wx.Panel(header)
-        center_panel.SetBackgroundColour(wx.Colour(26, 26, 26))
-        center_panel.SetDoubleBuffered(True)
-        csz = wx.BoxSizer(wx.HORIZONTAL)
-        csz.AddStretchSpacer(1)
-
-        title = wx.StaticText(center_panel, label=APP_NAME)
-        title.SetForegroundColour(wx.Colour(240, 240, 240))
+        # Center: title
+        center = wx.Panel(header)
+        center.SetBackgroundColour(wx.Colour(26, 26, 26))
+        cs = wx.BoxSizer(wx.VERTICAL)
+        title = wx.StaticText(center, label="Sidecar Application: Data Governance")
         title.SetFont(_font(16, "bold"))
-        csz.Add(title, 0, wx.ALIGN_CENTER_VERTICAL)
+        title.SetForegroundColour(wx.Colour(235, 235, 235))
+        cs.AddStretchSpacer()
+        cs.Add(title, 0, wx.ALIGN_CENTER)
+        cs.AddStretchSpacer()
+        center.SetSizer(cs)
+        header_s.Add(center, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
-        csz.AddStretchSpacer(1)
-        center_panel.SetSizer(csz)
-        header_s.Add(center_panel, 1, wx.EXPAND)
         header.SetSizer(header_s)
-        root_v.Add(header, 0, wx.EXPAND)
+        main.Add(header, 0, wx.EXPAND | wx.ALL, 0)
 
+        # Menu bar
         mb = wx.MenuBar()
-        m_file, m_set, m_help = wx.Menu(), wx.Menu(), wx.Menu()
+        m_file = wx.Menu()
+        m_set = wx.Menu()
         m_file.Append(wx.ID_EXIT, "Exit")
         self.Bind(wx.EVT_MENU, lambda _: self.Close(), id=wx.ID_EXIT)
         m_set.Append(wx.ID_PREFERENCES, "Settings")
         self.Bind(wx.EVT_MENU, self.on_settings, id=wx.ID_PREFERENCES)
-        about_item = m_help.Append(wx.ID_ABOUT, "About")
-        self.Bind(wx.EVT_MENU, self.on_about, about_item)
-        mb.Append(m_file, "&File"); mb.Append(m_set, "&Settings"); mb.Append(m_help, "&Help")
+        mb.Append(m_file, "&File")
+        mb.Append(m_set, "&Settings")
         self.SetMenuBar(mb)
 
-        toolbar_panel = wx.Panel(root)
-        toolbar_panel.SetBackgroundColour(wx.Colour(48, 48, 48))
-        toolbar_panel.SetDoubleBuffered(True)
-        tools = wx.WrapSizer(wx.HORIZONTAL)
+        # Toolbar / buttons (wrap)
+        buttons = wx.WrapSizer(wx.HORIZONTAL)
 
-        def add_btn(text, handler, process=None):
-            btn = wx.Button(toolbar_panel, label=text)
+        def add_btn(label, handler, process=None):
+            btn = wx.Button(root, label=label)
             btn.SetBackgroundColour(wx.Colour(70, 130, 180))
             btn.SetForegroundColour(wx.WHITE)
-            btn.SetFont(_font(9, "normal"))
+            btn.SetFont(_font(9, "medium"))
             btn.Bind(wx.EVT_BUTTON, handler)
             if process:
                 btn.process = process
-            tools.Add(btn, 0, wx.ALL, 4)
+            buttons.Add(btn, 0, wx.ALL, 4)
 
         add_btn("Load Knowledge Files", self.on_load_knowledge)
         add_btn("Load File", self.on_load_file)
         add_btn("Load from URI/S3", self.on_load_s3)
         add_btn("Generate Synthetic Data", self.on_generate_synth)
         add_btn("Quality Rule Assignment", self.on_rules)
-        add_btn("Profile", self.do_analysis, "Profile")
-        add_btn("Quality", self.do_analysis, "Quality")
+        add_btn("Profile", lambda e: self.do_analysis(e, "Profile"))
+        add_btn("Quality", lambda e: self.do_analysis(e, "Quality"))
         add_btn("Detect Anomalies", self.on_detect_anomalies)
-        add_btn("Catalog", self.do_analysis, "Catalog")
-        add_btn("Compliance", self.do_analysis, "Compliance")
+        add_btn("Catalog", lambda e: self.do_analysis(e, "Catalog"))
+        add_btn("Compliance", lambda e: self.do_analysis(e, "Compliance"))
         add_btn("Little Buddy", self.on_buddy)
         add_btn("Export CSV", self.on_export_csv)
         add_btn("Export TXT", self.on_export_txt)
         add_btn("Upload to S3", self.on_upload_s3)
 
-        toolbar_panel.SetSizer(tools)
-        root_v.Add(toolbar_panel, 0, wx.EXPAND)
+        main.Add(buttons, 0, wx.ALIGN_LEFT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
 
-        info_panel = wx.Panel(root)
-        info_panel.SetBackgroundColour(wx.Colour(40, 40, 40))
-        info_panel.SetDoubleBuffered(True)
-        info_s = wx.BoxSizer(wx.HORIZONTAL)
-        self.knowledge_lbl = wx.StaticText(info_panel, label="Knowledge Files: (none)")
-        self.knowledge_lbl.SetForegroundColour(wx.Colour(200, 200, 200))
-        self.knowledge_lbl.SetFont(_font(9, "normal"))
-        info_s.Add(self.knowledge_lbl, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
-        info_panel.SetSizer(info_s)
-        root_v.Add(info_panel, 0, wx.EXPAND)
+        # Knowledge file list line
+        kline = wx.BoxSizer(wx.HORIZONTAL)
+        self.klabel = wx.StaticText(root, label="Knowledge Files: (none)")
+        self.klabel.SetForegroundColour(wx.Colour(200, 200, 200))
+        self.klabel.SetFont(_font(9))
+        kline.Add(self.klabel, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+        main.Add(kline, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
 
-        grid_panel = wx.Panel(root)
-        grid_panel.SetBackgroundColour(wx.Colour(40, 40, 40))
-        grid_panel.SetDoubleBuffered(True)
-        grid_s = wx.BoxSizer(wx.VERTICAL)
-
-        self.grid = gridlib.Grid(grid_panel)
+        # Data grid
+        self.grid = gridlib.Grid(root)
         self.grid.CreateGrid(0, 0)
-        self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
         self.grid.SetDefaultCellBackgroundColour(wx.Colour(55, 55, 55))
-        self.grid.SetDefaultCellTextColour(wx.Colour(230, 230, 230))
+        self.grid.SetDefaultCellTextColour(wx.Colour(220, 220, 220))
         self.grid.SetLabelBackgroundColour(wx.Colour(80, 80, 80))
-        self.grid.SetLabelTextColour(wx.Colour(245, 245, 245))
+        self.grid.SetLabelTextColour(wx.Colour(240, 240, 240))
         self.grid.SetLabelFont(_font(9, "bold"))
-        grid_s.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
+        self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
+        main.Add(self.grid, 1, wx.EXPAND | wx.ALL, 6)
 
-        grid_panel.SetSizer(grid_s)
-        root_v.Add(grid_panel, 1, wx.EXPAND)
+        root.SetSizer(main)
 
-        root.SetSizer(root_v)
-
-    # ------------------------------ Handlers ------------------------------
-    def on_about(self, _):
-        msg = f"{APP_NAME}\n\nVersion: {APP_VERSION}\nCreated by {APP_AUTHOR} ({APP_COMPANY})"
-        wx.MessageBox(msg, "About", wx.OK | wx.ICON_INFORMATION)
-
-    def _refresh_knowledge_label(self):
-        if not self.knowledge_files:
-            self.knowledge_lbl.SetLabel("Knowledge Files: (none)")
-        else:
-            names = "  ·  ".join([k["name"] for k in self.knowledge_files])
-            self.knowledge_lbl.SetLabel(f"Knowledge Files:  {names}")
-        self.knowledge_lbl.GetParent().Layout()
-
-    def on_load_knowledge(self, _):
-        dlg = wx.FileDialog(
-            self, "Select Knowledge Files",
-            wildcard=("All Supported|*.txt;*.json;*.csv;*.png;*.jpg;*.jpeg;*.gif|"
-                      "Text|*.txt|JSON|*.json|CSV|*.csv|Images|*.png;*.jpg;*.jpeg;*.gif"),
-            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE
-        )
-        if dlg.ShowModal() != wx.ID_OK:
-            return
-        paths = dlg.GetPaths()
-        dlg.Destroy()
-
-        for p in paths:
-            name = os.path.basename(p)
-            ext = os.path.splitext(name)[1].lower()
-            try:
-                if ext in (".png",".jpg",".jpeg",".gif",".bmp",".tif",".tiff"):
-                    self.knowledge_files.append({"name": name, "path": p})
-                else:
-                    content = open(p, "r", encoding="utf-8", errors="ignore").read()
-                    self.knowledge_files.append({"name": name, "content": content})
-            except Exception:
-                self.knowledge_files.append({"name": name, "path": p})
-        self._refresh_knowledge_label()
-
+    # ----------------------------
+    # Display grid
+    # ----------------------------
     def _display(self, hdr, data):
-        self.grid.ClearGrid()
-        if self.grid.GetNumberRows():
-            self.grid.DeleteRows(0, self.grid.GetNumberRows())
-        if self.grid.GetNumberCols():
-            self.grid.DeleteCols(0, self.grid.GetNumberCols())
+        g = self.grid
+        g.ClearGrid()
+        if g.GetNumberRows():
+            g.DeleteRows(0, g.GetNumberRows())
+        if g.GetNumberCols():
+            g.DeleteCols(0, g.GetNumberCols())
 
-        self.grid.AppendCols(len(hdr))
+        if not hdr:
+            return
+
+        g.AppendCols(len(hdr))
         for i, h in enumerate(hdr):
-            self.grid.SetColLabelValue(i, h)
+            g.SetColLabelValue(i, h)
 
-        self.grid.AppendRows(len(data))
-        for r, row in enumerate(data):
-            for c, val in enumerate(row):
-                self.grid.SetCellValue(r, c, str(val))
+        if data:
+            g.AppendRows(len(data))
+            for r, row in enumerate(data):
+                for c, val in enumerate(row):
+                    g.SetCellValue(r, c, "" if val is None else str(val))
+                    if r % 2 == 0:
+                        g.SetCellBackgroundColour(r, c, wx.Colour(45, 45, 45))
         self.adjust_grid()
 
     def adjust_grid(self):
@@ -468,16 +373,61 @@ class MainWindow(wx.Frame):
         event.Skip()
         wx.CallAfter(self.adjust_grid)
 
+    # ----------------------------
+    # Handlers
+    # ----------------------------
     def on_settings(self, _):
         SettingsWindow(self).Show()
+
+    def on_load_knowledge(self, _):
+        """Select multiple knowledge files (images/csv/json/txt/md)."""
+        wildcard = (
+            "Knowledge files (*.txt;*.md;*.csv;*.json;*.png;*.jpg;*.jpeg;*.gif)|"
+            "*.txt;*.md;*.csv;*.json;*.png;*.jpg;*.jpeg;*.gif|"
+            "Text (*.txt;*.md)|*.txt;*.md|"
+            "Data (*.csv;*.json)|*.csv;*.json|"
+            "Images (*.png;*.jpg;*.jpeg;*.gif)|*.png;*.jpg;*.jpeg;*.gif|"
+            "All files (*.*)|*.*"
+        )
+        dlg = wx.FileDialog(
+            self,
+            "Select knowledge files",
+            wildcard=wildcard,
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE
+        )
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy(); return
+        chosen = dlg.GetPaths()
+        dlg.Destroy()
+
+        allowed_exts = {".txt", ".md", ".csv", ".json", ".png", ".jpg", ".jpeg", ".gif"}
+        added = 0
+        for p in chosen:
+            ext = os.path.splitext(p)[1].lower()
+            if ext not in allowed_exts:
+                wx.LogWarning(f"Unsupported file type skipped: {p}")
+                continue
+            if p not in self.knowledge_files:
+                self.knowledge_files.append(p)
+                added += 1
+
+        names = [os.path.basename(p) for p in self.knowledge_files]
+        self.klabel.SetLabel("Knowledge Files: " + (",  ".join(names) if names else "(none)"))
+
+        # status bar note
+        try:
+            self.SetStatusText(f"Added {added} knowledge file(s). Total: {len(self.knowledge_files)}", 1)
+        except Exception:
+            pass
 
     def on_load_file(self, _):
         dlg = wx.FileDialog(self, "Open CSV/TXT", wildcard="CSV/TXT|*.csv;*.txt",
                             style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
         if dlg.ShowModal() != wx.ID_OK:
-            return
-        text = open(dlg.GetPath(), "r", encoding="utf-8").read()
-        dlg.Destroy()
+            dlg.Destroy(); return
+        path = dlg.GetPath(); dlg.Destroy()
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
         self.headers, self.raw_data = detect_and_split_data(text)
         self._display(self.headers, self.raw_data)
 
@@ -492,24 +442,17 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Failed to load data:\n{e}", "Error", wx.OK | wx.ICON_ERROR)
 
-    def do_analysis(self, evt):
+    def on_generate_synth(self, _):
         if not self.headers:
-            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
+            wx.MessageBox("Load data first so we can mirror its columns.", "No data", wx.OK | wx.ICON_WARNING)
             return
-        proc = evt.GetEventObject().process
-        self.current_process = proc
-        df = pd.DataFrame(self.raw_data, columns=self.headers)
-
-        func = {
-            "Profile": profile_analysis,
-            "Quality": lambda d: quality_analysis(d, self.quality_rules),
-            "Catalog": lambda d: ai_catalog_analysis(d, defaults),
-            "Compliance": compliance_analysis
-        }[proc]
-
-        hdr, data = func(df)
-        self._display(hdr, data)
-        wx.MessageBox(upload_to_s3(proc, hdr, data), "Analysis", wx.OK | wx.ICON_INFORMATION)
+        dlg = SyntheticDataDialog(self, self.headers)
+        if dlg.ShowModal() == wx.ID_OK:
+            df = dlg.get_dataframe()  # dialog returns a DataFrame
+            hdr = list(df.columns)
+            rows = df.astype(str).values.tolist()
+            self._display(hdr, rows)
+        dlg.Destroy()
 
     def on_rules(self, _):
         if not self.headers:
@@ -520,34 +463,36 @@ class MainWindow(wx.Frame):
     def on_buddy(self, _):
         DataBuddyDialog(self, self.raw_data, self.headers, knowledge=self.knowledge_files).ShowModal()
 
-    def on_generate_synth(self, _):
+    def do_analysis(self, _evt, kind: str):
         if not self.headers:
-            wx.MessageBox("Load a dataset first so I can see field names.", "No data", wx.OK | wx.ICON_WARNING)
+            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
             return
-        dlg = SyntheticDataDialog(self, self.headers)
-        if dlg.ShowModal() != wx.ID_OK:
-            dlg.Destroy(); return
-        n, selected = dlg.get_values()
-        dlg.Destroy()
-        if not selected:
-            selected = list(self.headers)
-        try:
-            df = synth_dataframe(n, selected)
-            self.headers = selected
-            self.raw_data = df.astype(str).values.tolist()
-            self._display(self.headers, self.raw_data)
-            wx.MessageBox(f"Generated {n:,} synthetic rows for {len(selected)} field(s).",
-                          "Synthetic Data", wx.OK | wx.ICON_INFORMATION)
-        except Exception as e:
-            wx.MessageBox(f"Generation failed: {e}", "Error", wx.OK | wx.ICON_ERROR)
+        df = pd.DataFrame(self.raw_data, columns=self.headers)
+
+        if kind == "Profile":
+            hdr, data = profile_analysis(df)
+        elif kind == "Quality":
+            hdr, data = quality_analysis(df, self.quality_rules)
+        elif kind == "Catalog":
+            hdr, data = catalog_analysis(df)
+        elif kind == "Compliance":
+            hdr, data = compliance_analysis(df)
+        else:
+            return
+
+        self.current_process = kind
+        self._display(hdr, data)
+        wx.MessageBox(upload_to_s3(kind, hdr, data), "Analysis", wx.OK | wx.ICON_INFORMATION)
 
     def on_detect_anomalies(self, _):
         if not self.headers:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
             return
         df = pd.DataFrame(self.raw_data, columns=self.headers)
-        hdr, rows = ai_detect_anomalies(df, defaults)
-        self._display(hdr, rows)
+        hdr, data = _detect_anomalies_simple(df)
+        self.current_process = "DetectAnomalies"
+        self._display(hdr, data)
+        wx.MessageBox(upload_to_s3("DetectAnomalies", hdr, data), "Analysis", wx.OK | wx.ICON_INFORMATION)
 
     def _export(self, path, sep):
         hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
@@ -558,15 +503,19 @@ class MainWindow(wx.Frame):
     def on_export_csv(self, _):
         dlg = wx.FileDialog(self, "Save CSV", wildcard="CSV|*.csv",
                             style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
-        if dlg.ShowModal() != wx.ID_OK: return
-        self._export(dlg.GetPath(), ","); dlg.Destroy()
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy(); return
+        self._export(dlg.GetPath(), ",")
+        dlg.Destroy()
         wx.MessageBox("CSV exported.", "Export", wx.OK | wx.ICON_INFORMATION)
 
     def on_export_txt(self, _):
         dlg = wx.FileDialog(self, "Save TXT", wildcard="TXT|*.txt",
                             style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
-        if dlg.ShowModal() != wx.ID_OK: return
-        self._export(dlg.GetPath(), "\t"); dlg.Destroy()
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy(); return
+        self._export(dlg.GetPath(), "\t")
+        dlg.Destroy()
         wx.MessageBox("TXT exported.", "Export", wx.OK | wx.ICON_INFORMATION)
 
     def on_upload_s3(self, _):
@@ -575,10 +524,3 @@ class MainWindow(wx.Frame):
                 for r in range(self.grid.GetNumberRows())]
         wx.MessageBox(upload_to_s3(self.current_process or "Unknown", hdr, data),
                       "Upload", wx.OK | wx.ICON_INFORMATION)
-
-if __name__ == "__main__":
-    app = wx.App(False)
-    if hasattr(wx, "InitAllImageHandlers"):
-        wx.InitAllImageHandlers()
-    MainWindow()
-    app.MainLoop()
