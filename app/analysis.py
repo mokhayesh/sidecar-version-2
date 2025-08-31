@@ -1,10 +1,14 @@
-import re
 import csv
-import pandas as pd
+import io
+import json
+import re
 from datetime import datetime
 
+import pandas as pd
+import requests
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Helpers shared across analyses
+# CSV/Parsing helpers you already had
 # ──────────────────────────────────────────────────────────────────────────────
 
 def detect_and_split_data(text: str):
@@ -15,13 +19,14 @@ def detect_and_split_data(text: str):
     rows = list(csv.reader(lines, delimiter=delim))
     return (rows[0], rows[1:]) if len(rows) > 1 else ([], [])
 
+
 _SPLIT_CAMEL = re.compile(r'(?<=[a-z0-9])(?=[A-Z])')
 def _split_words(col: str) -> str:
     return _SPLIT_CAMEL.sub(" ", col.replace("_", " "))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Profile
+# Profile / Quality / Catalog / Compliance (original logic stays)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def profile_analysis(df: pd.DataFrame):
@@ -49,10 +54,6 @@ def profile_analysis(df: pd.DataFrame):
            "Nulls", "Blanks", "Min", "Max", "Median", "Std", "Analysis Date"]
     return hdr, rows
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Quality
-# ──────────────────────────────────────────────────────────────────────────────
 
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 _DATE_PARSE = lambda x: pd.to_datetime(x, errors="coerce")
@@ -86,10 +87,6 @@ def quality_analysis(df: pd.DataFrame, rules: dict[str, re.Pattern] | None = Non
            "Validity (%)", "Quality Score (%)", "Analysis Date"]
     return hdr, rows
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Catalog
-# ──────────────────────────────────────────────────────────────────────────────
 
 def _business_description(col: str) -> str:
     name = col.lower()
@@ -138,10 +135,6 @@ def catalog_analysis(df: pd.DataFrame):
     return hdr, rows
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Compliance (placeholder sample)
-# ──────────────────────────────────────────────────────────────────────────────
-
 def compliance_analysis(_df: pd.DataFrame):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = [
@@ -157,100 +150,211 @@ def compliance_analysis(_df: pd.DataFrame):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Detect Anomalies (new)
+# Baseline rule-based anomaly detector (used when AI unavailable)
 # ──────────────────────────────────────────────────────────────────────────────
 
-_POSITIVE_HINTS = {"amount","total","price","cost","balance","qty","quantity","count","number","age"}
-
-def detect_anomalies(df: pd.DataFrame):
-    """
-    Heuristic anomaly detection with reason and remediation suggestion.
-    Returns (headers, rows) where rows = [row#, field, value, reason, recommendation].
-    """
-    rows = []
-    n = len(df)
-    if n == 0 or df.empty:
-        return ["Row #","Field","Value","Reason","Recommendation"], rows
-
+def _rule_based_anomalies(df: pd.DataFrame):
+    findings = []
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for col in df.columns:
-        s = df[col]
-        col_l = str(col).lower()
+        s = df[col].astype(str).str.strip()
+        blanks = int((s == "").sum())
+        nulls = int((s.str.lower() == "nan").sum())
+        numeric = pd.to_numeric(df[col], errors="coerce")
+        if numeric.notna().any():
+            neg = int((numeric < 0).sum())
+            std = numeric.std(skipna=True) or 0
+            huge = int((numeric > numeric.mean(skipna=True) + 6*std).sum())
+        else:
+            neg = huge = 0
 
-        # Missing/blanks
-        blank_mask = s.isnull() | (s.astype(str).str.strip() == "")
-        for i in s[blank_mask].index:
-            rows.append([int(i)+1, col, "", "Missing/blank value",
-                         "Populate or impute; add NOT NULL constraint if appropriate."])
+        bad_email = 0
+        if "email" in col.lower():
+            bad_email = int(~s.str.contains(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", regex=True, na=True).sum())
 
-        # Numeric anomalies
-        s_num = pd.to_numeric(s, errors="coerce")
-        num_mask = s_num.notna()
-        if num_mask.any():
-            vals = s_num[num_mask]
-            q1 = float(vals.quantile(0.25))
-            q3 = float(vals.quantile(0.75))
-            iqr = q3 - q1
-            lower = q1 - 1.5 * iqr
-            upper = q3 + 1.5 * iqr
-            outlier_idx = vals[(vals < lower) | (vals > upper)].index
-            for i in outlier_idx:
-                rows.append([int(i)+1, col, str(s.iloc[i]),
-                             f"Numeric outlier outside IQR [{lower:.2f}, {upper:.2f}]",
-                             "Verify source; correct data entry or cap/winsorize outliers."])
-            # Expect non-negative?
-            if any(h in col_l for h in _POSITIVE_HINTS):
-                neg_idx = vals[vals < 0].index
-                for i in neg_idx:
-                    rows.append([int(i)+1, col, str(s.iloc[i]),
-                                 "Negative value where non-negative expected",
-                                 "Check business rule; fix sign or treat refunds separately."])
+        if blanks or nulls or neg or huge or bad_email:
+            reason = []
+            if blanks: reason.append(f"{blanks} blank")
+            if nulls: reason.append(f"{nulls} 'nan'")
+            if neg: reason.append(f"{neg} negative")
+            if huge: reason.append(f"{huge} outlier")
+            if bad_email: reason.append(f"{bad_email} invalid email")
+            rec = "Review source, add validation, and backfill where possible."
+            findings.append([col, " | ".join(reason), rec, now])
 
-        # Date/time anomalies
-        if ("date" in col_l or "time" in col_l) or pd.api.types.is_datetime64_any_dtype(s):
-            dt = pd.to_datetime(s, errors="coerce")
-            bad_idx = dt[dt.isna() & (~blank_mask)].index
-            for i in bad_idx:
-                rows.append([int(i)+1, col, str(s.iloc[i]),
-                             "Unparseable date/time",
-                             "Normalize to ISO-8601 (YYYY-MM-DD) or correct format."])
-            now = pd.Timestamp.now()
-            future_idx = dt[dt > now + pd.Timedelta(days=365)].index
-            for i in future_idx:
-                rows.append([int(i)+1, col, str(s.iloc[i]),
-                             "Suspicious future date (> 1 year ahead)",
-                             "Confirm timezone/year; correct if mis-keyed."])
-            old_idx = dt[dt < pd.Timestamp(1970, 1, 1)].index
-            for i in old_idx:
-                rows.append([int(i)+1, col, str(s.iloc[i]),
-                             "Suspicious historic date (< 1970)",
-                             "Check default 1900/1970 bug; replace with null if unknown."])
+    if not findings:
+        findings = [["(none)", "No obvious anomalies found", "No action", now]]
 
-        # Email format
-        if "email" in col_l:
-            invalid = ~s.astype(str).str.match(_EMAIL_RE, na=False) & ~blank_mask
-            for i in s[invalid].index:
-                rows.append([int(i)+1, col, str(s.iloc[i]),
-                             "Invalid email format",
-                             "Fix typos; validate with regex on input; consider domain allow-list."])
+    hdr = ["Field", "Reason", "Recommendation", "Detected At"]
+    return hdr, findings
 
-        # ID duplicates
-        if col_l.endswith("id") or col_l.startswith("id"):
-            dup = s.duplicated(keep=False) & s.notna() & ~blank_mask
-            for i in s[dup].index:
-                rows.append([int(i)+1, col, str(s.iloc[i]),
-                             "Duplicate identifier",
-                             "Deduplicate records; enforce UNIQUE constraint."])
 
-        # Long free-text spikes (very long strings)
-        if s.dtype == object and not pd.api.types.is_numeric_dtype(s):
-            lens = s.dropna().astype(str).str.len()
-            if not lens.empty:
-                long_th = lens.quantile(0.99)
-                long_idx = lens[lens > long_th].index
-                for i in long_idx:
-                    rows.append([int(i)+1, col, str(s.iloc[i])[:120] + ("…" if len(str(s.iloc[i])) > 120 else ""),
-                                 f"Unusually long text (> p99 ≈ {int(long_th)} chars)",
-                                 "Trim noise; split into structured fields; cap input length."])
+# ──────────────────────────────────────────────────────────────────────────────
+# LLM plumbing
+# ──────────────────────────────────────────────────────────────────────────────
 
-    hdr = ["Row #", "Field", "Value", "Reason", "Recommendation"]
-    return hdr, rows
+def _provider_from_defaults(defaults: dict) -> str:
+    # Expected: "openai" or "gemini" (case-insensitive). Anything else -> no-op.
+    return (defaults.get("provider") or defaults.get("ai_provider") or "").strip().lower()
+
+def _openai_chat_json(defaults: dict, prompt: str, model: str | None = None, timeout=60):
+    api_key = (defaults.get("openai_api_key") or defaults.get("api_key") or "").strip()
+    url = (defaults.get("chat_url") or "https://api.openai.com/v1/chat/completions").strip()
+    mdl = model or defaults.get("default_model") or "gpt-4o-mini"
+    if not api_key:
+        raise RuntimeError("OpenAI API key not configured")
+
+    resp = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "model": mdl,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": "You are a precise data analyst. Respond ONLY with valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": float(defaults.get("temperature", 0.3)),
+            "max_tokens": int(defaults.get("max_tokens", 1200)),
+        },
+        timeout=timeout,
+        verify=False,
+    )
+    resp.raise_for_status()
+    return json.loads(resp.json()["choices"][0]["message"]["content"])
+
+def _gemini_json(defaults: dict, prompt: str, model: str | None = None, timeout=60):
+    api_key = (defaults.get("gemini_api_key") or "").strip()
+    base = (defaults.get("gemini_base_url") or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+    mdl = model or defaults.get("default_model") or "gemini-1.5-flash"
+    if not api_key:
+        raise RuntimeError("Gemini API key not configured")
+
+    url = f"{base}/models/{mdl}:generateContent?key={api_key}"
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": float(defaults.get("temperature", 0.3))},
+    }
+    resp = requests.post(url, json=body, timeout=timeout)
+    resp.raise_for_status()
+    text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+    # try to isolate a JSON block if the model wrapped it in prose
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start:end+1]
+    return json.loads(text)
+
+def _llm_json(defaults: dict, prompt: str, model: str | None = None, timeout=60):
+    prov = _provider_from_defaults(defaults)
+    if prov == "openai":
+        return _openai_chat_json(defaults, prompt, model, timeout)
+    if prov == "gemini":
+        return _gemini_json(defaults, prompt, model, timeout)
+    raise RuntimeError("No AI provider configured")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# AI Catalog & AI Anomalies
+# ──────────────────────────────────────────────────────────────────────────────
+
+def ai_catalog_analysis(df: pd.DataFrame, defaults: dict):
+    """
+    Uses the configured LLM to generate a data catalog.
+    Falls back to heuristic catalog if the call fails.
+    """
+    try:
+        # compact schema & samples
+        preview_rows = min(12, len(df))
+        sample = df.head(preview_rows).astype(str).to_dict(orient="records")
+        schema = []
+        for c in df.columns:
+            dtype = str(df[c].dtype)
+            nulls = int(df[c].isna().sum())
+            uniq = int(df[c].nunique(dropna=True))
+            schema.append({"name": c, "dtype": dtype, "nulls": nulls, "unique": uniq})
+
+        prompt = (
+            "You are generating a data catalog for a tabular dataset.\n"
+            "Return STRICT JSON with this structure:\n"
+            "{ \"items\": [\n"
+            "  {\"field\": str, \"friendly_name\": str, \"description\": str,\n"
+            "   \"data_type\": one_of[\"Text\",\"Numeric\",\"Date\",\"Boolean\",\"Categorical\"],\n"
+            "   \"nullable\": one_of[\"Yes\",\"No\"], \"example\": str }\n"
+            "]}\n\n"
+            f"Columns & quick stats:\n{json.dumps(schema, ensure_ascii=False)}\n\n"
+            f"Sample rows (strings):\n{json.dumps(sample, ensure_ascii=False)}\n\n"
+            "Be concise and business-friendly in descriptions. Do NOT include any text outside the JSON."
+        )
+
+        obj = _llm_json(defaults, prompt)
+        items = obj.get("items") or []
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        rows = []
+        for it in items:
+            rows.append([
+                it.get("field",""),
+                it.get("friendly_name",""),
+                it.get("description",""),
+                it.get("data_type",""),
+                it.get("nullable",""),
+                it.get("example",""),
+                now
+            ])
+        if not rows:
+            raise RuntimeError("Empty AI catalog")
+        hdr = ["Field", "Friendly Name", "Description", "Data Type", "Nullable", "Example", "Analysis Date"]
+        return hdr, rows
+
+    except Exception:
+        # fallback to heuristic
+        return catalog_analysis(df)
+
+
+def ai_detect_anomalies(df: pd.DataFrame, defaults: dict):
+    """
+    Uses the configured LLM to detect anomalies with reasons & remediation.
+    Falls back to rule-based detection if the call fails.
+    """
+    try:
+        preview_rows = min(30, len(df))
+        sample = df.head(preview_rows).astype(str).to_dict(orient="records")
+        quick = {}
+        for c in df.columns:
+            s = df[c]
+            quick[c] = {
+                "nulls": int(s.isna().sum()),
+                "blanks": int((s.astype(str).str.strip() == "").sum()),
+                "unique": int(s.nunique(dropna=True)),
+                "dtype": str(s.dtype),
+            }
+
+        prompt = (
+            "You are a data quality expert. Find likely anomalies in this dataset.\n"
+            "Return STRICT JSON ONLY in this format:\n"
+            "{ \"items\": [ {\"field\": str, \"reason\": str, \"recommendation\": str} ] }\n"
+            "Reasons should be specific (e.g., 'outliers > 6 sigma', 'invalid email format', 'suspicious zero balance').\n"
+            "Recommendations should be actionable (e.g., 'validate format with regex', 'clip to 3σ', 'backfill from source').\n\n"
+            f\"Quick stats per column: {json.dumps(quick, ensure_ascii=False)}\n\n"
+            f\"Sample rows (strings): {json.dumps(sample, ensure_ascii=False)}\n\n"
+            "Output ONLY valid JSON."
+        )
+
+        obj = _llm_json(defaults, prompt)
+        items = obj.get("items") or []
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        rows = []
+        for it in items:
+            rows.append([
+                it.get("field",""),
+                it.get("reason",""),
+                it.get("recommendation",""),
+                now
+            ])
+        if not rows:
+            raise RuntimeError("Empty AI anomalies")
+        hdr = ["Field", "Reason", "Recommendation", "Detected At"]
+        return hdr, rows
+
+    except Exception:
+        return _rule_based_anomalies(df)
