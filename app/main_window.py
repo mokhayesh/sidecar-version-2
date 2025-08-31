@@ -1,12 +1,15 @@
+# app/main_window.py
+
 import os
 import csv
 from datetime import datetime
 
 import wx
-import wx.adv as adv
+import wx.adv as adv               # GIF via AnimationCtrl
 import wx.grid as gridlib
 import pandas as pd
 
+# ---- local modules ----
 from app.settings import SettingsWindow, defaults, save_defaults
 from app.dialogs import QualityRuleDialog, DataBuddyDialog, SyntheticDataDialog
 from app.analysis import (
@@ -19,6 +22,9 @@ from app.analysis import (
 from app.s3_utils import download_text_from_uri, upload_to_s3
 
 
+# -----------------------------
+# Utility: fonts (avoid wx.FONTSTYLE typo)
+# -----------------------------
 def _font(size=10, weight="normal"):
     w = {
         "normal": wx.FONTWEIGHT_NORMAL,
@@ -31,7 +37,13 @@ def _font(size=10, weight="normal"):
                    weight=w)
 
 
+# -----------------------------
+# Minimal anomaly detection (local)
+# -----------------------------
 def _detect_anomalies_simple(df: pd.DataFrame):
+    """
+    Returns (headers, rows) with simple reasons + recommendations.
+    """
     out_rows = []
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -39,18 +51,22 @@ def _detect_anomalies_simple(df: pd.DataFrame):
 
     for col in df.columns:
         s = df[col]
-        reasons, recs = [], []
+        reasons = []
+        recs = []
 
+        # blanks
         empties = int((s.astype(str).str.strip() == "").sum())
         if empties:
             reasons.append(f"{empties} blank values")
             recs.append("Fill missing values or drop rows if appropriate.")
 
+        # nulls
         nulls = int(s.isnull().sum())
         if nulls:
             reasons.append(f"{nulls} nulls")
             recs.append("Impute nulls or enforce NOT NULL constraint.")
 
+        # type checks
         if pd.api.types.is_numeric_dtype(s):
             vals = pd.to_numeric(s, errors="coerce")
             zden = vals.std(ddof=0) if vals.std(ddof=0) else 1
@@ -61,7 +77,8 @@ def _detect_anomalies_simple(df: pd.DataFrame):
                 recs.append("Review thresholds; consider winsorization or robust scaling.")
         else:
             if "date" in col.lower() or "timestamp" in col.lower():
-                bad = int(pd.to_datetime(s, errors="coerce").isna().sum())
+                parsed = pd.to_datetime(s, errors="coerce")
+                bad = int(parsed.isna().sum())
                 if bad:
                     reasons.append(f"{bad} unparseable dates")
                     recs.append("Normalize date formats; parse with a single standard.")
@@ -86,20 +103,32 @@ def _detect_anomalies_simple(df: pd.DataFrame):
     return hdr, out_rows
 
 
+# --------------------------------
+# Paths we’ll search for media
+# --------------------------------
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(APP_DIR)
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
 
+# --------------------------------
+# Header with GIF-first media (fits correctly)
+# --------------------------------
 class HeaderMedia(wx.Panel):
+    """
+    Prefer an animated GIF (assets/sidecar.gif) using wx.adv.AnimationCtrl.
+    It reads the GIF's natural size and resizes this panel to match,
+    so nothing is cropped or stretched. If no GIF, falls back to static PNG/JPG/ICO.
+    """
     def __init__(self, parent, max_w=360, max_h=180):
         super().__init__(parent)
         self.SetBackgroundColour(wx.Colour(26, 26, 26))
-        self.SetDoubleBuffered(True)
-
         s = wx.BoxSizer(wx.VERTICAL)
+
+        loaded_desc = None
         self.anim_ctrl = None
 
+        # 1) GIF first — 'sidecar.gif'
         gif_path = None
         for d in (ASSETS_DIR, BASE_DIR, APP_DIR, os.getcwd()):
             p = os.path.join(d, "sidecar.gif")
@@ -111,75 +140,103 @@ class HeaderMedia(wx.Panel):
             try:
                 anim = adv.Animation(gif_path)
                 if anim.IsOk():
-                    nat = anim.GetSize() if hasattr(anim, "GetSize") else wx.Size(320, 214)
-                    w = min(nat.width, max_w)
-                    h = min(nat.height, max_h)
+                    # Read natural size and clamp by max bounds (letterbox with panel, no scaling).
+                    nat_size = anim.GetSize() if hasattr(anim, "GetSize") else wx.Size(320, 214)
+                    w, h = nat_size.width, nat_size.height
+                    # Clamp panel size if desired (we don't scale the GIF; we give it the room it needs).
+                    w = min(w, max_w)
+                    h = min(h, max_h)
+
+                    # If the GIF is bigger than the clamp, center it inside the given area
                     self.SetMinSize((w, h))
                     self.SetSize((w, h))
 
-                    self.anim_ctrl = adv.AnimationCtrl(self, -1, anim, style=wx.BORDER_NONE)
+                    self.anim_ctrl = adv.AnimationCtrl(self, -1, anim, pos=(0, 0))
                     self.anim_ctrl.SetBackgroundColour(wx.Colour(26, 26, 26))
                     self.anim_ctrl.Play()
 
-                    # center inside panel if letterboxed
-                    hs = wx.BoxSizer(wx.VERTICAL)
-                    hs.AddStretchSpacer()
-                    row = wx.BoxSizer(wx.HORIZONTAL)
-                    row.AddStretchSpacer()
-                    row.Add(self.anim_ctrl, 0, wx.ALIGN_CENTER)
-                    row.AddStretchSpacer()
-                    hs.Add(row, 0, wx.ALIGN_CENTER)
-                    hs.AddStretchSpacer()
-                    self.SetSizer(hs)
-                    return
-            except Exception:
-                pass
+                    # Center the GIF inside the panel if panel > gif dims
+                    gif_w, gif_h = nat_size.width, nat_size.height
+                    if (w > gif_w) or (h > gif_h):
+                        hs = wx.BoxSizer(wx.VERTICAL)
+                        hs.AddStretchSpacer()
+                        row = wx.BoxSizer(wx.HORIZONTAL)
+                        row.AddStretchSpacer()
+                        row.Add(self.anim_ctrl, 0, wx.ALIGN_CENTER)
+                        row.AddStretchSpacer()
+                        hs.Add(row, 0, wx.ALIGN_CENTER)
+                        hs.AddStretchSpacer()
+                        self.SetSizer(hs)
+                    else:
+                        s.Add(self.anim_ctrl, 0, wx.ALIGN_LEFT | wx.ALIGN_TOP, 0)
+                        self.SetSizer(s)
 
-        # fallback static image
-        bmp = None
-        candidates = []
-        for d in (ASSETS_DIR, BASE_DIR, APP_DIR, os.getcwd()):
-            candidates += [
-                os.path.join(d, "sidecar-01.png"),
-                os.path.join(d, "sidecar.png"),
-                os.path.join(d, "sidecar-01.jpg"),
-                os.path.join(d, "sidecar.jpg"),
-                os.path.join(d, "sidecar-01.ico"),
-                os.path.join(d, "sidecar.ico"),
-            ]
-        chosen = next((p for p in candidates if os.path.exists(p)), None)
-        if chosen:
-            bmp = self._load_bitmap_fit(chosen, max_w, max_h)
-        if bmp and bmp.IsOk():
-            self.SetMinSize((bmp.GetWidth(), bmp.GetHeight()))
-            s.Add(wx.StaticBitmap(self, bitmap=bmp), 0)
-            self.SetSizer(s)
-        else:
-            self.SetMinSize((max_w, max_h))
-            ph = wx.Panel(self, size=(max_w, max_h))
-            ph.SetBackgroundColour(wx.Colour(32, 32, 32))
-            msg = wx.StaticText(ph, label="Add assets/sidecar.gif")
-            msg.SetForegroundColour(wx.Colour(235, 235, 235))
-            msg.SetFont(_font(9, "bold"))
-            hs = wx.BoxSizer(wx.VERTICAL)
-            hs.AddStretchSpacer()
-            row = wx.BoxSizer(wx.HORIZONTAL)
-            row.AddStretchSpacer()
-            row.Add(msg, 0, wx.ALIGN_CENTER)
-            row.AddStretchSpacer()
-            hs.Add(row, 0, wx.ALIGN_CENTER)
-            hs.AddStretchSpacer()
-            ph.SetSizer(hs)
-            s.Add(ph, 1, wx.EXPAND)
-            self.SetSizer(s)
+                    loaded_desc = f"Header (GIF): {gif_path}"
+                else:
+                    gif_path = None
+            except Exception as e:
+                gif_path = None
+                loaded_desc = f"GIF load error: {e}"
+
+        if not gif_path:
+            # 2) Static bitmap fallback (scaled to fit area neatly)
+            bmp = None
+            candidates = []
+            for d in (ASSETS_DIR, BASE_DIR, APP_DIR, os.getcwd()):
+                candidates += [
+                    os.path.join(d, "sidecar-01.png"),
+                    os.path.join(d, "sidecar.png"),
+                    os.path.join(d, "sidecar-01.jpg"),
+                    os.path.join(d, "sidecar.jpg"),
+                    os.path.join(d, "sidecar-01.ico"),
+                    os.path.join(d, "sidecar.ico"),
+                ]
+            chosen = next((p for p in candidates if os.path.exists(p)), None)
+            if chosen:
+                bmp = self._load_bitmap_fit(chosen, max_w, max_h)
+            if bmp and bmp.IsOk():
+                self.SetMinSize((bmp.GetWidth(), bmp.GetHeight()))
+                s.Add(wx.StaticBitmap(self, bitmap=bmp), 0, wx.ALL, 0)
+                self.SetSizer(s)
+                loaded_desc = f"Header (image): {chosen}"
+            else:
+                # 3) Final placeholder
+                self.SetMinSize((max_w, max_h))
+                ph = wx.Panel(self, size=(max_w, max_h))
+                ph.SetBackgroundColour(wx.Colour(32, 32, 32))
+                msg = wx.StaticText(ph, label="Add assets/sidecar.gif")
+                msg.SetForegroundColour(wx.Colour(235, 235, 235))
+                msg.SetFont(_font(9, "bold"))
+                hs = wx.BoxSizer(wx.VERTICAL)
+                hs.AddStretchSpacer()
+                row = wx.BoxSizer(wx.HORIZONTAL)
+                row.AddStretchSpacer()
+                row.Add(msg, 0, wx.ALIGN_CENTER)
+                row.AddStretchSpacer()
+                hs.Add(row, 0, wx.ALIGN_CENTER)
+                hs.AddStretchSpacer()
+                ph.SetSizer(hs)
+                s.Add(ph, 1, wx.EXPAND | wx.ALL, 0)
+                self.SetSizer(s)
+                loaded_desc = "Header: no media found"
+
+        # status bar diagnostics (right slot)
+        frame = self.GetTopLevelParent()
+        try:
+            frame.SetStatusText(loaded_desc or "Header ready", 1)
+        except Exception:
+            pass
 
     @staticmethod
     def _load_bitmap_fit(path: str, max_w: int, max_h: int) -> wx.Bitmap | None:
         try:
             img = wx.Image(path, wx.BITMAP_TYPE_ANY)
-            if not img.IsOk(): return None
+            if not img.IsOk():
+                return None
             iw, ih = img.GetWidth(), img.GetHeight()
-            if iw == 0 or ih == 0: return None
+            if iw == 0 or ih == 0:
+                return None
+            # Scale preserving aspect ratio to fit inside max_w x max_h
             scale = min(max_w / iw, max_h / ih, 1.0)
             w = max(1, int(iw * scale))
             h = max(1, int(ih * scale))
@@ -189,70 +246,68 @@ class HeaderMedia(wx.Panel):
             return None
 
 
+# --------------------------------
+# Main window
+# --------------------------------
 class MainWindow(wx.Frame):
     def __init__(self):
         super().__init__(None, title="Sidecar Application: Data Governance", size=(1200, 780))
 
-        self._set_window_icon()
+        self._set_window_icon()  # <<< fix broken icon issue
 
+        # status bar with 2 fields: left free, right for diagnostics
         sb = self.CreateStatusBar(2)
         sb.SetStatusWidths([-1, 500])
-
-        # swallow Alt/Menu so Windows doesn't show key-tip overlays
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
 
         self.raw_data = []
         self.headers = []
         self.current_process = ""
         self.quality_rules = {}
-        self.knowledge_files = []
+        self.knowledge_files = []  # for Little Buddy reference
 
         self._build_ui()
         self.Centre()
         self.Show()
 
-    def _on_char_hook(self, evt: wx.KeyEvent):
-        key = evt.GetKeyCode()
-        if key in (wx.WXK_ALT, wx.WXK_MENU):
-            # eat the Alt key so OS key-tips (black/yellow squares) never appear
-            return
-        evt.Skip()
-
     def _set_window_icon(self):
+        """Load a proper .ico (no emojis) to avoid icon glitches on Windows."""
         ico = None
+        candidates = []
         for d in (ASSETS_DIR, BASE_DIR, APP_DIR, os.getcwd()):
-            for name in ("sidecar.ico", "sidecar-01.ico"):
-                p = os.path.join(d, name)
-                if os.path.exists(p):
-                    try:
-                        ico = wx.Icon(p, wx.BITMAP_TYPE_ICO)
-                        if ico.IsOk():
-                            self.SetIcon(ico)
-                            return
-                    except Exception:
-                        pass
+            candidates += [os.path.join(d, "sidecar.ico"), os.path.join(d, "sidecar-01.ico")]
+        for p in candidates:
+            if os.path.exists(p):
+                try:
+                    ico = wx.Icon(p, wx.BITMAP_TYPE_ICO)
+                    if ico.IsOk():
+                        self.SetIcon(ico)
+                        return
+                except Exception:
+                    pass
+        # Fallback: do nothing if we can't load an icon.
 
+    # ----------------------------
+    # UI
+    # ----------------------------
     def _build_ui(self):
         root = wx.Panel(self)
         root.SetBackgroundColour(wx.Colour(26, 26, 26))
-        root.SetDoubleBuffered(True)
-
         main = wx.BoxSizer(wx.VERTICAL)
 
+        # Header (GIF/media left + centered title)
         header = wx.Panel(root)
         header.SetBackgroundColour(wx.Colour(26, 26, 26))
-        header.SetDoubleBuffered(True)
-
         header_s = wx.BoxSizer(wx.HORIZONTAL)
 
+        # Left: media (fit within 360x180; your GIF is 320x214 and will be letterboxed vertically)
         media = HeaderMedia(header, max_w=360, max_h=180)
         header_s.Add(media, 0, wx.ALL, 0)
 
+        # Center: title
         center = wx.Panel(header)
         center.SetBackgroundColour(wx.Colour(26, 26, 26))
-        center.SetDoubleBuffered(True)
         cs = wx.BoxSizer(wx.VERTICAL)
-        title = wx.StaticText(center, label="Sidecar Application: Data Governance", style=wx.ST_NO_AUTORESIZE)
+        title = wx.StaticText(center, label="Sidecar Application: Data Governance")
         title.SetFont(_font(16, "bold"))
         title.SetForegroundColour(wx.Colour(235, 235, 235))
         cs.AddStretchSpacer()
@@ -264,6 +319,7 @@ class MainWindow(wx.Frame):
         header.SetSizer(header_s)
         main.Add(header, 0, wx.EXPAND | wx.ALL, 0)
 
+        # Menu bar
         mb = wx.MenuBar()
         m_file = wx.Menu()
         m_set = wx.Menu()
@@ -275,6 +331,7 @@ class MainWindow(wx.Frame):
         mb.Append(m_set, "&Settings")
         self.SetMenuBar(mb)
 
+        # Toolbar / buttons (wrap)
         buttons = wx.WrapSizer(wx.HORIZONTAL)
 
         def add_btn(label, handler, process=None):
@@ -304,6 +361,7 @@ class MainWindow(wx.Frame):
 
         main.Add(buttons, 0, wx.ALIGN_LEFT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
 
+        # Knowledge file list line
         kline = wx.BoxSizer(wx.HORIZONTAL)
         self.klabel = wx.StaticText(root, label="Knowledge Files: (none)")
         self.klabel.SetForegroundColour(wx.Colour(200, 200, 200))
@@ -311,6 +369,7 @@ class MainWindow(wx.Frame):
         kline.Add(self.klabel, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
         main.Add(kline, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
 
+        # Data grid
         self.grid = gridlib.Grid(root)
         self.grid.CreateGrid(0, 0)
         self.grid.SetDefaultCellBackgroundColour(wx.Colour(55, 55, 55))
@@ -323,7 +382,9 @@ class MainWindow(wx.Frame):
 
         root.SetSizer(main)
 
-    # ====== handlers (unchanged functionality) ======
+    # ----------------------------
+    # Display grid
+    # ----------------------------
     def _display(self, hdr, data):
         g = self.grid
         g.ClearGrid()
@@ -331,11 +392,14 @@ class MainWindow(wx.Frame):
             g.DeleteRows(0, g.GetNumberRows())
         if g.GetNumberCols():
             g.DeleteCols(0, g.GetNumberCols())
+
         if not hdr:
             return
+
         g.AppendCols(len(hdr))
         for i, h in enumerate(hdr):
             g.SetColLabelValue(i, h)
+
         if data:
             g.AppendRows(len(data))
             for r, row in enumerate(data):
@@ -359,9 +423,14 @@ class MainWindow(wx.Frame):
         event.Skip()
         wx.CallAfter(self.adjust_grid)
 
-    def on_settings(self, _): SettingsWindow(self).Show()
+    # ----------------------------
+    # Handlers
+    # ----------------------------
+    def on_settings(self, _):
+        SettingsWindow(self).Show()
 
     def on_load_knowledge(self, _):
+        """Select multiple knowledge files (images/csv/json/txt/md)."""
         wildcard = (
             "Knowledge files (*.txt;*.md;*.csv;*.json;*.png;*.jpg;*.jpeg;*.gif)|"
             "*.txt;*.md;*.csv;*.json;*.png;*.jpg;*.jpeg;*.gif|"
@@ -370,21 +439,35 @@ class MainWindow(wx.Frame):
             "Images (*.png;*.jpg;*.jpeg;*.gif)|*.png;*.jpg;*.jpeg;*.gif|"
             "All files (*.*)|*.*"
         )
-        dlg = wx.FileDialog(self, "Select knowledge files",
-                            wildcard=wildcard,
-                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE)
+        dlg = wx.FileDialog(
+            self,
+            "Select knowledge files",
+            wildcard=wildcard,
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE
+        )
         if dlg.ShowModal() != wx.ID_OK:
             dlg.Destroy(); return
         chosen = dlg.GetPaths()
         dlg.Destroy()
 
         allowed_exts = {".txt", ".md", ".csv", ".json", ".png", ".jpg", ".jpeg", ".gif"}
+        added = 0
         for p in chosen:
-            if os.path.splitext(p)[1].lower() in allowed_exts and p not in self.knowledge_files:
+            ext = os.path.splitext(p)[1].lower()
+            if ext not in allowed_exts:
+                wx.LogWarning(f"Unsupported file type skipped: {p}")
+                continue
+            if p not in self.knowledge_files:
                 self.knowledge_files.append(p)
+                added += 1
 
         names = [os.path.basename(p) for p in self.knowledge_files]
         self.klabel.SetLabel("Knowledge Files: " + (",  ".join(names) if names else "(none)"))
+
+        try:
+            self.SetStatusText(f"Added {added} knowledge file(s). Total: {len(self.knowledge_files)}", 1)
+        except Exception:
+            pass
 
     def on_load_file(self, _):
         dlg = wx.FileDialog(self, "Open CSV/TXT", wildcard="CSV/TXT|*.csv;*.txt",
@@ -399,7 +482,8 @@ class MainWindow(wx.Frame):
 
     def on_load_s3(self, _):
         uri = wx.GetTextFromUser("Enter HTTP(S) or S3 URI:", "Load from URI/S3")
-        if not uri: return
+        if not uri:
+            return
         try:
             text = download_text_from_uri(uri)
             self.headers, self.raw_data = detect_and_split_data(text)
@@ -421,7 +505,8 @@ class MainWindow(wx.Frame):
 
     def on_rules(self, _):
         if not self.headers:
-            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING); return
+            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
+            return
         QualityRuleDialog(self, self.headers, self.quality_rules).ShowModal()
 
     def on_buddy(self, _):
@@ -429,8 +514,10 @@ class MainWindow(wx.Frame):
 
     def do_analysis(self, _evt, kind: str):
         if not self.headers:
-            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING); return
+            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
+            return
         df = pd.DataFrame(self.raw_data, columns=self.headers)
+
         if kind == "Profile":
             hdr, data = profile_analysis(df)
         elif kind == "Quality":
@@ -441,13 +528,15 @@ class MainWindow(wx.Frame):
             hdr, data = compliance_analysis(df)
         else:
             return
+
         self.current_process = kind
         self._display(hdr, data)
         wx.MessageBox(upload_to_s3(kind, hdr, data), "Analysis", wx.OK | wx.ICON_INFORMATION)
 
     def on_detect_anomalies(self, _):
         if not self.headers:
-            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING); return
+            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
+            return
         df = pd.DataFrame(self.raw_data, columns=self.headers)
         hdr, data = _detect_anomalies_simple(df)
         self.current_process = "DetectAnomalies"
