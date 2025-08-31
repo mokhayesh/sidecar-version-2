@@ -124,19 +124,33 @@ class HeaderMedia(wx.Panel):
         self.SetBackgroundColour(wx.Colour(26, 26, 26))
         s = wx.BoxSizer(wx.VERTICAL)
 
-        mp4_path = os.path.join(ASSETS_DIR, "sidecar.mp4")
-        gif_path = os.path.join(ASSETS_DIR, "sidecar.gif")
-        image_candidates = [
-            os.path.join(ASSETS_DIR, "sidecar-01.png"),
-            os.path.join(ASSETS_DIR, "sidecar-01.jpg"),
-            os.path.join(ASSETS_DIR, "sidecar-01.jpeg"),
-            os.path.join(ASSETS_DIR, "sidecar-01.ico"),
+        # Search in multiple places (your images are in project root)
+        search_dirs = [
+            ASSETS_DIR,
+            BASE_DIR,
+            APP_DIR,
+            os.getcwd(),
         ]
 
+        # file names we look for
+        video_name = "sidecar.mp4"
+        gif_name   = "sidecar.gif"
+        image_names = [
+            "sidecar-01.png", "sidecar-01.jpg", "sidecar-01.jpeg",
+            "sidecar.png", "sidecar.jpg",
+            "sidecar-02.jpg",
+            "sidecar-01.ico", "sidecar.ico",
+        ]
+
+        mp4_path = self._find_first(search_dirs, [video_name])
+        gif_path = self._find_first(search_dirs, [gif_name])
+        img_paths = [os.path.join(d, n) for d in search_dirs for n in image_names]
+
         used = False
+        loaded_desc = None
 
         # 1) HTML5 video
-        if not used and webview is not None and os.path.exists(mp4_path):
+        if not used and webview is not None and mp4_path and os.path.exists(mp4_path):
             try:
                 wv = webview.WebView.New(self, style=wx.NO_BORDER)
                 abs_mp4 = os.path.abspath(mp4_path).replace("\\", "/")
@@ -164,52 +178,73 @@ class HeaderMedia(wx.Panel):
                 wv.SetMinSize((width, height))
                 s.Add(wv, 0, wx.ALL, 0)
                 used = True
+                loaded_desc = f"Header: MP4  ({mp4_path})"
             except Exception:
                 used = False
 
         # 2) GIF
-        if not used and wxadv is not None and os.path.exists(gif_path):
+        if not used and wxadv is not None and gif_path and os.path.exists(gif_path):
             try:
                 anim = wxadv.Animation(gif_path)
-                ctrl = wxadv.AnimationCtrl(self, -1, anim, style=wx.NO_BORDER)
-                ctrl.SetMinSize((width, height))
-                ctrl.Play()
-                s.Add(ctrl, 0, wx.ALL, 0)
-                used = True
+                if anim.IsOk():
+                    ctrl = wxadv.AnimationCtrl(self, -1, anim, style=wx.NO_BORDER)
+                    ctrl.SetMinSize((width, height))
+                    ctrl.Play()
+                    s.Add(ctrl, 0, wx.ALL, 0)
+                    used = True
+                    loaded_desc = f"Header: GIF  ({gif_path})"
             except Exception:
                 used = False
 
         # 3) PNG/JPG/ICO (robust load + scaling)
         if not used:
-            bmp = self._load_bitmap_scaled(image_candidates, height)
+            bmp, chosen = self._load_bitmap_scaled(img_paths, height)
             if bmp and bmp.IsOk():
                 s.Add(wx.StaticBitmap(self, bitmap=bmp), 0, wx.ALL, 0)
                 used = True
+                loaded_desc = f"Header: Image ({chosen})"
 
         # 4) Visible placeholder (never blank)
         if not used:
             placeholder = wx.Panel(self, size=(width, height))
             placeholder.SetBackgroundColour(wx.Colour(32, 32, 32))
             phs = wx.BoxSizer(wx.VERTICAL)
-            msg = wx.StaticText(placeholder, label="Add image:\nassets/sidecar-01.png")
+            msg = wx.StaticText(
+                placeholder,
+                label="No header media found.\nPut a file like sidecar-01.jpg here:\n"
+                      + "\n".join([f"• {d}" for d in search_dirs])
+            )
             msg.SetForegroundColour(wx.Colour(220, 220, 220))
             msg.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
             msg.Wrap(width - 8)
             phs.AddStretchSpacer(1)
-            phs.Add(msg, 0, wx.ALIGN_CENTER_HORIZONTAL)
+            phs.Add(msg, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.LEFT | wx.RIGHT, 6)
             phs.AddStretchSpacer(1)
             placeholder.SetSizer(phs)
-            # simple border
-            box = wx.BoxSizer(wx.VERTICAL)
-            box.Add(placeholder, 1, wx.EXPAND | wx.ALL, 1)
-            border = wx.Panel(self)
-            border.SetSizer(box)
-            border.SetBackgroundColour(wx.Colour(100, 100, 100))
-            s.Add(border, 0, wx.ALL, 0)
+            s.Add(placeholder, 1, wx.EXPAND)
+
+        # Write what we loaded into the status bar (left cell)
+        frame = self.GetTopLevelParent()
+        try:
+            if loaded_desc:
+                frame.SetStatusText(loaded_desc, 0)
+            else:
+                frame.SetStatusText("Header: no media found", 0)
+        except Exception:
+            pass
 
         self.SetSizer(s)
 
-    def _load_bitmap_scaled(self, paths, target_h: int) -> wx.Bitmap | None:
+    @staticmethod
+    def _find_first(dirs: list[str], names: list[str]) -> str | None:
+        for d in dirs:
+            for n in names:
+                p = os.path.join(d, n)
+                if os.path.exists(p):
+                    return p
+        return None
+
+    def _load_bitmap_scaled(self, paths: list[str], target_h: int) -> tuple[wx.Bitmap | None, str | None]:
         """Load first existing image using auto-detected type and scale by height."""
         for p in paths:
             if os.path.exists(p):
@@ -223,10 +258,10 @@ class HeaderMedia(wx.Panel):
                         sw = max(1, int(bw * scale))
                         sh = max(1, int(bh * scale))
                         img = img.Scale(sw, sh, wx.IMAGE_QUALITY_HIGH)
-                    return wx.Bitmap(img)
+                    return wx.Bitmap(img), p
                 except Exception:
                     continue
-        return None
+        return None, None
 
 
 # ------------------------------- Main Window --------------------------------
@@ -236,9 +271,16 @@ class MainWindow(wx.Frame):
 
         # Title-bar icon (.ico)
         try:
-            icon_path = os.path.join(ASSETS_DIR, "sidecar-01.ico")
-            if os.path.exists(icon_path):
-                self.SetIcon(wx.Icon(icon_path, wx.BITMAP_TYPE_ICO))
+            # Also search project root for the icon
+            icon_candidates = [
+                os.path.join(ASSETS_DIR, "sidecar-01.ico"),
+                os.path.join(BASE_DIR, "sidecar-01.ico"),
+                os.path.join(BASE_DIR, "sidecar.ico"),
+            ]
+            for ic in icon_candidates:
+                if os.path.exists(ic):
+                    self.SetIcon(wx.Icon(ic, wx.BITMAP_TYPE_ICO))
+                    break
         except Exception:
             pass
 
