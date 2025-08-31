@@ -147,8 +147,8 @@ class HeaderMedia(wx.Panel):
         self.SetBackgroundColour(wx.Colour(26, 26, 26))
         s = wx.BoxSizer(wx.VERTICAL)
 
-        mp4_path = os.path.join(ASSETS_DIR, "sidecar.mp4")
         gif_path = os.path.join(ASSETS_DIR, "sidecar.gif")
+        mp4_path = os.path.join(ASSETS_DIR, "sidecar.mp4")
         png_paths = [
             os.path.join(ASSETS_DIR, "sidecar-01.png"),
             os.path.join(ASSETS_DIR, "sidecar-01.jpg"),
