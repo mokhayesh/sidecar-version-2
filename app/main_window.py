@@ -1,10 +1,22 @@
 import os
+import re
 import random
 from datetime import datetime, timedelta
 
 import wx
 import wx.grid as gridlib
 import pandas as pd
+
+# Optional modules for richer header media
+try:
+    import wx.html2 as webview  # HTML5 video via Edge WebView2
+except Exception:
+    webview = None
+
+try:
+    import wx.adv as wxadv  # GIF animation fallback
+except Exception:
+    wxadv = None
 
 from app.settings import SettingsWindow, defaults
 from app.dialogs import QualityRuleDialog, DataBuddyDialog, SyntheticDataDialog
@@ -27,6 +39,7 @@ APP_COMPANY = "Aldin AI LLC"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))            # .../app
 BASE_DIR = os.path.abspath(os.path.join(APP_DIR, os.pardir))    # project root
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+
 
 # -------------------------- Synthetic data helpers ---------------------------
 _FIRST_NAMES = [
@@ -78,7 +91,7 @@ def synth_value(kind: str, i: int) -> str:
         return f"{_r.randint(200,989):03d}-{_r.randint(200,989):03d}-{_r.randint(1000,9999):04d}"
     if kind == "first_name":  return _r.choice(_FIRST_NAMES)
     if kind == "last_name":   return _r.choice(_LAST_NAMES)
-    if kind == "middle_name": return _r.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    if kind == "middle_name": return _r.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") if _r.random()<0.5 else _r.choice(_FIRST_NAMES)
     if kind == "address":
         num = _r.randint(100, 9999)
         st  = _r.choice(_STREETS)
@@ -101,98 +114,170 @@ def synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
         df[col] = [synth_value(kind, i+1) for i in range(n)]
     return df
 
+
 # --------------------------- Header media panel ------------------------------
 class HeaderMedia(wx.Panel):
-    """Simple, robust header that always shows *something*."""
-    def __init__(self, parent, width=220, height=120):
+    """Tries MP4 (WebView2) -> GIF -> PNG/JPG/ICO -> visible placeholder."""
+    def __init__(self, parent, width=160, height=120):
         super().__init__(parent)
-        self.width = width
-        self.height = height
         self.SetMinSize((width, height))
         self.SetBackgroundColour(wx.Colour(26, 26, 26))
-
         s = wx.BoxSizer(wx.VERTICAL)
 
-        # Most-likely places & filenames
-        candidates = []
-        for d in (BASE_DIR, ASSETS_DIR, APP_DIR, os.getcwd()):
-            candidates += [
-                os.path.join(d, "sidecar-01.jpg"),
-                os.path.join(d, "sidecar-01.png"),
-                os.path.join(d, "sidecar.jpg"),
-                os.path.join(d, "sidecar.png"),
-                os.path.join(d, "sidecar-01.jpeg"),
-                os.path.join(d, "sidecar-02.jpg"),
-                os.path.join(d, "sidecar-01.ico"),
-                os.path.join(d, "sidecar.ico"),
-            ]
+        # Search in multiple places (your images are in project root)
+        search_dirs = [
+            ASSETS_DIR,
+            BASE_DIR,
+            APP_DIR,
+            os.getcwd(),
+        ]
 
-        chosen = next((p for p in candidates if os.path.exists(p)), None)
+        # file names we look for
+        video_name = "sidecar.mp4"
+        gif_name   = "sidecar.gif"
+        image_names = [
+            "sidecar-01.png", "sidecar-01.jpg", "sidecar-01.jpeg",
+            "sidecar.png", "sidecar.jpg",
+            "sidecar-02.jpg",
+            "sidecar-01.ico", "sidecar.ico",
+        ]
+
+        mp4_path = self._find_first(search_dirs, [video_name])
+        gif_path = self._find_first(search_dirs, [gif_name])
+        img_paths = [os.path.join(d, n) for d in search_dirs for n in image_names]
+
+        used = False
         loaded_desc = None
 
-        if chosen:
-            bmp = self._load_bitmap_exact_size(chosen, self.width, self.height)
+        # 1) HTML5 video
+        if not used and webview is not None and mp4_path and os.path.exists(mp4_path):
+            try:
+                wv = webview.WebView.New(self, style=wx.NO_BORDER)
+                abs_mp4 = os.path.abspath(mp4_path).replace("\\", "/")
+                html = f"""
+                <html>
+                  <head>
+                    <meta http-equiv='X-UA-Compatible' content='IE=edge'/>
+                    <style>
+                      html, body {{
+                        margin: 0; padding: 0; overflow: hidden; background: #1a1a1a;
+                      }}
+                      video {{
+                        width: {width}px; height: {height}px; object-fit: cover; display: block; background: #1a1a1a;
+                      }}
+                    </style>
+                  </head>
+                  <body>
+                    <video autoplay loop muted playsinline>
+                      <source src="file:///{abs_mp4}" type="video/mp4"/>
+                    </video>
+                  </body>
+                </html>
+                """
+                wv.SetPage(html, "")
+                wv.SetMinSize((width, height))
+                s.Add(wv, 0, wx.ALL, 0)
+                used = True
+                loaded_desc = f"Header: MP4  ({mp4_path})"
+            except Exception:
+                used = False
+
+        # 2) GIF
+        if not used and wxadv is not None and gif_path and os.path.exists(gif_path):
+            try:
+                anim = wxadv.Animation(gif_path)
+                if anim.IsOk():
+                    ctrl = wxadv.AnimationCtrl(self, -1, anim, style=wx.NO_BORDER)
+                    ctrl.SetMinSize((width, height))
+                    ctrl.Play()
+                    s.Add(ctrl, 0, wx.ALL, 0)
+                    used = True
+                    loaded_desc = f"Header: GIF  ({gif_path})"
+            except Exception:
+                used = False
+
+        # 3) PNG/JPG/ICO (robust load + scaling)
+        if not used:
+            bmp, chosen = self._load_bitmap_scaled(img_paths, height)
             if bmp and bmp.IsOk():
                 s.Add(wx.StaticBitmap(self, bitmap=bmp), 0, wx.ALL, 0)
+                used = True
                 loaded_desc = f"Header: Image ({chosen})"
-            else:
-                chosen = None  # fall through to placeholder
 
-        if not chosen:
-            # Visible placeholder with clear instructions
-            ph = wx.Panel(self, size=(self.width, self.height))
-            ph.SetBackgroundColour(wx.Colour(32, 32, 32))
+        # 4) Visible placeholder (never blank)
+        if not used:
+            placeholder = wx.Panel(self, size=(width, height))
+            placeholder.SetBackgroundColour(wx.Colour(32, 32, 32))
             phs = wx.BoxSizer(wx.VERTICAL)
             msg = wx.StaticText(
-                ph,
-                label=("No header media found.\n"
-                       "Place sidecar-01.jpg (or .png/.ico) in either:\n"
-                       f"• {BASE_DIR}\n"
-                       f"• {ASSETS_DIR}\n"
-                       f"• {APP_DIR}\n")
+                placeholder,
+                label="No header media found.\nPut a file like sidecar-01.jpg here:\n"
+                      + "\n".join([f"• {d}" for d in search_dirs])
             )
-            msg.SetForegroundColour(wx.Colour(235, 235, 235))
+            msg.SetForegroundColour(wx.Colour(220, 220, 220))
             msg.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-            msg.Wrap(self.width - 10)
-            phs.AddStretchSpacer()
-            phs.Add(msg, 0, wx.ALIGN_CENTER | wx.LEFT | wx.RIGHT, 6)
-            phs.AddStretchSpacer()
-            ph.SetSizer(phs)
-            s.Add(ph, 1, wx.EXPAND)
-            loaded_desc = "Header: no media found"
+            msg.Wrap(width - 8)
+            phs.AddStretchSpacer(1)
+            phs.Add(msg, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.LEFT | wx.RIGHT, 6)
+            phs.AddStretchSpacer(1)
+            placeholder.SetSizer(phs)
+            s.Add(placeholder, 1, wx.EXPAND)
 
-        self.SetSizer(s)
-
-        # Tell the user (status bar)
+        # Write what we loaded into the status bar (left cell)
         frame = self.GetTopLevelParent()
         try:
-            frame.SetStatusText(loaded_desc or "", 0)
+            if loaded_desc:
+                frame.SetStatusText(loaded_desc, 0)
+            else:
+                frame.SetStatusText("Header: no media found", 0)
         except Exception:
             pass
 
+        self.SetSizer(s)
+
     @staticmethod
-    def _load_bitmap_exact_size(path: str, w: int, h: int) -> wx.Bitmap | None:
-        try:
-            img = wx.Image(path, wx.BITMAP_TYPE_ANY)
-            if not img.IsOk():
-                return None
-            img = img.Scale(max(1, w), max(1, h), wx.IMAGE_QUALITY_HIGH)
-            return wx.Bitmap(img)
-        except Exception:
-            return None
+    def _find_first(dirs: list[str], names: list[str]) -> str | None:
+        for d in dirs:
+            for n in names:
+                p = os.path.join(d, n)
+                if os.path.exists(p):
+                    return p
+        return None
+
+    def _load_bitmap_scaled(self, paths: list[str], target_h: int) -> tuple[wx.Bitmap | None, str | None]:
+        """Load first existing image using auto-detected type and scale by height."""
+        for p in paths:
+            if os.path.exists(p):
+                try:
+                    img = wx.Image(p, wx.BITMAP_TYPE_ANY)  # auto-detect JPG/PNG/GIF/ICO
+                    if not img.IsOk():
+                        continue
+                    bw, bh = img.GetWidth(), img.GetHeight()
+                    if bh > 0 and target_h > 0:
+                        scale = target_h / float(bh)
+                        sw = max(1, int(bw * scale))
+                        sh = max(1, int(bh * scale))
+                        img = img.Scale(sw, sh, wx.IMAGE_QUALITY_HIGH)
+                    return wx.Bitmap(img), p
+                except Exception:
+                    continue
+        return None, None
+
 
 # ------------------------------- Main Window --------------------------------
 class MainWindow(wx.Frame):
     def __init__(self):
         super().__init__(None, title=APP_NAME, size=(1200, 820))
 
-        # Title-bar icon
+        # Title-bar icon (.ico)
         try:
-            for ic in (
+            # Also search project root for the icon
+            icon_candidates = [
                 os.path.join(ASSETS_DIR, "sidecar-01.ico"),
                 os.path.join(BASE_DIR, "sidecar-01.ico"),
                 os.path.join(BASE_DIR, "sidecar.ico"),
-            ):
+            ]
+            for ic in icon_candidates:
                 if os.path.exists(ic):
                     self.SetIcon(wx.Icon(ic, wx.BITMAP_TYPE_ICO))
                     break
@@ -203,7 +288,7 @@ class MainWindow(wx.Frame):
         self.headers: list[str] = []
         self.current_process = ""
         self.quality_rules = {}
-        self.knowledge_files = []
+        self.knowledge_files = []  # [{name, content|path}]
 
         self._build_ui()
         self.Centre()
@@ -225,7 +310,8 @@ class MainWindow(wx.Frame):
         header.SetDoubleBuffered(True)
         header_s = wx.BoxSizer(wx.HORIZONTAL)
 
-        media_left = HeaderMedia(header, width=220, height=120)
+        media_w, media_h = 160, 120
+        media_left = HeaderMedia(header, width=media_w, height=media_h)
         header_s.Add(media_left, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 8)
 
         center_panel = wx.Panel(header)
@@ -243,6 +329,7 @@ class MainWindow(wx.Frame):
         center_panel.SetSizer(csz)
         header_s.Add(center_panel, 1, wx.EXPAND)
 
+        header_s.AddSpacer(media_w + 16)
         header.SetSizer(header_s)
         root_v.Add(header, 0, wx.EXPAND)
 
@@ -502,8 +589,10 @@ class MainWindow(wx.Frame):
         wx.MessageBox(upload_to_s3(self.current_process or "Unknown", hdr, data),
                       "Upload", wx.OK | wx.ICON_INFORMATION)
 
+
 if __name__ == "__main__":
     app = wx.App(False)
+    # Ensure JPG/PNG/GIF/ICO handlers are available on all platforms
     if hasattr(wx, "InitAllImageHandlers"):
         wx.InitAllImageHandlers()
     MainWindow()
