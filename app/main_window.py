@@ -112,6 +112,79 @@ def synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Custom Painted Header (prevents stray native glyphs)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class HeaderPanel(wx.Panel):
+    def __init__(self, parent, title_text: str):
+        super().__init__(parent, style=wx.BORDER_NONE)
+        self.SetBackgroundColour(wx.Colour(26, 26, 26))
+        self.title_text = title_text
+        self.font = wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+
+        # try to load bitmap
+        self.bmp: wx.Bitmap | None = None
+        for path in ("assets/sidecar-01.png", "assets/sidecar-01.jpg", "assets/sidecar-01.jpeg", "assets/sidecar-01.ico"):
+            if os.path.exists(path):
+                try:
+                    if path.endswith(".ico"):
+                        self.bmp = wx.Bitmap(path, wx.BITMAP_TYPE_ICO)
+                    else:
+                        self.bmp = wx.Bitmap(path)
+                    break
+                except Exception:
+                    self.bmp = None
+
+        self.SetMinSize((-1, 140))
+        self.Bind(wx.EVT_PAINT, self.on_paint)
+        self.Bind(wx.EVT_SIZE, lambda e: (self.Refresh(False), e.Skip()))
+        self.SetDoubleBuffered(True)
+
+    def on_paint(self, _evt):
+        dc = wx.AutoBufferedPaintDC(self)
+        w, h = self.GetClientSize()
+        # background
+        dc.SetBrush(wx.Brush(self.GetBackgroundColour()))
+        dc.SetPen(wx.Pen(self.GetBackgroundColour()))
+        dc.DrawRectangle(0, 0, w, h)
+
+        # draw image on the left, scaled to fit height with margin
+        left_margin = 8
+        top_margin = 8
+        img_box_h = h - 2 * top_margin
+        img_w = 0
+        if self.bmp and self.bmp.IsOk() and img_box_h > 0:
+            bw, bh = self.bmp.GetWidth(), self.bmp.GetHeight()
+            if bw > 0 and bh > 0:
+                scale = min(img_box_h / bh, 1.0)
+                sw, sh = int(bw * scale), int(bh * scale)
+                # Convert to image for scaling if needed
+                if scale != 1.0:
+                    img = self.bmp.ConvertToImage()
+                    img = img.Scale(sw, sh, wx.IMAGE_QUALITY_HIGH)
+                    bmp_scaled = wx.Bitmap(img)
+                else:
+                    bmp_scaled = self.bmp
+                    sw, sh = bw, bh
+                dc.DrawBitmap(bmp_scaled, left_margin, top_margin + (img_box_h - sh) // 2, True)
+                img_w = sw + left_margin + 8  # space after image
+
+        # draw centered title
+        dc.SetFont(self.font)
+        dc.SetTextForeground(wx.Colour(240, 240, 240))
+        tw, th = dc.GetTextExtent(self.title_text)
+
+        # center horizontally in the whole header (independent of image),
+        # while image sits at left and never overlaps text
+        cx = (w - tw) // 2
+        # if the centered text would collide with the image area, push it right just enough
+        if cx < img_w + 12:
+            cx = img_w + 12
+        cy = (h - th) // 2
+        dc.DrawText(self.title_text, cx, cy)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Main Window
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -142,54 +215,8 @@ class MainWindow(wx.Frame):
         root.SetBackgroundColour(wx.Colour(40, 40, 40))
         root_v = wx.BoxSizer(wx.VERTICAL)
 
-        # Header bar (separate panel)
-        header = wx.Panel(root)
-        header.SetBackgroundColour(wx.Colour(26, 26, 26))
-        hbox = wx.BoxSizer(wx.HORIZONTAL)
-
-        # Left: sidecar icon (bitmap) in a fixed container
-        bmp = None
-        bmp_w = bmp_h = 0
-        for candidate in ("assets/sidecar-01.png", "assets/sidecar-01.ico"):
-            if os.path.exists(candidate):
-                try:
-                    if candidate.endswith(".ico"):
-                        bmp = wx.Bitmap(candidate, wx.BITMAP_TYPE_ICO)
-                    else:
-                        bmp = wx.Bitmap(candidate)
-                    bmp_w, bmp_h = bmp.GetWidth(), bmp.GetHeight()
-                    break
-                except Exception:
-                    bmp = None
-        left_box = wx.BoxSizer(wx.VERTICAL)
-        if bmp:
-            left_box.Add(wx.StaticBitmap(header, bitmap=bmp), 0, wx.ALL, 8)
-            hbox.Add(left_box, 0, wx.ALIGN_CENTER_VERTICAL)
-        else:
-            # keep some breathing space even if icon missing
-            hbox.AddSpacer(16)
-
-        # Center: perfectly centered title
-        # Trick: add a stretch spacer, then title, then another stretch spacer
-        # and finally a right-side dummy spacer matching icon width to balance.
-        hbox.AddStretchSpacer(1)
-
-        title = wx.StaticText(header, label="Sidecar Application:  Data Governance")
-        title.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        title.SetForegroundColour(wx.Colour(240, 240, 240))
-        hbox.Add(title, 0, wx.ALIGN_CENTER_VERTICAL)
-
-        hbox.AddStretchSpacer(1)
-
-        # Right-balancer: invisible spacer with same width as the left icon area
-        if bmp_w > 0:
-            pad = wx.Panel(header, size=(bmp_w + 16, bmp_h))
-            pad.SetBackgroundColour(wx.Colour(26, 26, 26))
-            hbox.Add(pad, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 0)
-        else:
-            hbox.AddSpacer(16)
-
-        header.SetSizer(hbox)
+        # **Custom-painted header** — eliminates stray icon artifacts
+        header = HeaderPanel(root, "Sidecar Application:  Data Governance")
         root_v.Add(header, 0, wx.EXPAND)
 
         # Menu bar
