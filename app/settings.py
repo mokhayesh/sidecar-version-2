@@ -8,35 +8,33 @@ import wx
 
 DEFAULTS_FILE = "defaults.json"
 
-# Base defaults. These are merged with an existing defaults.json (if present)
-# so your saved values are preserved while new keys get sensible defaults.
 defaults = {
     # Provider & API keys
-    "provider": "auto",                  # auto | openai | gemini | azure | custom
-    "api_key": "",                      # OpenAI (api.openai.com) key
-    "openai_org": "",                   # optional org header if your account requires it
+    "provider": "auto",                  # auto | openai | gemini | custom
+    "api_key": "",                      # OpenAI key
+    "openai_org": "",                   # optional OpenAI organization
     "gemini_api_key": "",               # Google Gemini key
 
     # Chat models / settings
-    "default_model": "gpt-4o",          # main/quality model
-    "fast_model": "gpt-4o-mini",        # fast/streaming model
+    "default_model": "gpt-4o",
+    "fast_model": "gpt-4o-mini",
     "max_tokens": "800",
     "temperature": "0.6",
     "top_p": "1.0",
     "frequency_penalty": "0.0",
     "presence_penalty": "0.0",
 
-    # Chat endpoints (used depending on provider)
-    "url": "https://api.openai.com/v1/chat/completions",  # OpenAI
+    # Chat endpoints
+    "url": "https://api.openai.com/v1/chat/completions",
     "gemini_text_url": "https://generativelanguage.googleapis.com/v1beta/models",
 
     # Image generation
-    "image_provider": "auto",           # auto | openai | stability | none
+    "image_provider": "auto",           # auto | openai | gemini | stability | none
     "image_model": "gpt-image-1",
     "image_generation_url": "https://api.openai.com/v1/images/generations",
     "stability_api_key": "",
 
-    # (Optional) TTS
+    # (Optional) TTS (Azure)
     "azure_tts_key": "",
     "azure_tts_region": "",
 
@@ -78,33 +76,23 @@ def save_defaults() -> None:
 # Settings window with provider & model dropdowns
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Curated model menus (kept small & sensible)
-OPENAI_MAIN = [
-    "gpt-4o", "o4-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4o-mini"
-]
-OPENAI_FAST = [
-    "gpt-4o-mini", "gpt-4.1-mini", "o4-mini"
-]
+OPENAI_MAIN = ["gpt-4o", "o4-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4o-mini"]
+OPENAI_FAST = ["gpt-4o-mini", "gpt-4.1-mini", "o4-mini"]
 OPENAI_IMAGE = ["gpt-image-1"]
 
-GEMINI_MAIN = [
-    "gemini-1.5-pro", "gemini-1.5-flash"
-]
-GEMINI_FAST = [
-    "gemini-1.5-flash", "gemini-1.5-flash-8b"
-]
-# Gemini images are handled via the same model family; we keep a placeholder for UI symmetry
-GEMINI_IMAGE = ["gemini-1.5-flash"]
+GEMINI_MAIN = ["gemini-1.5-pro", "gemini-1.5-flash"]
+GEMINI_FAST = ["gemini-1.5-flash", "gemini-1.5-flash-8b"]
+GEMINI_IMAGE = ["gemini-1.5-flash", "gemini-1.5-pro"]  # used for image output
 
 STABILITY_IMAGE = ["sdxl", "sd3-medium"]
 
 PROVIDERS = ["auto", "openai", "gemini", "custom"]
-IMAGE_PROVIDERS = ["auto", "openai", "stability", "none"]
+IMAGE_PROVIDERS = ["auto", "openai", "gemini", "stability", "none"]
 
 
 class SettingsWindow(wx.Frame):
     def __init__(self, parent):
-        super().__init__(parent, title="Settings", size=(560, 740))
+        super().__init__(parent, title="Settings", size=(560, 760))
         panel = wx.Panel(self)
         s = wx.GridBagSizer(6, 6)
 
@@ -135,13 +123,12 @@ class SettingsWindow(wx.Frame):
         s.Add(self.gemini_key, (row, 1), span=(1, 2), flag=wx.EXPAND)
         row += 1
 
-        # Chat URL (OpenAI or custom)
+        # Chat URLs
         s.Add(wx.StaticText(panel, label="Chat URL:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.chat_url = wx.TextCtrl(panel, value=defaults.get("url", "https://api.openai.com/v1/chat/completions"))
         s.Add(self.chat_url, (row, 1), span=(1, 2), flag=wx.EXPAND)
         row += 1
 
-        # Gemini URL (informational / override)
         s.Add(wx.StaticText(panel, label="Gemini Base URL:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.gemini_url = wx.TextCtrl(panel, value=defaults.get("gemini_text_url", "https://generativelanguage.googleapis.com/v1beta/models"))
         s.Add(self.gemini_url, (row, 1), span=(1, 2), flag=wx.EXPAND)
@@ -203,7 +190,7 @@ class SettingsWindow(wx.Frame):
         s.Add(self.stability, (row, 1), span=(1, 2), flag=wx.EXPAND)
         row += 1
 
-        # TTS (optional)
+        # TTS
         s.Add(wx.StaticText(panel, label="Azure TTS Key:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.azure_key = wx.TextCtrl(panel, value=defaults.get("azure_tts_key", ""))
         s.Add(self.azure_key, (row, 1), flag=wx.EXPAND)
@@ -213,7 +200,7 @@ class SettingsWindow(wx.Frame):
         s.Add(self.azure_region, (row, 3), flag=wx.EXPAND)
         row += 1
 
-        # AWS section
+        # AWS
         s.Add(wx.StaticText(panel, label="AWS Access Key:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.aws_key = wx.TextCtrl(panel, value=defaults.get("aws_access_key_id", ""))
         s.Add(self.aws_key, (row, 1), flag=wx.EXPAND)
@@ -279,34 +266,29 @@ class SettingsWindow(wx.Frame):
         s.Add(self.to_email, (row, 3), flag=wx.EXPAND)
         row += 1
 
-        # Helpful hint text: recommended picks
         hint = wx.StaticText(
             panel,
             label=("Recommendations: Fast chat → gpt-4o-mini / gemini-1.5-flash. "
                    "Higher quality → gpt-4o / gemini-1.5-pro. "
-                   "Images → gpt-image-1 (OpenAI) or SDXL (Stability).")
+                   "Images → gpt-image-1 (OpenAI) / gemini-1.5-flash (Gemini) / SDXL (Stability).")
         )
         hint.Wrap(520)
         s.Add(hint, (row, 0), span=(1, 4), flag=wx.ALL | wx.EXPAND, border=6)
         row += 1
 
-        # Save button
         save_btn = wx.Button(panel, label="Save")
         save_btn.Bind(wx.EVT_BUTTON, self.on_save)
         s.Add(save_btn, (row, 0), span=(1, 4), flag=wx.ALIGN_CENTER | wx.ALL, border=10)
 
         panel.SetSizerAndFit(s)
 
-        # Fill the model dropdowns based on provider & image provider
         self._refresh_model_choices()
         self._refresh_image_models()
-
-        # Select current values in dropdowns
         self._select_choice(self.default_model, defaults.get("default_model"))
         self._select_choice(self.fast_model, defaults.get("fast_model"))
         self._select_choice(self.image_model, defaults.get("image_model"))
 
-    # ───────────────────────────────────────────────────────────────────── utils
+    # utils
     def _select_choice(self, choice_ctrl: wx.Choice, value: str | None):
         if not value:
             return
@@ -321,7 +303,7 @@ class SettingsWindow(wx.Frame):
         self._refresh_image_models()
 
     def _refresh_model_choices(self):
-        provider = PROVIDERS[self.provider.GetSelection()]
+        provider = ["auto", "openai", "gemini", "custom"][self.provider.GetSelection()]
         self.default_model.Clear()
         self.fast_model.Clear()
 
@@ -336,13 +318,11 @@ class SettingsWindow(wx.Frame):
             for m in GEMINI_FAST:
                 self.fast_model.Append(m)
 
-        # Fallback if nothing added
         if self.default_model.GetCount() == 0:
             self.default_model.Append(defaults.get("default_model", "gpt-4o-mini"))
         if self.fast_model.GetCount() == 0:
             self.fast_model.Append(defaults.get("fast_model", "gpt-4o-mini"))
 
-        # Keep current selections if possible
         self._select_choice(self.default_model, defaults.get("default_model"))
         self._select_choice(self.fast_model, defaults.get("fast_model"))
 
@@ -352,23 +332,23 @@ class SettingsWindow(wx.Frame):
         if prov in ("auto", "openai"):
             for m in OPENAI_IMAGE:
                 self.image_model.Append(m)
+        elif prov == "gemini":
+            for m in GEMINI_IMAGE:
+                self.image_model.Append(m)
         elif prov == "stability":
             for m in STABILITY_IMAGE:
                 self.image_model.Append(m)
-        else:  # none/custom
+        else:
             self.image_model.Append(defaults.get("image_model", "gpt-image-1"))
 
         self._select_choice(self.image_model, defaults.get("image_model"))
 
-    # ───────────────────────────────────────────────────────────────────── save
     def on_save(self, _):
-        # Provider & keys
-        defaults["provider"] = PROVIDERS[self.provider.GetSelection()]
+        defaults["provider"] = ["auto", "openai", "gemini", "custom"][self.provider.GetSelection()]
         defaults["api_key"] = self.api_key.GetValue().strip()
         defaults["openai_org"] = self.org.GetValue().strip()
         defaults["gemini_api_key"] = self.gemini_key.GetValue().strip()
 
-        # Chat endpoints / models
         defaults["url"] = self.chat_url.GetValue().strip()
         defaults["gemini_text_url"] = self.gemini_url.GetValue().strip()
         defaults["default_model"] = self.default_model.GetStringSelection() or self.default_model.GetString(0)
@@ -379,17 +359,14 @@ class SettingsWindow(wx.Frame):
         defaults["frequency_penalty"] = self.freq_pen.GetValue().strip()
         defaults["presence_penalty"] = self.pres_pen.GetValue().strip()
 
-        # Images
         defaults["image_provider"] = IMAGE_PROVIDERS[self.image_provider.GetSelection()]
         defaults["image_model"] = self.image_model.GetStringSelection() or self.image_model.GetString(0)
         defaults["image_generation_url"] = self.image_url.GetValue().strip()
         defaults["stability_api_key"] = self.stability.GetValue().strip()
 
-        # TTS
         defaults["azure_tts_key"] = self.azure_key.GetValue().strip()
         defaults["azure_tts_region"] = self.azure_region.GetValue().strip()
 
-        # AWS
         defaults["aws_access_key_id"] = self.aws_key.GetValue().strip()
         defaults["aws_secret_access_key"] = self.aws_secret.GetValue().strip()
         defaults["aws_session_token"] = self.aws_token.GetValue().strip()
@@ -399,7 +376,6 @@ class SettingsWindow(wx.Frame):
         defaults["aws_catalog_bucket"] = self.bucket_catalog.GetValue().strip()
         defaults["aws_compliance_bucket"] = self.bucket_compliance.GetValue().strip()
 
-        # Email
         defaults["smtp_server"] = self.smtp_server.GetValue().strip()
         defaults["smtp_port"] = self.smtp_port.GetValue().strip()
         defaults["email_username"] = self.email_user.GetValue().strip()

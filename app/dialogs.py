@@ -199,7 +199,7 @@ class DataBuddyDialog(wx.Dialog):
         super().__init__(parent, title="Little Buddy", size=(920, 720),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
-        self.session = requests.Session()  # persistent HTTP for faster first byte
+        self.session = requests.Session()
         self.data = data
         self.headers = headers
         self.knowledge = knowledge or []
@@ -395,7 +395,6 @@ class DataBuddyDialog(wx.Dialog):
         # default / openai / custom (OpenAI-compatible)
         ok = self._chat_openai_streaming(prompt)
         if not ok and provider == "auto" and defaults.get("gemini_api_key"):
-            # seamless fallback to Gemini if OpenAI fails (e.g., 401/403)
             self._write_reply("\n\n(Falling back to Gemini…)\n", newline=False)
             self._chat_gemini_streaming(prompt)
 
@@ -478,7 +477,6 @@ class DataBuddyDialog(wx.Dialog):
         try:
             with self.session.post(url, headers={"Content-Type": "application/json"},
                                    json=body, stream=True, timeout=(8, 90)) as r:
-                # If SSE not supported on account, fall back to non-streaming
                 if r.status_code == 404 or r.status_code == 400:
                     raise requests.HTTPError("SSE not available", response=r)
                 r.raise_for_status()
@@ -535,7 +533,7 @@ class DataBuddyDialog(wx.Dialog):
         except Exception:
             return None
 
-    # ---------- image generation with fallbacks (OpenAI → Stability → offline)
+    # ---------- image generation with fallbacks (OpenAI → Gemini → Stability → offline)
     def on_generate_image(self, _):
         prompt = self.prompt.GetValue().strip()
         if not prompt:
@@ -547,28 +545,28 @@ class DataBuddyDialog(wx.Dialog):
         provider = (defaults.get("image_provider") or os.environ.get("IMAGE_PROVIDER") or "openai").lower().strip()
         tried_msgs = []
 
-        if provider in ("openai", "auto"):
+        order = []
+        if provider == "auto":
+            order = ["openai", "gemini", "stability"]
+        else:
+            order = [provider]
+
+        for prov in order + ["offline"]:
             try:
-                path = self._generate_image_openai(prompt)
+                if prov == "openai":
+                    path = self._generate_image_openai(prompt)
+                elif prov == "gemini":
+                    path = self._generate_image_gemini(prompt)
+                elif prov == "stability":
+                    path = self._generate_image_stability(prompt)
+                elif prov == "offline":
+                    path = self._generate_image_offline(prompt)
+                else:
+                    continue
                 wx.CallAfter(self._show_image_preview, path)
                 return
             except Exception as e:
-                tried_msgs.append(f"OpenAI: {e}")
-
-        if provider in ("stability", "auto", "openai"):
-            try:
-                path = self._generate_image_stability(prompt)
-                wx.CallAfter(self._show_image_preview, path)
-                return
-            except Exception as e:
-                tried_msgs.append(f"Stability: {e}")
-
-        try:
-            path = self._generate_image_offline(prompt)
-            wx.CallAfter(self._show_image_preview, path)
-            return
-        except Exception as e:
-            tried_msgs.append(f"Offline: {e}")
+                tried_msgs.append(f"{prov.capitalize()}: {e}")
 
         wx.CallAfter(wx.MessageBox, "Image generation failed:\n" + "\n".join(tried_msgs),
                      "Image Error", wx.OK | wx.ICON_ERROR)
@@ -587,7 +585,7 @@ class DataBuddyDialog(wx.Dialog):
         }
         resp = self.session.post(url, headers=headers, json=body, timeout=120, verify=False)
         if resp.status_code in (401, 403):
-            raise RuntimeError(f"{resp.status_code} {resp.reason}: check API key access/billing for Images.")
+            raise RuntimeError(f"{resp.status_code} {resp.reason}: check OpenAI key access/billing for Images.")
         resp.raise_for_status()
         data = resp.json().get("data", [])
         if not data:
@@ -603,6 +601,42 @@ class DataBuddyDialog(wx.Dialog):
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
         tmp.write(img_bytes); tmp.close()
         return tmp.name
+
+    def _generate_image_gemini(self, prompt: str) -> str:
+        key = (defaults.get("gemini_api_key") or "").strip()
+        if not key:
+            raise RuntimeError("No Gemini API key configured.")
+        base = (defaults.get("gemini_text_url") or "https://generativelanguage.googleapis.com/v1beta/models").rstrip("/")
+        model = defaults.get("image_model", "gemini-1.5-flash")
+        url = f"{base}/{model}:generateContent?key={key}"
+        body = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "image/png"}
+        }
+        r = self.session.post(url, headers={"Content-Type": "application/json"}, json=body, timeout=120)
+        if r.status_code in (401, 403):
+            raise RuntimeError(f"{r.status_code} {r.reason}: Gemini key not authorized for image generation.")
+        r.raise_for_status()
+        obj = r.json()
+        try:
+            cands = obj.get("candidates") or []
+            if not cands:
+                raise RuntimeError("No candidates in response.")
+            parts = cands[0]["content"]["parts"]
+            inline = next((p["inlineData"] for p in parts if "inlineData" in p), None)
+            if not inline:
+                txt = next((p["text"] for p in parts if "text" in p), None)
+                if txt:
+                    raise RuntimeError(f"Gemini returned text instead of image:\n{txt}")
+                raise RuntimeError("No inlineData image in response.")
+            if inline.get("mimeType") not in ("image/png", "image/jpeg", "image/jpg", "image/webp"):
+                raise RuntimeError(f"Unsupported mimeType: {inline.get('mimeType')}")
+            img_bytes = base64.b64decode(inline.get("data", ""))
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+            tmp.write(img_bytes); tmp.close()
+            return tmp.name
+        except Exception as e:
+            raise RuntimeError(f"Parse error: {e}")
 
     def _generate_image_stability(self, prompt: str) -> str:
         key = (defaults.get("stability_api_key") or os.environ.get("STABILITY_API_KEY") or "").strip()
