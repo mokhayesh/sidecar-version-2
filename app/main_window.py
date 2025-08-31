@@ -24,10 +24,10 @@ from app.analysis import (
     detect_and_split_data,
     profile_analysis,
     quality_analysis,
-    catalog_analysis,     # kept for completeness
+    catalog_analysis,
     compliance_analysis,
-    ai_catalog_analysis,  # AI-powered
-    ai_detect_anomalies,  # AI-powered
+    ai_catalog_analysis,   # AI-powered
+    ai_detect_anomalies,   # AI-powered
 )
 from app.s3_utils import download_text_from_uri, upload_to_s3
 
@@ -39,6 +39,11 @@ APP_NAME = "Sidecar Application: Data Governance"
 APP_VERSION = "1.0"
 APP_AUTHOR = "Salah Aldin Mokhayesh"
 APP_COMPANY = "Aldin AI LLC"
+
+# Resolve project paths robustly
+APP_DIR = os.path.dirname(os.path.abspath(__file__))            # .../app
+BASE_DIR = os.path.abspath(os.path.join(APP_DIR, os.pardir))    # project root
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -133,7 +138,7 @@ def synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Header media panel: HTML5 video (WebView2) -> GIF -> static image
+# Header media panel: HTML5 video (WebView2) -> GIF -> static image -> text
 # ──────────────────────────────────────────────────────────────────────────────
 class HeaderMedia(wx.Panel):
     def __init__(self, parent, width=160, height=120):
@@ -142,9 +147,14 @@ class HeaderMedia(wx.Panel):
         self.SetBackgroundColour(wx.Colour(26, 26, 26))
         s = wx.BoxSizer(wx.VERTICAL)
 
-        assets = "assets"
-        mp4_path = os.path.join(assets, "sidecar.mp4")
-        gif_path = os.path.join(assets, "sidecar.gif")
+        mp4_path = os.path.join(ASSETS_DIR, "sidecar.mp4")
+        gif_path = os.path.join(ASSETS_DIR, "sidecar.gif")
+        png_paths = [
+            os.path.join(ASSETS_DIR, "sidecar-01.png"),
+            os.path.join(ASSETS_DIR, "sidecar-01.jpg"),
+            os.path.join(ASSETS_DIR, "sidecar-01.jpeg"),
+            os.path.join(ASSETS_DIR, "sidecar-01.ico"),
+        ]
 
         used = False
 
@@ -159,14 +169,10 @@ class HeaderMedia(wx.Panel):
                     <meta http-equiv='X-UA-Compatible' content='IE=edge'/>
                     <style>
                       html, body {{
-                        margin: 0; padding: 0; overflow: hidden;
-                        background: #1a1a1a;
+                        margin: 0; padding: 0; overflow: hidden; background: #1a1a1a;
                       }}
                       video {{
-                        width: {width}px; height: {height}px;
-                        object-fit: cover;
-                        display: block;
-                        background: #1a1a1a;
+                        width: {width}px; height: {height}px; object-fit: cover; display: block; background: #1a1a1a;
                       }}
                     </style>
                   </head>
@@ -198,16 +204,22 @@ class HeaderMedia(wx.Panel):
 
         # 3) Fallback static image
         if not used:
-            bmp = self._load_bitmap_scaled(height)
+            bmp = self._load_bitmap_scaled(png_paths, height)
             if bmp and bmp.IsOk():
                 s.Add(wx.StaticBitmap(self, bitmap=bmp), 0, wx.ALL, 0)
-            else:
-                s.AddSpacer(height)
+                used = True
+
+        # 4) Last resort: simple label so it’s never blank
+        if not used:
+            lbl = wx.StaticText(self, label="Sidecar")
+            lbl.SetForegroundColour(wx.Colour(200, 200, 200))
+            lbl.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+            s.Add(lbl, 0, wx.ALIGN_CENTER | wx.ALL, 8)
 
         self.SetSizer(s)
 
-    def _load_bitmap_scaled(self, target_h: int) -> wx.Bitmap | None:
-        for p in ("assets/sidecar-01.png", "assets/sidecar-01.jpg", "assets/sidecar-01.jpeg", "assets/sidecar-01.ico"):
+    def _load_bitmap_scaled(self, paths, target_h: int) -> wx.Bitmap | None:
+        for p in paths:
             if os.path.exists(p):
                 try:
                     if p.endswith(".ico"):
@@ -237,8 +249,9 @@ class MainWindow(wx.Frame):
 
         # Title-bar icon must be .ico (OS requirement)
         try:
-            icon = wx.Icon("assets/sidecar-01.ico", wx.BITMAP_TYPE_ICO)
-            self.SetIcon(icon)
+            icon_path = os.path.join(ASSETS_DIR, "sidecar-01.ico")
+            if os.path.exists(icon_path):
+                self.SetIcon(wx.Icon(icon_path, wx.BITMAP_TYPE_ICO))
         except Exception:
             pass
 
