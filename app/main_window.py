@@ -8,7 +8,6 @@ from app.settings import SettingsWindow, save_defaults, defaults
 from app.dialogs import QualityRuleDialog, DataBuddyDialog, SyntheticDataDialog
 from app.s3_utils import download_text_from_uri, upload_to_s3
 
-# Import analyses with safe fallbacks
 from app.analysis import (
     detect_and_split_data,
     profile_analysis,
@@ -17,7 +16,7 @@ from app.analysis import (
     compliance_analysis,
 )
 
-# Try to import an anomalies function under common names; provide a fallback.
+# Try to import an anomalies function; provide a friendly fallback if missing.
 try:
     from app.analysis import anomalies_analysis as detect_anomalies_analysis
 except Exception:
@@ -31,19 +30,15 @@ except Exception:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Clean, double-buffered header banner (no overlays / no stray icons)
+# Header banner (fixed init order)
 # ──────────────────────────────────────────────────────────────────────────────
 class HeaderBanner(wx.Panel):
-    """
-    Left side shows the sidecar image (first frame if GIF). Title is rendered
-    in a separate panel to the right so nothing can paint over it.
-    """
     def __init__(self, parent, height=160, bg=wx.Colour(28, 28, 28)):
         super().__init__(parent, size=(-1, height), style=wx.BORDER_NONE)
         self._bg = bg
+        self._min_w = 320  # <-- set BEFORE _load_banner_image()
         self.SetBackgroundColour(self._bg)
         self._img = self._load_banner_image()
-        self._min_w = 320
         self.SetMinSize((self._min_w, height))
         self.Bind(wx.EVT_PAINT, self._on_paint)
         self.Bind(wx.EVT_SIZE, lambda e: self.Refresh())
@@ -67,8 +62,9 @@ class HeaderBanner(wx.Panel):
                     return wx.Image(p, wx.BITMAP_TYPE_ANY)
                 except Exception:
                     pass
-        # Fallback: simple dark placeholder
-        bmp = wx.Bitmap(self._min_w, self.GetSize().y if self.GetSize().y else 160)
+        # Fallback placeholder
+        h = self.GetSize().y if self.GetSize().y else 160
+        bmp = wx.Bitmap(self._min_w, h)
         dc = wx.MemoryDC(bmp)
         dc.SetBackground(wx.Brush(self._bg))
         dc.Clear()
@@ -93,7 +89,7 @@ class HeaderBanner(wx.Panel):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Helpers for local synthetic data (used if dialog returns counts only)
+# Simple local synthetic data fallback (used if dialog returns only counts)
 # ──────────────────────────────────────────────────────────────────────────────
 _FIRST_NAMES = ["JAY", "ANA", "KIM", "LEE", "OMAR", "SARA", "NIA", "LIV", "RAJ"]
 _LAST_NAMES = ["SMITH", "NG", "GARCIA", "BROWN", "TAYLOR", "KHAN", "LI", "LEE"]
@@ -118,7 +114,6 @@ def _synth_value(kind: str, i: int) -> str:
         return f"{_r.randint(100, 9999)} Main St, City, {_r.choice(_STATES)} {_r.randint(10000, 99999)}"
     if "amount" in kind or "loan" in kind or "balance" in kind:
         return f"{_r.randint(100, 99999)}.{_r.randint(0, 99):02d}"
-    # default: stable, simple filler
     return f"value_{i}"
 
 def _synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
@@ -135,7 +130,7 @@ class MainWindow(wx.Frame):
     def __init__(self):
         super().__init__(None, title="Sidecar Application: Data Governance", size=(1200, 820))
 
-        # Try to set app icon (ignore if missing)
+        # Best-effort app icon
         for p in (
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "sidecar-01.ico"),
             os.path.join(os.getcwd(), "assets", "sidecar-01.ico"),
@@ -158,7 +153,6 @@ class MainWindow(wx.Frame):
         self.Centre()
         self.Show()
 
-    # ------------------------------------------------------------------ UI ----
     def _build_ui(self):
         BG = wx.Colour(40, 40, 40)
         PANEL = wx.Colour(45, 45, 45)
@@ -168,7 +162,7 @@ class MainWindow(wx.Frame):
         self.SetBackgroundColour(BG)
         main = wx.BoxSizer(wx.VERTICAL)
 
-        # Header row (no overlays)
+        # Header row: banner + centered title (no overlays)
         header_bg = wx.Colour(28, 28, 28)
         header_row = wx.BoxSizer(wx.HORIZONTAL)
 
@@ -200,7 +194,7 @@ class MainWindow(wx.Frame):
         mb.Append(m_set, "&Settings")
         self.SetMenuBar(mb)
 
-        # Toolbar / buttons
+        # Toolbar
         toolbar_panel = wx.Panel(self)
         toolbar_panel.SetBackgroundColour(PANEL)
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
@@ -232,7 +226,7 @@ class MainWindow(wx.Frame):
         toolbar_panel.SetSizer(toolbar)
         main.Add(toolbar_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
-        # Knowledge files line
+        # Knowledge line
         info_panel = wx.Panel(self)
         info_panel.SetBackgroundColour(wx.Colour(48, 48, 48))
         hz = wx.BoxSizer(wx.HORIZONTAL)
@@ -248,7 +242,7 @@ class MainWindow(wx.Frame):
         info_panel.SetSizer(hz)
         main.Add(info_panel, 0, wx.EXPAND)
 
-        # Data grid
+        # Grid
         grid_panel = wx.Panel(self)
         grid_panel.SetBackgroundColour(BG)
         vbox = wx.BoxSizer(wx.VERTICAL)
@@ -268,7 +262,7 @@ class MainWindow(wx.Frame):
 
         self.SetSizer(main)
 
-    # ---------------------------------------------------------------- Actions --
+    # -------------------------------------------- actions
     def on_settings(self, _):
         SettingsWindow(self).Show()
 
@@ -296,7 +290,6 @@ class MainWindow(wx.Frame):
             wx.MessageBox(f"Failed to load data:\n{e}", "Error", wx.OK | wx.ICON_ERROR)
 
     def on_load_knowledge(self, _):
-        # Allow multiple selection; store as dicts for Little Buddy
         dlg = wx.FileDialog(self, "Add Knowledge Files",
                             wildcard="All supported|*.txt;*.csv;*.json;*.md;*.png;*.jpg;*.jpeg;*.gif|"
                                      "Text/CSV/JSON|*.txt;*.csv;*.json;*.md|"
@@ -317,11 +310,9 @@ class MainWindow(wx.Frame):
                     self.knowledge_files.append({"name": os.path.basename(p), "content": content})
                     added.append(os.path.basename(p))
                 elif ext in (".png", ".jpg", ".jpeg", ".gif"):
-                    # store as reference; content omitted
                     self.knowledge_files.append({"name": os.path.basename(p), "path": p, "content": None})
                     added.append(os.path.basename(p))
                 else:
-                    # best effort: read as text
                     try:
                         content = open(p, "r", encoding="utf-8", errors="ignore").read()
                     except Exception:
@@ -423,7 +414,6 @@ class MainWindow(wx.Frame):
             dlg.Destroy()
             return
 
-        # Support both the new dialog (get_dataframe) and older one (get_values)
         df = None
         if hasattr(dlg, "get_dataframe"):
             try:
@@ -432,7 +422,6 @@ class MainWindow(wx.Frame):
                 df = None
 
         if df is None:
-            # Fallback to old API
             try:
                 n, fields = dlg.get_values()
                 if not fields:
@@ -445,14 +434,13 @@ class MainWindow(wx.Frame):
 
         dlg.Destroy()
 
-        # Update grid
         hdr = list(df.columns)
         data = df.values.tolist()
         self.headers = hdr
         self.raw_data = data
         self._display(hdr, data)
 
-    # -------------------------------------------------------------- Grid utils -
+    # ------------------------------- grid utils
     def _display(self, hdr, data):
         self.grid.ClearGrid()
         if self.grid.GetNumberRows():
@@ -490,7 +478,6 @@ class MainWindow(wx.Frame):
         wx.CallAfter(self.adjust_grid)
 
 
-# Run directly (useful for local testing)
 if __name__ == "__main__":
     app = wx.App(False)
     MainWindow()
