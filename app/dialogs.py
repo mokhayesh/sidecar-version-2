@@ -5,8 +5,12 @@ import base64
 import threading
 import tempfile
 import requests
+import random
+from datetime import datetime, timedelta
+
 import wx
 import wx.richtext as rt
+import pandas as pd
 
 # Optional audio / speech libs (gracefully degrade if missing)
 try:
@@ -199,7 +203,7 @@ class DataBuddyDialog(wx.Dialog):
         super().__init__(parent, title="Little Buddy", size=(920, 720),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
-        self.session = requests.Session()
+        self.session = requests.Session()  # ← needed by streaming/image calls
         self.data = data
         self.headers = headers
         self.knowledge = knowledge or []
@@ -347,18 +351,49 @@ class DataBuddyDialog(wx.Dialog):
             pass
 
     def _build_knowledge_context(self, max_chars=1200):
+        """
+        Accepts self.knowledge as a list of dicts OR file-path strings.
+        Dict form: {"name": "...", "content": "..."}.
+        String form: "C:\\path\\file.txt" (reads a small snippet for text-like files).
+        """
         if not self.knowledge:
             return ""
         chunks = []
         per_file = max(180, max_chars // max(1, len(self.knowledge)))
-        for f in self.knowledge:
-            name = f.get("name", "file")
-            content = f.get("content")
-            if content and isinstance(content, str):
-                snippet = content[:min(len(content), per_file)].strip()
-                chunks.append(f"File: {name}\n{snippet}")
-            else:
-                chunks.append(f"File: {name} (image or binary)")
+        for item in self.knowledge:
+            name = "file"
+            content = None
+            # normalize
+            if isinstance(item, dict):
+                name = item.get("name", "file")
+                content = item.get("content")
+                if content and isinstance(content, str):
+                    snippet = content[:min(len(content), per_file)].strip()
+                    chunks.append(f"File: {name}\n{snippet}")
+                    continue
+                else:
+                    chunks.append(f"File: {name} (image or binary)")
+                    continue
+            # string path
+            try:
+                path = str(item)
+                name = os.path.basename(path) or "file"
+                if os.path.exists(path):
+                    ext = os.path.splitext(path)[1].lower()
+                    if ext in (".txt", ".md", ".csv", ".json"):
+                        try:
+                            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                                data = fh.read(per_file)
+                            chunks.append(f"File: {name}\n{data.strip()}")
+                        except Exception:
+                            chunks.append(f"File: {name} [read error]")
+                    else:
+                        chunks.append(f"File: {name} (binary {ext})")
+                else:
+                    chunks.append(f"File: {name} [missing]")
+            except Exception:
+                chunks.append(f"File: {name} [error]")
+
         text = "\n\n".join(chunks)
         if len(text) > max_chars:
             text = text[:max_chars] + "\n…(truncated)…"
@@ -381,7 +416,10 @@ class DataBuddyDialog(wx.Dialog):
         prompt = f"As a {persona}, {q}" if persona else q
 
         if self.data:
-            prompt += "\n\nData sample:\n" + "; ".join(map(str, self.data[0]))
+            try:
+                prompt += "\n\nData sample:\n" + "; ".join(map(str, self.data[0]))
+            except Exception:
+                pass
 
         kn = self._build_knowledge_context()
         if kn:
@@ -975,3 +1013,67 @@ class SyntheticDataDialog(wx.Dialog):
         n = int(self.count.GetValue())
         selected = [self.chk.GetString(i) for i in range(self.chk.GetCount()) if self.chk.IsChecked(i)]
         return n, selected
+
+    # New: provide a DataFrame for callers expecting dlg.get_dataframe()
+    def get_dataframe(self) -> pd.DataFrame:
+        n, cols = self.get_values()
+        if not cols:
+            # If user cleared all, default to all visible fields
+            cols = [self.chk.GetString(i) for i in range(self.chk.GetCount())]
+        return self._generate_df(n, cols)
+
+    # -------- synthetic data helpers --------
+    def _kind(self, col: str) -> str:
+        c = col.lower()
+        if "email" in c: return "email"
+        if "phone" in c or "tel" in c: return "phone"
+        if "first" in c and "name" in c: return "first_name"
+        if "last" in c and "name" in c: return "last_name"
+        if "address" in c: return "address"
+        if any(k in c for k in ("amount", "price", "total", "balance", "usd", "cost")): return "money"
+        if "date" in c or "timestamp" in c: return "date"
+        if "id" in c: return "id"
+        return "text"
+
+    _FIRST = ["Alex","Sam","Jordan","Taylor","Riley","Casey","Avery","Quinn","Rowan","Cameron",
+              "Morgan","Hayden","Reese","Dakota","Skyler","Emerson","Parker","Logan","Jamie","Drew"]
+    _LAST  = ["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez",
+              "Hernandez","Lopez","Gonzalez","Wilson","Anderson","Thomas","Taylor","Moore","Jackson","Martin"]
+    _STREETS = ["Main St","First Ave","Second St","Oak St","Pine St","Maple Ave","Cedar St","Elm St","Walnut Ave","Sunset Blvd"]
+    _STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","MA","MD",
+               "ME","MI","MN","MO","MS","MT","NC","ND","NE","NH","NJ","NM","NV","NY","OH","OK","OR","PA","RI","SC",
+               "SD","TN","TX","UT","VA","VT","WA","WI","WV","WY"]
+
+    def _value(self, kind: str, i: int):
+        if kind == "first_name":
+            return random.choice(self._FIRST)
+        if kind == "last_name":
+            return random.choice(self._LAST)
+        if kind == "email":
+            base = (random.choice(self._FIRST) + "." + random.choice(self._LAST)).lower()
+            domain = random.choice(["example.com","mail.com","sample.net","test.org"])
+            return f"{base}{random.randint(1,299)}@{domain}"
+        if kind == "phone":
+            return f"{random.randint(200,989):03d}-{random.randint(200,989):03d}-{random.randint(1000,9999):04d}"
+        if kind == "address":
+            num = random.randint(100, 9999)
+            street = random.choice(self._STREETS)
+            city = random.choice(["Riverton","Bayview","Lakeview","Fairview","Hillsboro","Brookfield"])
+            state = random.choice(self._STATES); zipc = random.randint(10000, 99999)
+            return f"{num} {street}, {city}, {state} {zipc}"
+        if kind == "money":
+            return f"{random.uniform(10, 100000):,.2f}"
+        if kind == "date":
+            base = datetime.now() - timedelta(days=365*5)
+            d = base + timedelta(days=random.randint(0, 365*5))
+            return d.strftime("%Y-%m-%d")
+        if kind == "id":
+            return f"ID-{i:06d}"
+        return f"Value_{i}"
+
+    def _generate_df(self, n: int, cols: list[str]) -> pd.DataFrame:
+        data = {}
+        for col in cols:
+            kind = self._kind(col)
+            data[col] = [self._value(kind, i) for i in range(1, n + 1)]
+        return pd.DataFrame(data)
