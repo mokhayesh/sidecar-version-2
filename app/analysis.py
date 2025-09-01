@@ -4,6 +4,7 @@ import json
 import re
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -187,6 +188,74 @@ def _rule_based_anomalies(df: pd.DataFrame):
 
     hdr = ["Field", "Reason", "Recommendation", "Detected At"]
     return hdr, findings
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Heuristic anomalies used by the UI (adds duplicates & z-score outliers)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def anomalies_analysis(df: pd.DataFrame):
+    """Return (headers, rows) of anomalies suitable for the grid.
+
+    Rules:
+      • Missing / blank cells
+      • Duplicate full rows
+      • Numeric outliers (|z| > 3)
+      • Email format checks for columns with 'email' in the name
+    """
+    findings = []
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # 0) Duplicate rows
+    dups = df.duplicated(keep="first")
+    for idx in dups[dups].index.tolist():
+        findings.append(["(row)", "Duplicate row", "Deduplicate or add a key", now])
+
+    # 1) Missing / blank cells
+    for col in df.columns:
+        s = df[col]
+        blanks_mask = s.astype(str).str.strip().eq("") | s.isna()
+        n_blanks = int(blanks_mask.sum())
+        if n_blanks:
+            findings.append([col, f"{n_blanks} missing/blank", "Impute, drop or enforce NOT NULL", now])
+
+    # 2) Numeric outliers via z-score > 3
+    for col in df.columns:
+        s_num = pd.to_numeric(df[col], errors="coerce")
+        if s_num.notna().sum() == 0:
+            continue
+        mu = s_num.mean()
+        sigma = s_num.std(ddof=0)
+        if sigma and np.isfinite(sigma) and sigma > 0:
+            z = (s_num - mu).abs() / sigma
+            out_idx = z[z > 3].index.tolist()
+            if out_idx:
+                findings.append([col, f"{len(out_idx)} numeric outlier(s) |z|>3", "Investigate/clip/winsorize", now])
+
+    # 3) Email format check
+    email_cols = [c for c in df.columns if "email" in c.lower()]
+    if email_cols:
+        email_re = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+        for col in email_cols:
+            bad = 0
+            for _, val in df[col].items():
+                if pd.isna(val):
+                    continue
+                v = str(val).strip()
+                if v and not email_re.match(v):
+                    bad += 1
+            if bad:
+                findings.append([col, f"{bad} invalid email(s)", "Validate with regex & cleanse source", now])
+
+    if not findings:
+        findings = [["(none)", "No anomalies found", "", now]]
+
+    hdr = ["Field", "Reason", "Recommendation", "Detected At"]
+    return hdr, findings
+
+# Backwards/compat alias for older wiring
+def detect_anomalies(df: pd.DataFrame):
+    return anomalies_analysis(df)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
