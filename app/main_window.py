@@ -30,13 +30,18 @@ except Exception:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Header banner (fixed init order)
+# Header banner (double-buffered paint; background style fix)
 # ──────────────────────────────────────────────────────────────────────────────
 class HeaderBanner(wx.Panel):
     def __init__(self, parent, height=160, bg=wx.Colour(28, 28, 28)):
         super().__init__(parent, size=(-1, height), style=wx.BORDER_NONE)
+        # Required for AutoBufferedPaintDC
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        # Prevent flicker on some platforms
+        self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
+
         self._bg = bg
-        self._min_w = 320  # <-- set BEFORE _load_banner_image()
+        self._min_w = 320  # set before loading image
         self.SetBackgroundColour(self._bg)
         self._img = self._load_banner_image()
         self.SetMinSize((self._min_w, height))
@@ -89,14 +94,13 @@ class HeaderBanner(wx.Panel):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Simple local synthetic data fallback (used if dialog returns only counts)
+# Simple local synthetic data fallback
 # ──────────────────────────────────────────────────────────────────────────────
 _FIRST_NAMES = ["JAY", "ANA", "KIM", "LEE", "OMAR", "SARA", "NIA", "LIV", "RAJ"]
-_LAST_NAMES = ["SMITH", "NG", "GARCIA", "BROWN", "TAYLOR", "KHAN", "LI", "LEE"]
-_STATES = ["AL", "AK", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "GA", "HI", "IA",
-           "ID", "IL", "IN", "KS", "KY", "LA", "MA", "MD", "ME", "MI", "MN", "MO",
-           "MS", "MT", "NC", "ND", "NE", "NH", "NJ", "NM", "NV", "NY", "OH", "OK",
-           "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VA", "VT", "WA", "WI", "WV", "WY"]
+_LAST_NAMES  = ["SMITH", "NG", "GARCIA", "BROWN", "TAYLOR", "KHAN", "LI", "LEE"]
+_STATES = ["AL","AK","AZ","CA","CO","CT","DC","DE","FL","GA","HI","IA","ID","IL","IN","KS","KY",
+           "LA","MA","MD","ME","MI","MN","MO","MS","MT","NC","ND","NE","NH","NJ","NM","NV","NY",
+           "OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VA","VT","WA","WI","WV","WY"]
 
 import random as _r
 
@@ -162,7 +166,7 @@ class MainWindow(wx.Frame):
         self.SetBackgroundColour(BG)
         main = wx.BoxSizer(wx.VERTICAL)
 
-        # Header row: banner + centered title (no overlays)
+        # Header row: banner + centered title
         header_bg = wx.Colour(28, 28, 28)
         header_row = wx.BoxSizer(wx.HORIZONTAL)
 
@@ -172,7 +176,7 @@ class MainWindow(wx.Frame):
         title_panel = wx.Panel(self)
         title_panel.SetBackgroundColour(header_bg)
         title = wx.StaticText(title_panel, label="Sidecar Application: Data Governance")
-        title.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
         title.SetForegroundColour(wx.Colour(240, 240, 240))
         tps = wx.BoxSizer(wx.HORIZONTAL)
         tps.AddStretchSpacer()
@@ -203,7 +207,7 @@ class MainWindow(wx.Frame):
             b = wx.Button(toolbar_panel, label=label)
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+            b.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
             b.Bind(wx.EVT_BUTTON, handler)
             toolbar.Add(b, 0, wx.ALL, 4)
             return b
@@ -232,12 +236,12 @@ class MainWindow(wx.Frame):
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
         lab.SetForegroundColour(TXT)
-        lab.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        lab.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
 
         self.knowledge_line = wx.StaticText(info_panel, label="(none)")
         self.knowledge_line.SetForegroundColour(wx.Colour(210, 210, 210))
-        self.knowledge_line.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.knowledge_line.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         hz.Add(self.knowledge_line, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
         info_panel.SetSizer(hz)
         main.Add(info_panel, 0, wx.EXPAND)
@@ -253,7 +257,7 @@ class MainWindow(wx.Frame):
         self.grid.SetDefaultCellTextColour(wx.Colour(220, 220, 220))
         self.grid.SetLabelBackgroundColour(wx.Colour(80, 80, 80))
         self.grid.SetLabelTextColour(wx.Colour(240, 240, 240))
-        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
 
         vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
