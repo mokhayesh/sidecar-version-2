@@ -1,488 +1,419 @@
-import os
-import csv
+# main_window.py
+# Tabbed "Data Buddy" UI with header banner and per-tab grids.
+# Dependencies: wxPython (pip install wxPython), optionally pandas for DataFrame display.
+
 import wx
 import wx.grid as gridlib
-import pandas as pd
 
-from app.settings import SettingsWindow, save_defaults, defaults
-from app.dialogs import QualityRuleDialog, DataBuddyDialog, SyntheticDataDialog
-from app.s3_utils import download_text_from_uri, upload_to_s3
-
-from app.analysis import (
-    detect_and_split_data,
-    profile_analysis,
-    quality_analysis,
-    catalog_analysis,
-    compliance_analysis,
-)
-
-# Try to import an anomalies function; provide a friendly fallback if missing.
 try:
-    from app.analysis import anomalies_analysis as detect_anomalies_analysis
-except Exception:
-    try:
-        from app.analysis import detect_anomalies as detect_anomalies_analysis
-    except Exception:
-        def detect_anomalies_analysis(df: pd.DataFrame):
-            hdr = ["Issue", "Details"]
-            data = [["No analyzer", "Install/define detect_anomalies() in app.analysis"]]
-            return hdr, data
+    import pandas as pd  # Optional; used only if you pass DataFrames to _display
+except Exception:  # pragma: no cover
+    pd = None
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Header banner (double-buffered paint; background style fix)
-# ──────────────────────────────────────────────────────────────────────────────
+# ---------------------------
+# Helper widgets and utilities
+# ---------------------------
+
 class HeaderBanner(wx.Panel):
-    def __init__(self, parent, height=160, bg=wx.Colour(28, 28, 28)):
-        super().__init__(parent, size=(-1, height), style=wx.BORDER_NONE)
-        # Required for AutoBufferedPaintDC
-        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
-        # Prevent flicker
-        self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
+    """Simple top banner with title/subtitle in a dark purple theme."""
+    def __init__(self, parent, title="Data Buddy", subtitle="AI-assisted Data Governance"):
+        super().__init__(parent)
+        self.SetBackgroundColour(wx.Colour(45, 35, 75))  # dark purple
 
-        self._bg = bg
-        self._min_w = 320
-        self.SetBackgroundColour(self._bg)
-        self._img = self._load_banner_image()
-        self.SetMinSize((self._min_w, height))
-        self.Bind(wx.EVT_PAINT, self._on_paint)
-        self.Bind(wx.EVT_SIZE, lambda e: self.Refresh())
+        title_lbl = wx.StaticText(self, label=title)
+        title_lbl.SetForegroundColour(wx.Colour(240, 236, 255))
+        tf = title_lbl.GetFont()
+        tf.PointSize += 8
+        tf.MakeBold()
+        title_lbl.SetFont(tf)
 
-    def _load_banner_image(self):
-        here = os.path.dirname(os.path.abspath(__file__))
-        candidates = [
-            os.path.join(here, "assets", "sidecar.gif"),
-            os.path.join(here, "assets", "sidecar.jpg"),
-            os.path.join(here, "assets", "sidecar.png"),
-            os.path.join(here, "sidecar.gif"),
-            os.path.join(here, "sidecar.jpg"),
-            os.path.join(here, "sidecar.png"),
-            os.path.join(os.getcwd(), "sidecar.gif"),
-            os.path.join(os.getcwd(), "sidecar.jpg"),
-            os.path.join(os.getcwd(), "sidecar.png"),
-        ]
-        for p in candidates:
-            if os.path.exists(p):
-                try:
-                    return wx.Image(p, wx.BITMAP_TYPE_ANY)
-                except Exception:
-                    pass
-        # Fallback placeholder
-        h = self.GetSize().y if self.GetSize().y else 160
-        bmp = wx.Bitmap(self._min_w, h)
-        dc = wx.MemoryDC(bmp)
-        dc.SetBackground(wx.Brush(self._bg))
-        dc.Clear()
-        dc.SelectObject(wx.NullBitmap)
-        return bmp.ConvertToImage()
+        sub_lbl = None
+        if subtitle:
+            sub_lbl = wx.StaticText(self, label=subtitle)
+            sub_lbl.SetForegroundColour(wx.Colour(200, 196, 230))
 
-    def _on_paint(self, _):
-        dc = wx.AutoBufferedPaintDC(self)
-        dc.SetBackground(wx.Brush(self._bg))
-        dc.Clear()
-        if not self._img:
-            return
-        w, h = self.GetClientSize()
-        iw, ih = self._img.GetWidth(), self._img.GetHeight()
-        if ih <= 0:
-            return
-        target_h = h
-        target_w = max(1, int(iw * target_h / ih))
-        target_w = min(target_w, w)
-        img = self._img.Scale(target_w, target_h, wx.IMAGE_QUALITY_HIGH)
-        dc.DrawBitmap(wx.Bitmap(img), 0, 0)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.AddSpacer(6)
+        sizer.Add(title_lbl, 0, wx.LEFT | wx.RIGHT, 16)
+        if sub_lbl:
+            sizer.AddSpacer(2)
+            sizer.Add(sub_lbl, 0, wx.LEFT | wx.RIGHT, 16)
+        sizer.AddSpacer(8)
+        self.SetSizer(sizer)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Simple local synthetic data fallback
-# ──────────────────────────────────────────────────────────────────────────────
-_FIRST_NAMES = ["JAY", "ANA", "KIM", "LEE", "OMAR", "SARA", "NIA", "LIV", "RAJ"]
-_LAST_NAMES  = ["SMITH", "NG", "GARCIA", "BROWN", "TAYLOR", "KHAN", "LI", "LEE"]
-_STATES = ["AL","AK","AZ","CA","CO","CT","DC","DE","FL","GA","HI","IA","ID","IL","IN","KS","KY",
-           "LA","MA","MD","ME","MI","MN","MO","MS","MT","NC","ND","NE","NH","NJ","NM","NV","NY",
-           "OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VA","VT","WA","WI","WV","WY"]
-
-import random as _r
-
-def _synth_value(kind: str, i: int) -> str:
-    kind = (kind or "").lower()
-    if "email" in kind:
-        return f"user{i}@example.com"
-    if "first" in kind and "name" in kind:
-        return _r.choice(_FIRST_NAMES)
-    if "last" in kind and "name" in kind:
-        return _r.choice(_LAST_NAMES)
-    if "phone" in kind:
-        return f"{_r.randint(200, 989)}-{_r.randint(100, 999)}-{_r.randint(1000, 9999)}"
-    if "address" in kind:
-        return f"{_r.randint(100, 9999)} Main St, City, {_r.choice(_STATES)} {_r.randint(10000, 99999)}"
-    if "amount" in kind or "loan" in kind or "balance" in kind:
-        return f"{_r.randint(100, 99999)}.{_r.randint(0, 99):02d}"
-    return f"value_{i}"
-
-def _synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
-    rows = []
-    for i in range(1, n + 1):
-        rows.append([_synth_value(col, i) for col in columns])
-    return pd.DataFrame(rows, columns=columns)
+def call_if_exists(obj, name, *args, **kwargs):
+    """Safely call a method if it exists; show info if not implemented."""
+    fn = getattr(obj, name, None)
+    if callable(fn):
+        return fn(*args, **kwargs)
+    wx.MessageBox(f"Handler '{name}' not implemented yet.", "Info", wx.OK | wx.ICON_INFORMATION)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Main Window
-# ──────────────────────────────────────────────────────────────────────────────
+def create_grid(parent):
+    """Create a clean grid. Your handlers can resize/fill it as needed."""
+    grid = gridlib.Grid(parent)
+    grid.CreateGrid(0, 0)
+    grid.EnableEditing(False)
+    grid.SetDefaultCellAlignment(wx.ALIGN_LEFT, wx.ALIGN_CENTER_VERTICAL)
+    grid.SetGridLineColour(wx.Colour(220, 220, 230))
+    grid.SetDefaultCellBackgroundColour(wx.Colour(248, 248, 252))
+    grid.SetDefaultCellTextColour(wx.BLACK)
+    return grid
+
+
+class ToolTab(wx.Panel):
+    """
+    Generic tab panel with a small flat toolbar and a content area containing a wx.Grid.
+    actions: list[tuple[str, str]] -> (button label, handler name on owner)
+    """
+    def __init__(self, parent, owner, actions):
+        super().__init__(parent)
+        self.owner = owner
+
+        root = wx.BoxSizer(wx.VERTICAL)
+
+        # Toolbar row
+        bar = wx.Panel(self)
+        bar.SetBackgroundColour(wx.Colour(247, 246, 252))
+        bar_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        for label, handler in actions:
+            btn = wx.Button(bar, label=label, style=wx.BORDER_NONE)
+            btn.Bind(wx.EVT_BUTTON, lambda evt, h=handler: call_if_exists(self.owner, h))
+            bar_sizer.Add(btn, 0, wx.ALL, 4)
+        bar.SetSizer(bar_sizer)
+
+        # Content area with grid
+        content = wx.Panel(self)
+        content_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.grid = create_grid(content)
+        content_sizer.Add(self.grid, 1, wx.EXPAND)
+        content.SetSizer(content_sizer)
+
+        root.Add(bar, 0, wx.EXPAND)
+        root.Add(content, 1, wx.EXPAND | wx.TOP, 6)
+        self.SetSizer(root)
+
+
+# ---------------------------
+# Main window
+# ---------------------------
+
 class MainWindow(wx.Frame):
-    def __init__(self):
-        super().__init__(None, title="Sidecar Application: Data Governance", size=(1200, 820))
+    def __init__(self, *args, **kwargs):
+        super().__init__(None, title="Data Buddy", size=(1180, 780), style=wx.DEFAULT_FRAME_STYLE)
+        self.CentreOnScreen()
 
-        # Best-effort app icon
-        for p in (
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "sidecar-01.ico"),
-            os.path.join(os.getcwd(), "assets", "sidecar-01.ico"),
-            os.path.join(os.getcwd(), "sidecar-01.ico"),
-        ):
-            if os.path.exists(p):
-                try:
-                    self.SetIcon(wx.Icon(p, wx.BITMAP_TYPE_ICO))
-                    break
-                except Exception:
-                    pass
+        # Keep references to tabs so handlers can access their grids
+        self.upload_tab = None
+        self.profile_tab = None
+        self.quality_tab = None
+        self.catalog_tab = None
+        self.anomalies_tab = None
+        self.compliance_tab = None
+        self.optimizer_tab = None
+        self.todo_tab = None
+        self.buddy_panel = None
+        self.persona = None
+        self.ask_input = None
+        self.chat_out = None
 
-        self.raw_data: list[list[str]] = []
-        self.headers: list[str] = []
-        self.current_process: str = ""
-        self.quality_rules: dict = {}
-        self.knowledge_files: list[dict] = []
+        # Your "current" data (fill it however your app works)
+        self.current_df = None  # pandas.DataFrame or list[dict]
 
         self._build_ui()
-        self.Centre()
-        self.Show()
+
+    # ---------------------------
+    # UI layout
+    # ---------------------------
 
     def _build_ui(self):
-        BG = wx.Colour(40, 40, 40)
-        PANEL = wx.Colour(45, 45, 45)
-        TXT = wx.Colour(235, 235, 235)
-        ACCENT = wx.Colour(70, 130, 180)
+        self.SetBackgroundColour(wx.Colour(252, 252, 255))
+        root = wx.BoxSizer(wx.VERTICAL)
 
-        self.SetBackgroundColour(BG)
-        main = wx.BoxSizer(wx.VERTICAL)
+        # Header
+        header = HeaderBanner(self, title="Data Buddy", subtitle="AI-assisted Data Governance")
+        root.Add(header, 0, wx.EXPAND)
 
-        # Header row: banner + centered title
-        header_bg = wx.Colour(28, 28, 28)
-        header_row = wx.BoxSizer(wx.HORIZONTAL)
+        # Notebook with tabs
+        nb = wx.Notebook(self, style=wx.NB_TOP)
+        root.Add(nb, 1, wx.EXPAND)
 
-        self.banner = HeaderBanner(self, height=160, bg=header_bg)
-        header_row.Add(self.banner, 0, wx.EXPAND)
+        # Upload
+        self.upload_tab = ToolTab(
+            nb, self,
+            actions=[
+                ("Select File", "on_upload"),
+                ("Load Knowledge", "on_load_knowledge"),
+                ("Remove Knowledge", "on_remove_knowledge"),
+            ],
+        )
+        nb.AddPage(self.upload_tab, "Upload")
 
-        title_panel = wx.Panel(self)
-        title_panel.SetBackgroundColour(header_bg)
-        title = wx.StaticText(title_panel, label="Sidecar Application: Data Governance")
-        title.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        title.SetForegroundColour(wx.Colour(240, 240, 240))
-        tps = wx.BoxSizer(wx.HORIZONTAL)
-        tps.AddStretchSpacer()
-        tps.Add(title, 0, wx.ALIGN_CENTER_VERTICAL)
-        tps.AddStretchSpacer()
-        title_panel.SetSizer(tps)
+        # Profile
+        self.profile_tab = ToolTab(
+            nb, self,
+            actions=[
+                ("Run Profile", "on_profile"),
+                ("Export CSV", "on_export_csv"),
+                ("Export TXT", "on_export_txt"),
+            ],
+        )
+        nb.AddPage(self.profile_tab, "Profile")
 
-        header_row.Add(title_panel, 1, wx.EXPAND)
-        main.Add(header_row, 0, wx.EXPAND)
+        # Quality
+        self.quality_tab = ToolTab(
+            nb, self,
+            actions=[
+                ("Run Quality", "on_quality"),
+                ("Rules", "on_quality_rules"),
+                ("Exceptions", "on_quality_exceptions"),
+            ],
+        )
+        nb.AddPage(self.quality_tab, "Quality")
 
-        # Menu bar
-        mb = wx.MenuBar()
-        m_file, m_set = wx.Menu(), wx.Menu()
-        m_file.Append(wx.ID_EXIT, "Exit")
-        self.Bind(wx.EVT_MENU, lambda _: self.Close(), id=wx.ID_EXIT)
-        m_set.Append(wx.ID_PREFERENCES, "Settings")
-        self.Bind(wx.EVT_MENU, self.on_settings, id=wx.ID_PREFERENCES)
-        mb.Append(m_file, "&File")
-        mb.Append(m_set, "&Settings")
-        self.SetMenuBar(mb)
+        # Catalog
+        self.catalog_tab = ToolTab(
+            nb, self,
+            actions=[
+                ("Build Catalog", "on_catalog"),
+                ("Publish", "on_catalog_publish"),
+            ],
+        )
+        nb.AddPage(self.catalog_tab, "Catalog")
 
-        # Toolbar
-        toolbar_panel = wx.Panel(self)
-        toolbar_panel.SetBackgroundColour(PANEL)
-        toolbar = wx.WrapSizer(wx.HORIZONTAL)
+        # Anomalies
+        self.anomalies_tab = ToolTab(
+            nb, self,
+            actions=[
+                ("Detect", "on_anomalies"),
+                ("Drift vs Baseline", "on_drift"),
+            ],
+        )
+        nb.AddPage(self.anomalies_tab, "Anomalies")
 
-        def add_btn(label, handler):
-            b = wx.Button(toolbar_panel, label=label)
-            b.SetBackgroundColour(ACCENT)
-            b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-            b.Bind(wx.EVT_BUTTON, handler)
-            toolbar.Add(b, 0, wx.ALL, 4)
-            return b
+        # Compliance
+        self.compliance_tab = ToolTab(
+            nb, self,
+            actions=[
+                ("Check Compliance", "on_compliance"),
+                ("Export Evidence", "on_export_txt"),
+            ],
+        )
+        nb.AddPage(self.compliance_tab, "Compliance")
 
-        add_btn("Load Knowledge Files", self.on_load_knowledge)
-        add_btn("Load File", self.on_load_file)
-        add_btn("Load from URI/S3", self.on_load_s3)
-        add_btn("Generate Synthetic Data", self.on_generate_synth)
-        add_btn("Quality Rule Assignment", self.on_rules)
-        add_btn("Profile", lambda e: self.do_analysis_process("Profile"))
-        add_btn("Quality", lambda e: self.do_analysis_process("Quality"))
-        add_btn("Detect Anomalies", lambda e: self.do_analysis_process("Detect Anomalies"))
-        add_btn("Catalog", lambda e: self.do_analysis_process("Catalog"))
-        add_btn("Compliance", lambda e: self.do_analysis_process("Compliance"))
-        add_btn("Little Buddy", self.on_buddy)
-        add_btn("Export CSV", self.on_export_csv)
-        add_btn("Export TXT", self.on_export_txt)
-        add_btn("Upload to S3", self.on_upload_s3)
+        # Optimizer
+        self.optimizer_tab = ToolTab(
+            nb, self,
+            actions=[
+                ("Optimize", "on_optimize"),
+                ("Recommendations", "on_recommendations"),
+            ],
+        )
+        nb.AddPage(self.optimizer_tab, "Optimizer")
 
-        toolbar_panel.SetSizer(toolbar)
-        main.Add(toolbar_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
+        # To Do
+        self.todo_tab = ToolTab(
+            nb, self,
+            actions=[
+                ("Run Tasks", "on_run_tasks"),
+                ("Open tasks.txt", "on_open_tasks"),
+            ],
+        )
+        nb.AddPage(self.todo_tab, "To Do")
 
-        # Knowledge line
-        info_panel = wx.Panel(self)
-        info_panel.SetBackgroundColour(wx.Colour(48, 48, 48))
-        hz = wx.BoxSizer(wx.HORIZONTAL)
-        lab = wx.StaticText(info_panel, label="Knowledge Files:")
-        lab.SetForegroundColour(TXT)
-        lab.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
+        # Little Buddy (inline chat area)
+        self.buddy_panel = wx.Panel(nb)
+        nb.AddPage(self.buddy_panel, "Little Buddy")
+        buddy_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        self.knowledge_line = wx.StaticText(info_panel, label="(none)")
-        self.knowledge_line.SetForegroundColour(wx.Colour(210, 210, 210))
-        self.knowledge_line.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-        hz.Add(self.knowledge_line, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
-        info_panel.SetSizer(hz)
-        main.Add(info_panel, 0, wx.EXPAND)
+        persona_row = wx.BoxSizer(wx.HORIZONTAL)
+        persona_row.Add(wx.StaticText(self.buddy_panel, label="Persona:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        self.persona = wx.ComboBox(
+            self.buddy_panel,
+            choices=["Search Guide", "Data Architect", "Data Quality Expert"],
+            style=wx.CB_READONLY,
+        )
+        self.persona.SetSelection(0)
+        persona_row.Add(self.persona, 0)
 
-        # Grid
-        grid_panel = wx.Panel(self)
-        grid_panel.SetBackgroundColour(BG)
-        vbox = wx.BoxSizer(wx.VERTICAL)
+        ask_row = wx.BoxSizer(wx.HORIZONTAL)
+        ask_row.Add(wx.StaticText(self.buddy_panel, label="Ask:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        self.ask_input = wx.TextCtrl(self.buddy_panel)
+        ask_row.Add(self.ask_input, 1, wx.EXPAND | wx.RIGHT, 6)
+        ask_btn = wx.Button(self.buddy_panel, label="Send")
+        ask_btn.Bind(wx.EVT_BUTTON, lambda evt: call_if_exists(self, "on_little_buddy_send"))
+        ask_row.Add(ask_btn, 0)
 
-        self.grid = gridlib.Grid(grid_panel)
-        self.grid.CreateGrid(0, 0)
-        self.grid.SetDefaultCellBackgroundColour(wx.Colour(55, 55, 55))
-        self.grid.SetDefaultCellTextColour(wx.Colour(220, 220, 220))
-        self.grid.SetLabelBackgroundColour(wx.Colour(80, 80, 80))
-        self.grid.SetLabelTextColour(wx.Colour(240, 240, 240))
-        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
+        self.chat_out = wx.TextCtrl(self.buddy_panel, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.chat_out.SetMinSize((100, 220))
 
-        vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
-        grid_panel.SetSizer(vbox)
-        main.Add(grid_panel, 1, wx.EXPAND)
+        buddy_sizer.AddSpacer(6)
+        buddy_sizer.Add(persona_row, 0, wx.LEFT | wx.RIGHT, 8)
+        buddy_sizer.AddSpacer(6)
+        buddy_sizer.Add(ask_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
+        buddy_sizer.AddSpacer(6)
+        buddy_sizer.Add(self.chat_out, 1, wx.EXPAND | wx.ALL, 8)
+        self.buddy_panel.SetSizer(buddy_sizer)
 
-        self.SetSizer(main)
+        self.SetSizer(root)
+        self.Layout()
 
-    # -------------------------------------------- actions
-    def on_settings(self, _):
-        SettingsWindow(self).Show()
+    # ---------------------------
+    # Display helpers
+    # ---------------------------
 
-    def on_load_file(self, _):
-        dlg = wx.FileDialog(self, "Open CSV/TXT", wildcard="CSV/TXT|*.csv;*.txt",
-                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
-        if dlg.ShowModal() != wx.ID_OK:
-            dlg.Destroy()
-            return
-        path = dlg.GetPath()
-        dlg.Destroy()
-        text = open(path, "r", encoding="utf-8").read()
-        self.headers, self.raw_data = detect_and_split_data(text)
-        self._display(self.headers, self.raw_data)
-
-    def on_load_s3(self, _):
-        uri = wx.GetTextFromUser("Enter HTTP(S) or S3 URI:", "Load from URI/S3")
-        if not uri:
-            return
-        try:
-            text = download_text_from_uri(uri)
-            self.headers, self.raw_data = detect_and_split_data(text)
-            self._display(self.headers, self.raw_data)
-        except Exception as e:
-            wx.MessageBox(f"Failed to load data:\n{e}", "Error", wx.OK | wx.ICON_ERROR)
-
-    def on_load_knowledge(self, _):
-        dlg = wx.FileDialog(self, "Add Knowledge Files",
-                            wildcard="All supported|*.txt;*.csv;*.json;*.md;*.png;*.jpg;*.jpeg;*.gif|"
-                                     "Text/CSV/JSON|*.txt;*.csv;*.json;*.md|"
-                                     "Images|*.png;*.jpg;*.jpeg;*.gif|All|*.*",
-                            style=wx.FD_OPEN | wx.FD_MULTIPLE)
-        if dlg.ShowModal() != wx.ID_OK:
-            dlg.Destroy()
-            return
-        paths = dlg.GetPaths()
-        dlg.Destroy()
-
-        added = []
-        for p in paths:
-            try:
-                ext = os.path.splitext(p)[1].lower()
-                if ext in (".txt", ".csv", ".json", ".md"):
-                    content = open(p, "r", encoding="utf-8", errors="ignore").read()
-                    self.knowledge_files.append({"name": os.path.basename(p), "content": content})
-                    added.append(os.path.basename(p))
-                elif ext in (".png", ".jpg", ".jpeg", ".gif"):
-                    self.knowledge_files.append({"name": os.path.basename(p), "path": p, "content": None})
-                    added.append(os.path.basename(p))
-                else:
-                    try:
-                        content = open(p, "r", encoding="utf-8", errors="ignore").read()
-                    except Exception:
-                        content = None
-                    self.knowledge_files.append({"name": os.path.basename(p), "path": p, "content": content})
-                    added.append(os.path.basename(p))
-            except Exception:
-                pass
-
-        if added:
-            self.knowledge_line.SetLabel("  • " + "  •  ".join(added))
-            self.Layout()
-
-    def on_rules(self, _):
-        if not self.headers:
-            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
-            return
-        QualityRuleDialog(self, self.headers, self.quality_rules).ShowModal()
-
-    def on_buddy(self, _):
-        DataBuddyDialog(self, self.raw_data, self.headers, knowledge=self.knowledge_files).ShowModal()
-
-    def do_analysis_process(self, proc_name: str):
-        if not self.headers:
-            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
-            return
-        self.current_process = proc_name
-        df = pd.DataFrame(self.raw_data, columns=self.headers)
-
-        if proc_name == "Profile":
-            func = profile_analysis
-        elif proc_name == "Quality":
-            func = lambda d: quality_analysis(d, self.quality_rules)
-        elif proc_name == "Catalog":
-            func = catalog_analysis
-        elif proc_name == "Compliance":
-            func = compliance_analysis
-        elif proc_name == "Detect Anomalies":
-            func = detect_anomalies_analysis
+    def _display(self, grid: gridlib.Grid, data):
+        """
+        Render a pandas DataFrame or list[dict] into the provided wx.Grid.
+        """
+        # Normalize into rows/cols
+        if pd is not None and isinstance(data, pd.DataFrame):
+            cols = list(map(str, data.columns))
+            rows = data.astype(str).values.tolist()
+        elif isinstance(data, list) and data and isinstance(data[0], dict):
+            cols = list(map(str, data[0].keys()))
+            rows = [[str(r.get(c, "")) for c in cols] for r in data]
         else:
-            func = profile_analysis
+            # Fallback to empty grid
+            cols, rows = [], []
 
-        try:
-            hdr, data = func(df)
-        except Exception as e:
-            hdr, data = ["Error"], [[str(e)]]
+        # Reset grid
+        if grid.GetNumberRows() > 0:
+            grid.DeleteRows(0, grid.GetNumberRows())
+        if grid.GetNumberCols() > 0:
+            grid.DeleteCols(0, grid.GetNumberCols())
 
-        self._display(hdr, data)
+        # Create columns/rows
+        if cols:
+            grid.AppendCols(len(cols))
+            for i, c in enumerate(cols):
+                grid.SetColLabelValue(i, c)
 
-    def on_export_csv(self, _):
-        dlg = wx.FileDialog(self, "Save CSV", wildcard="CSV|*.csv",
-                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
-        if dlg.ShowModal() != wx.ID_OK:
-            return
-        path = dlg.GetPath()
-        dlg.Destroy()
-        try:
-            hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
-            data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))]
-                    for r in range(self.grid.GetNumberRows())]
-            pd.DataFrame(data, columns=hdr).to_csv(path, index=False, sep=",")
-            wx.MessageBox("CSV exported.", "Export", wx.OK | wx.ICON_INFORMATION)
-        except Exception as e:
-            wx.MessageBox(f"Export failed: {e}", "Export", wx.OK | wx.ICON_ERROR)
+        if rows:
+            grid.AppendRows(len(rows))
+            for r_i, r in enumerate(rows):
+                for c_i, val in enumerate(r):
+                    grid.SetCellValue(r_i, c_i, val)
 
-    def on_export_txt(self, _):
-        dlg = wx.FileDialog(self, "Save TXT", wildcard="TXT|*.txt",
-                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
-        if dlg.ShowModal() != wx.ID_OK:
-            return
-        path = dlg.GetPath()
-        dlg.Destroy()
-        try:
-            hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
-            data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))]
-                    for r in range(self.grid.GetNumberRows())]
-            pd.DataFrame(data, columns=hdr).to_csv(path, index=False, sep="\t")
-            wx.MessageBox("TXT exported.", "Export", wx.OK | wx.ICON_INFORMATION)
-        except Exception as e:
-            wx.MessageBox(f"Export failed: {e}", "Export", wx.OK | wx.ICON_ERROR)
+        grid.AutoSizeColumns()
+        grid.ForceRefresh()
 
-    def on_upload_s3(self, _):
-        hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
-        data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))]
-                for r in range(self.grid.GetNumberRows())]
-        try:
-            msg = upload_to_s3(self.current_process or "Unknown", hdr, data)
-            wx.MessageBox(msg, "Upload", wx.OK | wx.ICON_INFORMATION)
-        except Exception as e:
-            wx.MessageBox(f"Upload failed: {e}", "Upload", wx.OK | wx.ICON_ERROR)
+    # ---------------------------
+    # Example handlers (replace with your own logic)
+    # ---------------------------
 
-    def on_generate_synth(self, _):
-        if not self.headers:
-            wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
-            return
+    def on_upload(self):
+        with wx.FileDialog(self, "Select file", wildcard="*.*",
+                           style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
+                path = dlg.GetPath()
+                # Load the file however your app expects
+                # For demo, create tiny preview
+                data = [
+                    {"file": path.split("/")[-1], "path": path, "status": "Loaded"}
+                ]
+                self.current_df = data
+                self._display(self.upload_tab.grid, self.current_df)
 
-        dlg = SyntheticDataDialog(self, self.headers)
-        if dlg.ShowModal() != wx.ID_OK:
-            dlg.Destroy()
-            return
+    def on_load_knowledge(self):
+        wx.MessageBox("Load Knowledge clicked", "Info")
 
-        df = None
-        if hasattr(dlg, "get_dataframe"):
-            try:
-                df = dlg.get_dataframe()
-            except Exception:
-                df = None
+    def on_remove_knowledge(self):
+        wx.MessageBox("Remove Knowledge clicked", "Info")
 
-        if df is None:
-            try:
-                n, fields = dlg.get_values()
-                if not fields:
-                    fields = list(self.headers)
-                df = _synth_dataframe(n, fields)
-            except Exception as e:
-                wx.MessageBox(f"Synthetic data error: {e}", "Error", wx.OK | wx.ICON_ERROR)
-                dlg.Destroy()
-                return
+    def on_profile(self):
+        # Run profiling logic, then render to the Profile tab
+        sample = [
+            {"column": "id", "type": "int", "nulls": 0, "unique": 100},
+            {"column": "email", "type": "string", "nulls": 2, "unique": 98},
+        ]
+        self._display(self.profile_tab.grid, sample)
 
-        dlg.Destroy()
+    def on_export_csv(self):
+        wx.MessageBox("Export CSV clicked", "Info")
 
-        hdr = list(df.columns)
-        data = df.values.tolist()
-        self.headers = hdr
-        self.raw_data = data
-        self._display(hdr, data)
+    def on_export_txt(self):
+        wx.MessageBox("Export TXT clicked", "Info")
 
-    # ------------------------------- grid utils
-    def _display(self, hdr, data):
-        self.grid.ClearGrid()
-        if self.grid.GetNumberRows():
-            self.grid.DeleteRows(0, self.grid.GetNumberRows())
-        if self.grid.GetNumberCols():
-            self.grid.DeleteCols(0, self.grid.GetNumberCols())
+    def on_quality(self):
+        sample = [
+            {"rule": "Not Null(email)", "violations": 2, "pass_rate": "96%"},
+            {"rule": "Valid Phone", "violations": 1, "pass_rate": "98%"},
+        ]
+        self._display(self.quality_tab.grid, sample)
 
-        if not hdr:
-            return
+    def on_quality_rules(self):
+        wx.MessageBox("Open Quality Rules", "Info")
 
-        self.grid.AppendCols(len(hdr))
-        for i, h in enumerate(hdr):
-            self.grid.SetColLabelValue(i, str(h))
+    def on_quality_exceptions(self):
+        wx.MessageBox("Open Quality Exceptions", "Info")
 
-        self.grid.AppendRows(len(data))
-        for r, row in enumerate(data):
-            for c, val in enumerate(row):
-                self.grid.SetCellValue(r, c, str(val))
-                if r % 2 == 0:
-                    self.grid.SetCellBackgroundColour(r, c, wx.Colour(45, 45, 45))
-        self.adjust_grid()
+    def on_catalog(self):
+        sample = [
+            {"table": "employees", "rows": 418, "description": "HR employee master"},
+            {"table": "knowledge_base", "rows": 2734, "description": "KB articles"},
+        ]
+        self._display(self.catalog_tab.grid, sample)
 
-    def adjust_grid(self):
-        cols = self.grid.GetNumberCols()
-        if cols == 0:
-            return
-        total_w = self.grid.GetClientSize().GetWidth()
-        usable = max(0, total_w - self.grid.GetRowLabelSize())
-        w = max(60, usable // cols)
-        for c in range(cols):
-            self.grid.SetColSize(c, w)
+    def on_catalog_publish(self):
+        wx.MessageBox("Publish Catalog clicked", "Info")
 
-    def on_grid_resize(self, event):
-        event.Skip()
-        wx.CallAfter(self.adjust_grid)
+    def on_anomalies(self):
+        sample = [
+            {"metric": "dq_score", "zscore": 3.1, "flag": "outlier"},
+            {"metric": "row_count", "shift": "+12%", "flag": "level-shift"},
+        ]
+        self._display(self.anomalies_tab.grid, sample)
 
+    def on_drift(self):
+        wx.MessageBox("Drift vs Baseline requested", "Info")
+
+    def on_compliance(self):
+        sample = [
+            {"check": "Overall Quality Score", "status": "Meets SLA", "threshold": "80%"},
+            {"check": "CCPA", "status": "Below SLA", "threshold": "80%"},
+        ]
+        self._display(self.compliance_tab.grid, sample)
+
+    def on_optimize(self):
+        sample = [
+            {"recommendation": "Add index on email", "impact": "High", "effort": "Low"},
+            {"recommendation": "Partition by date", "impact": "Med", "effort": "Med"},
+        ]
+        self._display(self.optimizer_tab.grid, sample)
+
+    def on_recommendations(self):
+        wx.MessageBox("Open Recommendations panel", "Info")
+
+    def on_run_tasks(self):
+        sample = [
+            {"task": "upload file", "status": "done"},
+            {"task": "profile", "status": "done"},
+            {"task": "quality", "status": "todo"},
+        ]
+        self._display(self.todo_tab.grid, sample)
+
+    def on_open_tasks(self):
+        wx.MessageBox("Open tasks.txt", "Info")
+
+    def on_little_buddy_send(self):
+        persona = self.persona.GetStringSelection() if self.persona else "Unknown"
+        text = self.ask_input.GetValue() if self.ask_input else ""
+        if self.chat_out:
+            self.chat_out.AppendText(f"[{persona}] {text}\n")
+            self.chat_out.AppendText("→ (assistant) This is where your response would appear.\n\n")
+        if self.ask_input:
+            self.ask_input.SetValue("")
+
+
+# ---------------------------
+# App entry point (for testing)
+# ---------------------------
 
 if __name__ == "__main__":
     app = wx.App(False)
-    MainWindow()
+    win = MainWindow()
+    win.Show()
     app.MainLoop()
