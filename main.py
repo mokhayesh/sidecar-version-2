@@ -1,5 +1,4 @@
 import wx
-from main_window import MainWindow
 import wx.grid as gridlib
 import wx.richtext as rt
 import pandas as pd
@@ -10,7 +9,6 @@ from botocore.config import Config
 import speech_recognition as sr
 import edge_tts
 import pygame
-
 
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -68,9 +66,11 @@ def save_defaults():
 # ║                             UI Entry Point                             ║
 # ╚═════════════════════════════════════════════════════════════════════════╝
 if __name__ == "__main__":
-    app = wx.App(False)          # create wx application object
-    win = MainWindow()           # create our main frame
-    win.Show()                   # show the window
-    app.MainLoop()               # start the UI event loop
+    app = wx.App(False)
 
+    # Lazy-import core modules
+    from app.main_window import MainWindow
 
+    # Start main application window
+    MainWindow()
+    app.MainLoop()
