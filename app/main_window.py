@@ -29,7 +29,7 @@ except Exception:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Cross-version font helper (uses wx.FontInfo; safe on Python 3.13 / wx 4.x)
+# Font helper (wx 4.x & Py 3.13 safe)
 # ──────────────────────────────────────────────────────────────────────────────
 def mkfont(size: int, *, bold: bool = False, italic: bool = False,
            family: int = wx.FONTFAMILY_SWISS) -> wx.Font:
@@ -47,8 +47,8 @@ def mkfont(size: int, *, bold: bool = False, italic: bool = False,
 class HeaderBanner(wx.Panel):
     def __init__(self, parent, height=60, bg=wx.Colour(28, 28, 28)):
         super().__init__(parent, size=(-1, height), style=wx.BORDER_NONE)
-        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)  # required for AutoBufferedPaintDC
-        self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)  # prevent flicker
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
 
         self._bg = bg
         self._min_w = 320
@@ -77,7 +77,6 @@ class HeaderBanner(wx.Panel):
                     return wx.Image(p, wx.BITMAP_TYPE_ANY)
                 except Exception:
                     pass
-        # Fallback: solid color image
         bmp = wx.Bitmap(self._min_w, 60)
         dc = wx.MemoryDC(bmp)
         dc.SetBackground(wx.Brush(self._bg))
@@ -103,12 +102,96 @@ class HeaderBanner(wx.Panel):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# KPI Metric Card
+# Rounded/Shadow widgets
+# ──────────────────────────────────────────────────────────────────────────────
+class RoundedShadowButton(wx.Control):
+    def __init__(self, parent, label, handler, *, colour=wx.Colour(66, 133, 244),
+                 radius=12, glow=6):
+        super().__init__(parent, style=wx.BORDER_NONE | wx.WANTS_CHARS)
+        self.label = label
+        self.colour = colour
+        self.radius = radius
+        self.glow = glow
+        self.SetMinSize((150, 36))
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.Bind(wx.EVT_LEFT_DOWN, lambda e: handler(e))
+        self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self.Refresh())
+        self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self.Refresh())
+        self._font = mkfont(9, bold=True)
+
+    def _on_paint(self, _evt):
+        dc = wx.AutoBufferedPaintDC(self)
+        rect = self.GetClientRect()
+
+        dc.SetBackground(wx.Brush(self.GetParent().GetBackgroundColour()))
+        dc.Clear()
+
+        # soft shadow/glow
+        for i in range(self.glow, 0, -1):
+            alpha = int(18 * (i / self.glow)) + 8
+            dc.SetPen(wx.Pen(wx.Colour(0, 0, 0, alpha)))
+            dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, alpha)))
+            dc.DrawRoundedRectangle(i, i, rect.width - 2*i, rect.height - 2*i, self.radius + i)
+
+        # main button
+        dc.SetPen(wx.Pen(self.colour))
+        dc.SetBrush(wx.Brush(self.colour))
+        dc.DrawRoundedRectangle(0, 0, rect.width, rect.height, self.radius)
+
+        # label
+        dc.SetFont(self._font)
+        dc.SetTextForeground(wx.WHITE)
+        tw, th = dc.GetTextExtent(self.label)
+        dc.DrawText(self.label, (rect.width - tw)//2, (rect.height - th)//2)
+
+
+class ShadowPanel(wx.Panel):
+    def __init__(self, parent, *, radius=12, shadow=10,
+                 bg=wx.Colour(40, 40, 40), body_bg=wx.Colour(50, 50, 50)):
+        super().__init__(parent, style=wx.BORDER_NONE)
+        self.radius = radius
+        self.shadow = shadow
+        self.bg = bg
+        self.body_bg = body_bg
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+
+        self.body = wx.Panel(self, style=wx.BORDER_NONE)
+        self.body.SetBackgroundColour(self.body_bg)
+
+        s = wx.BoxSizer(wx.VERTICAL)
+        s.Add(self.body, 1, wx.EXPAND | wx.ALL, self.shadow)
+        self.SetSizer(s)
+
+    def _on_paint(self, _evt):
+        dc = wx.AutoBufferedPaintDC(self)
+        rect = self.GetClientRect()
+
+        dc.SetBackground(wx.Brush(self.GetParent().GetBackgroundColour()))
+        dc.Clear()
+
+        for i in range(self.shadow, 0, -1):
+            alpha = int(15 * (i / self.shadow)) + 10
+            dc.SetPen(wx.Pen(wx.Colour(0, 0, 0, alpha)))
+            dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, alpha)))
+            dc.DrawRoundedRectangle(i, i, rect.width - 2*i, rect.height - 2*i, self.radius + i)
+
+        dc.SetPen(wx.Pen(wx.Colour(70, 70, 70)))
+        dc.SetBrush(wx.Brush(self.body_bg))
+        dc.DrawRoundedRectangle(self.shadow, self.shadow,
+                                rect.width - 2*self.shadow, rect.height - 2*self.shadow,
+                                self.radius)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# KPI Metric Card (now supports min width)
 # ──────────────────────────────────────────────────────────────────────────────
 class MetricCard(wx.Panel):
-    def __init__(self, parent, title: str, value: str, accent: wx.Colour):
+    def __init__(self, parent, title: str, value: str, accent: wx.Colour, *, min_w: int = 130):
         super().__init__(parent, style=wx.BORDER_NONE)
         self.SetBackgroundColour(wx.Colour(38, 39, 46))
+        self.SetMinSize((min_w, -1))
 
         v = wx.BoxSizer(wx.VERTICAL)
         self.title = wx.StaticText(self, label=title.upper())
@@ -119,7 +202,6 @@ class MetricCard(wx.Panel):
         self.value.SetForegroundColour(wx.WHITE)
         self.value.SetFont(mkfont(16, bold=True))
 
-        # thin accent line under value
         line = wx.Panel(self, size=(-1, 2))
         line.SetBackgroundColour(accent)
 
@@ -168,101 +250,6 @@ def _synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Visual helpers: rounded shadow button & shadow panel
-# ──────────────────────────────────────────────────────────────────────────────
-class RoundedShadowButton(wx.Control):
-    """
-    Custom rounded button with soft shadow / glow.
-    """
-    def __init__(self, parent, label, handler, *, colour=wx.Colour(66, 133, 244),
-                 radius=12, glow=6):
-        super().__init__(parent, style=wx.BORDER_NONE | wx.WANTS_CHARS)
-        self.label = label
-        self.colour = colour
-        self.radius = radius
-        self.glow = glow
-        self.SetMinSize((150, 36))
-        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
-        self.Bind(wx.EVT_PAINT, self._on_paint)
-        self.Bind(wx.EVT_LEFT_DOWN, lambda e: handler(e))
-        self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self.Refresh())
-        self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self.Refresh())
-        self._font = mkfont(9, bold=True)
-
-    def _on_paint(self, _evt):
-        dc = wx.AutoBufferedPaintDC(self)
-        rect = self.GetClientRect()
-
-        dc.SetBackground(wx.Brush(self.GetParent().GetBackgroundColour()))
-        dc.Clear()
-
-        # soft shadow/glow
-        for i in range(self.glow, 0, -1):
-            alpha = int(18 * (i / self.glow)) + 8  # very soft
-            dc.SetPen(wx.Pen(wx.Colour(0, 0, 0, alpha)))
-            dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, alpha)))
-            dc.DrawRoundedRectangle(i, i, rect.width - 2*i, rect.height - 2*i, self.radius + i)
-
-        # main button
-        dc.SetPen(wx.Pen(self.colour))
-        dc.SetBrush(wx.Brush(self.colour))
-        dc.DrawRoundedRectangle(0, 0, rect.width, rect.height, self.radius)
-
-        # label
-        dc.SetFont(self._font)
-        dc.SetTextForeground(wx.WHITE)
-        tw, th = dc.GetTextExtent(self.label)
-        dc.DrawText(self.label, (rect.width - tw)//2, (rect.height - th)//2)
-
-
-class ShadowPanel(wx.Panel):
-    """
-    A container panel that paints a soft shadow and rounded body –
-    use .body as the inner container to place real content.
-    """
-    def __init__(self, parent, *, radius=12, shadow=10,
-                 bg=wx.Colour(40, 40, 40), body_bg=wx.Colour(50, 50, 50)):
-        super().__init__(parent, style=wx.BORDER_NONE)
-        self.radius = radius
-        self.shadow = shadow
-        self.bg = bg
-        self.body_bg = body_bg
-        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
-        self.Bind(wx.EVT_PAINT, self._on_paint)
-
-        # inner body panel where content goes
-        self.body = wx.Panel(self, style=wx.BORDER_NONE)
-        self.body.SetBackgroundColour(self.body_bg)
-
-        s = wx.BoxSizer(wx.VERTICAL)
-        # padding leaves room for shadow glow
-        s.Add(self.body, 1, wx.EXPAND | wx.ALL, self.shadow)
-        self.SetSizer(s)
-
-    def _on_paint(self, _evt):
-        dc = wx.AutoBufferedPaintDC(self)
-        rect = self.GetClientRect()
-
-        # clear to parent bg
-        dc.SetBackground(wx.Brush(self.GetParent().GetBackgroundColour()))
-        dc.Clear()
-
-        # soft shadow layers
-        for i in range(self.shadow, 0, -1):
-            alpha = int(15 * (i / self.shadow)) + 10
-            dc.SetPen(wx.Pen(wx.Colour(0, 0, 0, alpha)))
-            dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, alpha)))
-            dc.DrawRoundedRectangle(i, i, rect.width - 2*i, rect.height - 2*i, self.radius + i)
-
-        # body outline (optional subtle border)
-        dc.SetPen(wx.Pen(wx.Colour(70, 70, 70)))
-        dc.SetBrush(wx.Brush(self.body_bg))
-        dc.DrawRoundedRectangle(self.shadow, self.shadow,
-                                rect.width - 2*self.shadow, rect.height - 2*self.shadow,
-                                self.radius)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Main Window
 # ──────────────────────────────────────────────────────────────────────────────
 class MainWindow(wx.Frame):
@@ -296,12 +283,12 @@ class MainWindow(wx.Frame):
         BG = wx.Colour(40, 40, 40)
         PANEL = wx.Colour(45, 45, 45)
         TXT = wx.Colour(235, 235, 235)
-        BLUE = wx.Colour(66, 133, 244)  # button/header blue
+        BLUE = wx.Colour(66, 133, 244)
 
         self.SetBackgroundColour(BG)
         main = wx.BoxSizer(wx.VERTICAL)
 
-        # Header row: banner + centered title (reduced height)
+        # Header
         header_bg = wx.Colour(28, 28, 28)
         header_row = wx.BoxSizer(wx.HORIZONTAL)
 
@@ -322,22 +309,50 @@ class MainWindow(wx.Frame):
         header_row.Add(title_panel, 1, wx.EXPAND)
         main.Add(header_row, 0, wx.EXPAND | wx.BOTTOM, 4)
 
-        # ── KPI STRIP ───────────────────────────────────────────────────────
-        kpi_panel = wx.Panel(self)
+        # ── KPI BAR with Buddy button on right ─────────────────────────────
+        kpi_bar = wx.Panel(self)
+        kpi_bar.SetBackgroundColour(wx.Colour(33, 34, 39))
+        kbar = wx.BoxSizer(wx.HORIZONTAL)
+
+        kpi_panel = wx.Panel(kpi_bar)
         kpi_panel.SetBackgroundColour(wx.Colour(33, 34, 39))
         kpis = wx.BoxSizer(wx.HORIZONTAL)
 
-        self.card_rows     = MetricCard(kpi_panel, "Rows", "—", wx.Colour(120, 99, 255))
-        self.card_cols     = MetricCard(kpi_panel, "Columns", "—", wx.Colour(151, 133, 255))
-        self.card_nulls    = MetricCard(kpi_panel, "Null %", "—", wx.Colour(187, 168, 255))
-        self.card_quality  = MetricCard(kpi_panel, "DQ Score", "—", wx.Colour(255, 207, 92))
-        self.card_anoms    = MetricCard(kpi_panel, "Anomalies", "—", wx.Colour(255, 113, 113))
+        # Wider min width for large numbers on ROWS
+        self.card_rows    = MetricCard(kpi_panel, "Rows", "—", wx.Colour(120, 99, 255), min_w=170)
+        self.card_cols    = MetricCard(kpi_panel, "Columns", "—", wx.Colour(151, 133, 255), min_w=140)
+        self.card_nulls   = MetricCard(kpi_panel, "Null %", "—", wx.Colour(187, 168, 255), min_w=140)
+        self.card_quality = MetricCard(kpi_panel, "DQ Score", "—", wx.Colour(255, 207, 92), min_w=150)
+        # NEW: Completeness KPI (100 - null%)
+        self.card_complete = MetricCard(kpi_panel, "Completeness", "—", wx.Colour(72, 199, 142), min_w=170)
+        self.card_anoms   = MetricCard(kpi_panel, "Anomalies", "—", wx.Colour(255, 113, 113), min_w=150)
 
-        for c in (self.card_rows, self.card_cols, self.card_nulls, self.card_quality, self.card_anoms):
-            kpis.Add(c, 0, wx.ALL, 6)
+        for c in (self.card_rows, self.card_cols, self.card_nulls, self.card_quality, self.card_complete, self.card_anoms):
+            # let cards expand to fill the row nicely
+            kpis.Add(c, 1, wx.ALL | wx.EXPAND, 6)
 
         kpi_panel.SetSizer(kpis)
-        main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+        # Right side: Little Buddy quick access button
+        def _open_buddy(_):
+            self.on_buddy(None)
+
+        buddy_holder = wx.Panel(kpi_bar)
+        buddy_holder.SetBackgroundColour(wx.Colour(33, 34, 39))
+        bhz = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_buddy_top = RoundedShadowButton(
+            buddy_holder, "Little Buddy", _open_buddy, colour=BLUE, radius=12, glow=6
+        )
+        bhz.AddStretchSpacer()
+        bhz.Add(self.btn_buddy_top, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
+        buddy_holder.SetSizer(bhz)
+        buddy_holder.SetMinSize((240, -1))  # reserve right side area
+
+        kbar.Add(kpi_panel, 1, wx.EXPAND | wx.RIGHT, 6)
+        kbar.Add(buddy_holder, 0, wx.EXPAND)
+        kpi_bar.SetSizer(kbar)
+
+        main.Add(kpi_bar, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
 
         # Menu bar
         mb = wx.MenuBar()
@@ -350,7 +365,7 @@ class MainWindow(wx.Frame):
         mb.Append(m_set, "&Settings")
         self.SetMenuBar(mb)
 
-        # Toolbar (wraps on resize) with rounded/glow buttons
+        # Toolbar (Little Buddy removed from here)
         toolbar_panel = wx.Panel(self)
         toolbar_panel.SetBackgroundColour(PANEL)
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
@@ -370,7 +385,6 @@ class MainWindow(wx.Frame):
         add_btn("Detect Anomalies", lambda e: self.do_analysis_process("Detect Anomalies"))
         add_btn("Catalog", lambda e: self.do_analysis_process("Catalog"))
         add_btn("Compliance", lambda e: self.do_analysis_process("Compliance"))
-        add_btn("Little Buddy", self.on_buddy)
         add_btn("Export CSV", self.on_export_csv)
         add_btn("Export TXT", self.on_export_txt)
         add_btn("Upload to S3", self.on_upload_s3)
@@ -394,25 +408,22 @@ class MainWindow(wx.Frame):
         info_panel.SetSizer(hz)
         main.Add(info_panel, 0, wx.EXPAND)
 
-        # Grid in a rounded shadow panel
+        # Grid in rounded shadow panel
         grid_shell = ShadowPanel(self, radius=12, shadow=10,
                                  bg=BG, body_bg=wx.Colour(50, 50, 50))
-        grid_host = grid_shell.body  # place grid here
+        grid_host = grid_shell.body
 
         vbox = wx.BoxSizer(wx.VERTICAL)
         self.grid = gridlib.Grid(grid_host)
         self.grid.CreateGrid(0, 0)
-
-        # Header styled to same blue
         self.grid.SetLabelBackgroundColour(BLUE)
         self.grid.SetLabelTextColour(wx.WHITE)
         self.grid.SetLabelFont(mkfont(9, bold=True))
-
         self.grid.SetDefaultCellBackgroundColour(wx.Colour(55, 55, 55))
         self.grid.SetDefaultCellTextColour(wx.Colour(220, 220, 220))
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
 
-        vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 10)  # small inner padding
+        vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 10)
         grid_host.SetSizer(vbox)
 
         main.Add(grid_shell, 1, wx.EXPAND | wx.ALL, 10)
@@ -599,7 +610,6 @@ class MainWindow(wx.Frame):
     # Grid helpers + KPI updates
     # ──────────────────────────────────────────────────────────────────────
     def _display(self, hdr, data):
-        # clear grid
         self.grid.ClearGrid()
         if self.grid.GetNumberRows():
             self.grid.DeleteRows(0, self.grid.GetNumberRows())
@@ -610,12 +620,10 @@ class MainWindow(wx.Frame):
             self.update_kpis([], [])
             return
 
-        # set headers
         self.grid.AppendCols(len(hdr))
         for i, h in enumerate(hdr):
             self.grid.SetColLabelValue(i, str(h))
 
-        # set rows
         self.grid.AppendRows(len(data))
         for r, row in enumerate(data):
             for c, val in enumerate(row):
@@ -624,17 +632,14 @@ class MainWindow(wx.Frame):
                     self.grid.SetCellBackgroundColour(r, c, wx.Colour(45, 45, 45))
         self.adjust_grid()
 
-        # Update KPI cards based on what was just displayed
         self.update_kpis(hdr, data)
 
     def update_kpis(self, hdr, data):
-        # rows / cols
         rows = len(data)
         cols = len(hdr)
         self.card_rows.SetValue(rows if rows else "0")
         self.card_cols.SetValue(cols if cols else "0")
 
-        # null %
         total_cells = rows * max(cols, 1)
         empty = 0
         if total_cells > 0:
@@ -645,11 +650,13 @@ class MainWindow(wx.Frame):
         null_pct = (empty / total_cells * 100.0) if total_cells else 0.0
         self.card_nulls.SetValue(f"{null_pct:.1f}%")
 
-        # dq score (fallback: 100 - null%)
         dq = max(0.0, 100.0 - null_pct)
         self.card_quality.SetValue(f"{dq:.1f}")
 
-        # anomalies (heuristics)
+        # NEW: Completeness KPI (non-null percentage)
+        completeness = 100.0 - null_pct
+        self.card_complete.SetValue(f"{completeness:.1f}")
+
         anoms = 0
         if self.current_process.lower().startswith("detect"):
             anoms = rows
