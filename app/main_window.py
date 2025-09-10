@@ -194,6 +194,9 @@ class MainWindow(wx.Frame):
         self.quality_rules: dict = {}
         self.knowledge_files: list[dict] = []
 
+        # Track last-known anomaly count
+        self._last_anomaly_count = 0
+
         self._build_ui()
         self.Centre()
         self.Show()
@@ -266,7 +269,7 @@ class MainWindow(wx.Frame):
             b = wx.Button(toolbar_panel, label=label, style=wx.BORDER_NONE)
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(mkfont(9))  # bold not strictly needed on dark buttons
+            b.SetFont(mkfont(9))
             b.SetMinSize((150, 34))
             b.Bind(wx.EVT_BUTTON, handler)
             toolbar.Add(b, 0, wx.ALL, 4)
@@ -295,7 +298,7 @@ class MainWindow(wx.Frame):
         info_panel.SetBackgroundColour(wx.Colour(48, 48, 48))
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
-        lab.SetForegroundColour(TXT)
+        lab.SetForegroundColour(wx.Colour(235, 235, 235))
         lab.SetFont(mkfont(9, bold=True))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
 
@@ -327,6 +330,45 @@ class MainWindow(wx.Frame):
         self.SetSizer(main)
 
     # ──────────────────────────────────────────────────────────────────────
+    # KPI helpers (NEW)
+    # ──────────────────────────────────────────────────────────────────────
+    def _calc_null_pct(self, df: pd.DataFrame) -> float:
+        """Return average percent of null/empty values across the dataframe."""
+        if df is None or df.size == 0:
+            return 0.0
+        # Treat empty strings and typical 'None'/'NaN' strings as null-ish
+        df2 = df.copy()
+        df2 = df2.replace(["", " ", "None", "none", "NaN", "nan", "NULL", "null"], pd.NA)
+        nulls = df2.isna().sum().sum()
+        total = df2.size
+        return 100.0 * float(nulls) / float(total) if total else 0.0
+
+    def _update_kpis(self, proc_name: str, df: pd.DataFrame, analysis_hdr, analysis_data):
+        """Update KPI cards after analyses or loads."""
+        try:
+            rows = int(len(df.index)) if df is not None else 0
+            cols = int(len(df.columns)) if df is not None else 0
+            self.card_rows.set(rows)
+            self.card_cols.set(cols)
+
+            null_pct = round(self._calc_null_pct(df), 1)
+            self.card_nulls.set(f"{null_pct}%")
+
+            dq = max(0, round(100.0 - null_pct, 1))
+            self.card_quality.set(f"{dq}")
+
+            if proc_name == "Detect Anomalies":
+                # Count analysis rows = anomalies detected (generic)
+                anoms = len(analysis_data) if analysis_data is not None else 0
+                self._last_anomaly_count = anoms
+                self.card_anoms.set(anoms)
+            else:
+                # Keep last anomaly count so it doesn't reset every time
+                self.card_anoms.set(self._last_anomaly_count)
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────────────────────────────
     # Actions
     # ──────────────────────────────────────────────────────────────────────
     def on_settings(self, _):
@@ -344,14 +386,9 @@ class MainWindow(wx.Frame):
         self.headers, self.raw_data = detect_and_split_data(text)
         self._display(self.headers, self.raw_data)
 
-        # Update KPIs (basic)
-        try:
-            rows = len(self.raw_data)
-            cols = len(self.headers)
-            self.card_rows.set(rows)
-            self.card_cols.set(cols)
-        except Exception:
-            pass
+        # Update KPIs for the loaded dataset
+        df = pd.DataFrame(self.raw_data, columns=self.headers)
+        self._update_kpis("Load", df, None, None)
 
     def on_load_s3(self, _):
         uri = wx.GetTextFromUser("Enter HTTP(S) or S3 URI:", "Load from URI/S3")
@@ -362,11 +399,8 @@ class MainWindow(wx.Frame):
             self.headers, self.raw_data = detect_and_split_data(text)
             self._display(self.headers, self.raw_data)
 
-            # Update KPIs (basic)
-            rows = len(self.raw_data)
-            cols = len(self.headers)
-            self.card_rows.set(rows)
-            self.card_cols.set(cols)
+            df = pd.DataFrame(self.raw_data, columns=self.headers)
+            self._update_kpis("Load", df, None, None)
         except Exception as e:
             wx.MessageBox(f"Failed to load data:\n{e}", "Error", wx.OK | wx.ICON_ERROR)
 
@@ -442,6 +476,9 @@ class MainWindow(wx.Frame):
             hdr, data = ["Error"], [[str(e)]]
 
         self._display(hdr, data)
+
+        # Update KPIs after the analysis based on the *dataset* and what was returned
+        self._update_kpis(proc_name, df, hdr, data)
 
     def on_export_csv(self, _):
         dlg = wx.FileDialog(self, "Save CSV", wildcard="CSV|*.csv",
@@ -520,8 +557,7 @@ class MainWindow(wx.Frame):
 
         # Update KPIs after synthetic generation
         try:
-            self.card_rows.set(len(data))
-            self.card_cols.set(len(hdr))
+            self._update_kpis("Load", df, None, None)
         except Exception:
             pass
 
