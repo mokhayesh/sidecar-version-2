@@ -45,7 +45,7 @@ def mkfont(size: int, *, bold: bool = False, italic: bool = False,
 # Header banner (double-buffered, no flicker)
 # ──────────────────────────────────────────────────────────────────────────────
 class HeaderBanner(wx.Panel):
-    def __init__(self, parent, height=160, bg=wx.Colour(28, 28, 28)):
+    def __init__(self, parent, height=60, bg=wx.Colour(28, 28, 28)):
         super().__init__(parent, size=(-1, height), style=wx.BORDER_NONE)
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)  # required for AutoBufferedPaintDC
         self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)  # prevent flicker
@@ -78,7 +78,7 @@ class HeaderBanner(wx.Panel):
                 except Exception:
                     pass
         # Fallback: solid color image
-        bmp = wx.Bitmap(self._min_w, 160)
+        bmp = wx.Bitmap(self._min_w, 60)
         dc = wx.MemoryDC(bmp)
         dc.SetBackground(wx.Brush(self._bg))
         dc.Clear()
@@ -100,6 +100,39 @@ class HeaderBanner(wx.Panel):
         target_w = min(target_w, w)
         img = self._img.Scale(target_w, target_h, wx.IMAGE_QUALITY_HIGH)
         dc.DrawBitmap(wx.Bitmap(img), 0, 0)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# KPI Metric Card
+# ──────────────────────────────────────────────────────────────────────────────
+class MetricCard(wx.Panel):
+    def __init__(self, parent, title: str, value: str, accent: wx.Colour):
+        super().__init__(parent, style=wx.BORDER_NONE)
+        self.SetBackgroundColour(wx.Colour(38, 39, 46))
+
+        v = wx.BoxSizer(wx.VERTICAL)
+        self.title = wx.StaticText(self, label=title.upper())
+        self.title.SetForegroundColour(wx.Colour(180, 185, 200))
+        self.title.SetFont(mkfont(8, bold=True))
+
+        self.value = wx.StaticText(self, label=str(value))
+        self.value.SetForegroundColour(wx.WHITE)
+        self.value.SetFont(mkfont(16, bold=True))
+
+        # thin accent line under value
+        line = wx.Panel(self, size=(-1, 2))
+        line.SetBackgroundColour(accent)
+
+        v.Add(self.title, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        v.Add(self.value, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        v.Add(line, 0, wx.EXPAND | wx.ALL, 10)
+        self.SetSizer(v)
+
+        self._accent = accent
+
+    def SetValue(self, text: str):
+        self.value.SetLabel(str(text))
+        self.Layout()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -137,38 +170,6 @@ def _synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# KPI Card (NEW)
-# ──────────────────────────────────────────────────────────────────────────────
-class MetricCard(wx.Panel):
-    """Small pill-style card used in the KPI strip."""
-    def __init__(self, parent, title: str, value="—", accent=wx.Colour(120, 99, 255)):
-        super().__init__(parent)
-        self.SetBackgroundColour(wx.Colour(46, 46, 56))
-
-        v = wx.BoxSizer(wx.VERTICAL)
-
-        t = wx.StaticText(self, label=title.upper())
-        t.SetFont(mkfont(8, bold=True))
-        t.SetForegroundColour(wx.Colour(190, 190, 198))
-
-        self.val = wx.StaticText(self, label=str(value))
-        self.val.SetFont(mkfont(14, bold=True))
-        self.val.SetForegroundColour(wx.WHITE)
-
-        bar = wx.Panel(self, size=(-1, 3))
-        bar.SetBackgroundColour(accent)
-
-        v.Add(t, 0, wx.ALL, 6)
-        v.Add(self.val, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
-        v.Add(bar, 0, wx.EXPAND)
-
-        self.SetSizer(v)
-
-    def set(self, value):
-        self.val.SetLabel(str(value))
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Main Window
 # ──────────────────────────────────────────────────────────────────────────────
 class MainWindow(wx.Frame):
@@ -194,9 +195,6 @@ class MainWindow(wx.Frame):
         self.quality_rules: dict = {}
         self.knowledge_files: list[dict] = []
 
-        # Track last-known anomaly count
-        self._last_anomaly_count = 0
-
         self._build_ui()
         self.Centre()
         self.Show()
@@ -210,17 +208,17 @@ class MainWindow(wx.Frame):
         self.SetBackgroundColour(BG)
         main = wx.BoxSizer(wx.VERTICAL)
 
-        # Header row: banner + centered title
+        # Header row: banner + centered title (reduced height)
         header_bg = wx.Colour(28, 28, 28)
         header_row = wx.BoxSizer(wx.HORIZONTAL)
 
-        self.banner = HeaderBanner(self, height=160, bg=header_bg)
+        self.banner = HeaderBanner(self, height=60, bg=header_bg)
         header_row.Add(self.banner, 0, wx.EXPAND)
 
         title_panel = wx.Panel(self)
         title_panel.SetBackgroundColour(header_bg)
         title = wx.StaticText(title_panel, label="Data Buddy — Sidecar Application")
-        title.SetFont(mkfont(18, bold=True))
+        title.SetFont(mkfont(16, bold=True))  # slightly smaller to match reduced header
         title.SetForegroundColour(wx.Colour(240, 240, 245))
         tps = wx.BoxSizer(wx.HORIZONTAL)
         tps.AddStretchSpacer()
@@ -229,25 +227,24 @@ class MainWindow(wx.Frame):
         title_panel.SetSizer(tps)
 
         header_row.Add(title_panel, 1, wx.EXPAND)
-        main.Add(header_row, 0, wx.EXPAND)
+        main.Add(header_row, 0, wx.EXPAND | wx.BOTTOM, 4)  # tighter gap below header
 
-        # ── KPI strip (NEW) ────────────────────────────────────────────────
+        # ── KPI STRIP ───────────────────────────────────────────────────────
         kpi_panel = wx.Panel(self)
-        kpi_panel.SetBackgroundColour(wx.Colour(36, 36, 44))
+        kpi_panel.SetBackgroundColour(wx.Colour(33, 34, 39))
         kpis = wx.BoxSizer(wx.HORIZONTAL)
 
-        self.card_rows     = MetricCard(kpi_panel, "Rows",      "—", wx.Colour(120, 99, 255))
-        self.card_cols     = MetricCard(kpi_panel, "Columns",   "—", wx.Colour(151, 133, 255))
-        self.card_nulls    = MetricCard(kpi_panel, "Null %",    "—", wx.Colour(187, 168, 255))
-        self.card_quality  = MetricCard(kpi_panel, "DQ Score",  "—", wx.Colour(255, 207, 92))
+        self.card_rows     = MetricCard(kpi_panel, "Rows", "—", wx.Colour(120, 99, 255))
+        self.card_cols     = MetricCard(kpi_panel, "Columns", "—", wx.Colour(151, 133, 255))
+        self.card_nulls    = MetricCard(kpi_panel, "Null %", "—", wx.Colour(187, 168, 255))
+        self.card_quality  = MetricCard(kpi_panel, "DQ Score", "—", wx.Colour(255, 207, 92))
         self.card_anoms    = MetricCard(kpi_panel, "Anomalies", "—", wx.Colour(255, 113, 113))
 
         for c in (self.card_rows, self.card_cols, self.card_nulls, self.card_quality, self.card_anoms):
             kpis.Add(c, 0, wx.ALL, 6)
 
         kpi_panel.SetSizer(kpis)
-        main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-        # ───────────────────────────────────────────────────────────────────
+        main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
 
         # Menu bar
         mb = wx.MenuBar()
@@ -298,7 +295,7 @@ class MainWindow(wx.Frame):
         info_panel.SetBackgroundColour(wx.Colour(48, 48, 48))
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
-        lab.SetForegroundColour(wx.Colour(235, 235, 235))
+        lab.SetForegroundColour(TXT)
         lab.SetFont(mkfont(9, bold=True))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
 
@@ -330,45 +327,6 @@ class MainWindow(wx.Frame):
         self.SetSizer(main)
 
     # ──────────────────────────────────────────────────────────────────────
-    # KPI helpers (NEW)
-    # ──────────────────────────────────────────────────────────────────────
-    def _calc_null_pct(self, df: pd.DataFrame) -> float:
-        """Return average percent of null/empty values across the dataframe."""
-        if df is None or df.size == 0:
-            return 0.0
-        # Treat empty strings and typical 'None'/'NaN' strings as null-ish
-        df2 = df.copy()
-        df2 = df2.replace(["", " ", "None", "none", "NaN", "nan", "NULL", "null"], pd.NA)
-        nulls = df2.isna().sum().sum()
-        total = df2.size
-        return 100.0 * float(nulls) / float(total) if total else 0.0
-
-    def _update_kpis(self, proc_name: str, df: pd.DataFrame, analysis_hdr, analysis_data):
-        """Update KPI cards after analyses or loads."""
-        try:
-            rows = int(len(df.index)) if df is not None else 0
-            cols = int(len(df.columns)) if df is not None else 0
-            self.card_rows.set(rows)
-            self.card_cols.set(cols)
-
-            null_pct = round(self._calc_null_pct(df), 1)
-            self.card_nulls.set(f"{null_pct}%")
-
-            dq = max(0, round(100.0 - null_pct, 1))
-            self.card_quality.set(f"{dq}")
-
-            if proc_name == "Detect Anomalies":
-                # Count analysis rows = anomalies detected (generic)
-                anoms = len(analysis_data) if analysis_data is not None else 0
-                self._last_anomaly_count = anoms
-                self.card_anoms.set(anoms)
-            else:
-                # Keep last anomaly count so it doesn't reset every time
-                self.card_anoms.set(self._last_anomaly_count)
-        except Exception:
-            pass
-
-    # ──────────────────────────────────────────────────────────────────────
     # Actions
     # ──────────────────────────────────────────────────────────────────────
     def on_settings(self, _):
@@ -386,10 +344,6 @@ class MainWindow(wx.Frame):
         self.headers, self.raw_data = detect_and_split_data(text)
         self._display(self.headers, self.raw_data)
 
-        # Update KPIs for the loaded dataset
-        df = pd.DataFrame(self.raw_data, columns=self.headers)
-        self._update_kpis("Load", df, None, None)
-
     def on_load_s3(self, _):
         uri = wx.GetTextFromUser("Enter HTTP(S) or S3 URI:", "Load from URI/S3")
         if not uri:
@@ -398,9 +352,6 @@ class MainWindow(wx.Frame):
             text = download_text_from_uri(uri)
             self.headers, self.raw_data = detect_and_split_data(text)
             self._display(self.headers, self.raw_data)
-
-            df = pd.DataFrame(self.raw_data, columns=self.headers)
-            self._update_kpis("Load", df, None, None)
         except Exception as e:
             wx.MessageBox(f"Failed to load data:\n{e}", "Error", wx.OK | wx.ICON_ERROR)
 
@@ -444,8 +395,8 @@ class MainWindow(wx.Frame):
     def on_rules(self, _):
         if not self.headers:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
-            return
-        QualityRuleDialog(self, self.headers, self.quality_rules).ShowModal()
+        else:
+            QualityRuleDialog(self, self.headers, self.quality_rules).ShowModal()
 
     def on_buddy(self, _):
         DataBuddyDialog(self, self.raw_data, self.headers, knowledge=self.knowledge_files).ShowModal()
@@ -476,9 +427,6 @@ class MainWindow(wx.Frame):
             hdr, data = ["Error"], [[str(e)]]
 
         self._display(hdr, data)
-
-        # Update KPIs after the analysis based on the *dataset* and what was returned
-        self._update_kpis(proc_name, df, hdr, data)
 
     def on_export_csv(self, _):
         dlg = wx.FileDialog(self, "Save CSV", wildcard="CSV|*.csv",
@@ -555,16 +503,11 @@ class MainWindow(wx.Frame):
         self.raw_data = data
         self._display(hdr, data)
 
-        # Update KPIs after synthetic generation
-        try:
-            self._update_kpis("Load", df, None, None)
-        except Exception:
-            pass
-
     # ──────────────────────────────────────────────────────────────────────
-    # Grid helpers
+    # Grid helpers + KPI updates
     # ──────────────────────────────────────────────────────────────────────
     def _display(self, hdr, data):
+        # clear grid
         self.grid.ClearGrid()
         if self.grid.GetNumberRows():
             self.grid.DeleteRows(0, self.grid.GetNumberRows())
@@ -572,12 +515,15 @@ class MainWindow(wx.Frame):
             self.grid.DeleteCols(0, self.grid.GetNumberCols())
 
         if not hdr:
+            self.update_kpis([], [])
             return
 
+        # set headers
         self.grid.AppendCols(len(hdr))
         for i, h in enumerate(hdr):
             self.grid.SetColLabelValue(i, str(h))
 
+        # set rows
         self.grid.AppendRows(len(data))
         for r, row in enumerate(data):
             for c, val in enumerate(row):
@@ -585,6 +531,41 @@ class MainWindow(wx.Frame):
                 if r % 2 == 0:
                     self.grid.SetCellBackgroundColour(r, c, wx.Colour(45, 45, 45))
         self.adjust_grid()
+
+        # Update KPI cards based on what was just displayed
+        self.update_kpis(hdr, data)
+
+    def update_kpis(self, hdr, data):
+        # rows / cols
+        rows = len(data)
+        cols = len(hdr)
+        self.card_rows.SetValue(rows if rows else "0")
+        self.card_cols.SetValue(cols if cols else "0")
+
+        # null %
+        total_cells = rows * max(cols, 1)
+        empty = 0
+        if total_cells > 0:
+            for r in data:
+                for v in r:
+                    if v is None or str(v).strip() == "":
+                        empty += 1
+        null_pct = (empty / total_cells * 100.0) if total_cells else 0.0
+        self.card_nulls.SetValue(f"{null_pct:.1f}%")
+
+        # dq score (fallback: 100 - null%)
+        dq = max(0.0, 100.0 - null_pct)
+        self.card_quality.SetValue(f"{dq:.1f}")
+
+        # anomalies (heuristics)
+        anoms = 0
+        if self.current_process.lower().startswith("detect"):
+            anoms = rows
+        else:
+            lower_hdr = [str(h).lower() for h in hdr]
+            if any(("anomaly" in h or "issue" in h or "error" in h) for h in lower_hdr):
+                anoms = rows
+        self.card_anoms.SetValue(str(anoms))
 
     def adjust_grid(self):
         cols = self.grid.GetNumberCols()
