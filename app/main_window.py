@@ -1,24 +1,12 @@
+# app/main_window.py
 import os
-import csv
-
-def mkfont(size: int, *, bold: bool = False, italic: bool = False,
-          family: int = wx.FONTFAMILY_SWISS) -> wx.Font:
-    info = wx.FontInfo(size).Family(family)
-    if italic:
-        info = info.Italic()
-    if bold:
-        info = info.Bold()
-    return wx.Font(info)
-
-
-
+import wx
 import wx.grid as gridlib
 import pandas as pd
 
 from app.settings import SettingsWindow, save_defaults, defaults
 from app.dialogs import QualityRuleDialog, DataBuddyDialog, SyntheticDataDialog
 from app.s3_utils import download_text_from_uri, upload_to_s3
-
 from app.analysis import (
     detect_and_split_data,
     profile_analysis,
@@ -27,7 +15,7 @@ from app.analysis import (
     compliance_analysis,
 )
 
-# Try to import an anomalies function; provide a friendly fallback if missing.
+# Try anomalies under either name; provide a safe fallback if not present.
 try:
     from app.analysis import anomalies_analysis as detect_anomalies_analysis
 except Exception:
@@ -36,20 +24,31 @@ except Exception:
     except Exception:
         def detect_anomalies_analysis(df: pd.DataFrame):
             hdr = ["Issue", "Details"]
-            data = [["No analyzer", "Install/define detect_anomalies() in app.analysis"]]
+            data = [["No analyzer", "Define detect_anomalies() or anomalies_analysis() in app.analysis"]]
             return hdr, data
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Header banner (double-buffered paint; background style fix)
+# Cross-version font helper (uses wx.FontInfo; safe on Python 3.13 / wx 4.x)
+# ──────────────────────────────────────────────────────────────────────────────
+def mkfont(size: int, *, bold: bool = False, italic: bool = False,
+           family: int = wx.FONTFAMILY_SWISS) -> wx.Font:
+    info = wx.FontInfo(size).Family(family)
+    if italic:
+        info = info.Italic()
+    if bold:
+        info = info.Bold()
+    return wx.Font(info)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Header banner (double-buffered, no flicker)
 # ──────────────────────────────────────────────────────────────────────────────
 class HeaderBanner(wx.Panel):
     def __init__(self, parent, height=160, bg=wx.Colour(28, 28, 28)):
         super().__init__(parent, size=(-1, height), style=wx.BORDER_NONE)
-        # Required for AutoBufferedPaintDC
-        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
-        # Prevent flicker
-        self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)  # required for AutoBufferedPaintDC
+        self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)  # prevent flicker
 
         self._bg = bg
         self._min_w = 320
@@ -78,9 +77,8 @@ class HeaderBanner(wx.Panel):
                     return wx.Image(p, wx.BITMAP_TYPE_ANY)
                 except Exception:
                     pass
-        # Fallback placeholder
-        h = self.GetSize().y if self.GetSize().y else 160
-        bmp = wx.Bitmap(self._min_w, h)
+        # Fallback: solid color image
+        bmp = wx.Bitmap(self._min_w, 160)
         dc = wx.MemoryDC(bmp)
         dc.SetBackground(wx.Brush(self._bg))
         dc.Clear()
@@ -107,27 +105,27 @@ class HeaderBanner(wx.Panel):
 # ──────────────────────────────────────────────────────────────────────────────
 # Simple local synthetic data fallback
 # ──────────────────────────────────────────────────────────────────────────────
+import random as _r
+
 _FIRST_NAMES = ["JAY", "ANA", "KIM", "LEE", "OMAR", "SARA", "NIA", "LIV", "RAJ"]
 _LAST_NAMES  = ["SMITH", "NG", "GARCIA", "BROWN", "TAYLOR", "KHAN", "LI", "LEE"]
 _STATES = ["AL","AK","AZ","CA","CO","CT","DC","DE","FL","GA","HI","IA","ID","IL","IN","KS","KY",
            "LA","MA","MD","ME","MI","MN","MO","MS","MT","NC","ND","NE","NH","NJ","NM","NV","NY",
            "OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VA","VT","WA","WI","WV","WY"]
 
-import random as _r
-
 def _synth_value(kind: str, i: int) -> str:
-    kind = (kind or "").lower()
-    if "email" in kind:
+    k = (kind or "").lower()
+    if "email" in k:
         return f"user{i}@example.com"
-    if "first" in kind and "name" in kind:
+    if "first" in k and "name" in k:
         return _r.choice(_FIRST_NAMES)
-    if "last" in kind and "name" in kind:
+    if "last" in k and "name" in k:
         return _r.choice(_LAST_NAMES)
-    if "phone" in kind:
+    if "phone" in k:
         return f"{_r.randint(200, 989)}-{_r.randint(100, 999)}-{_r.randint(1000, 9999)}"
-    if "address" in kind:
+    if "address" in k:
         return f"{_r.randint(100, 9999)} Main St, City, {_r.choice(_STATES)} {_r.randint(10000, 99999)}"
-    if "amount" in kind or "loan" in kind or "balance" in kind:
+    if "amount" in k or "loan" in k or "balance" in k:
         return f"{_r.randint(100, 99999)}.{_r.randint(0, 99):02d}"
     return f"value_{i}"
 
@@ -187,7 +185,7 @@ class MainWindow(wx.Frame):
         title_panel = wx.Panel(self)
         title_panel.SetBackgroundColour(header_bg)
         title = wx.StaticText(title_panel, label="Data Buddy — Sidecar Application")
-        title.SetFont(wx.Font(18, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
+        title.SetFont(mkfont(18, bold=True))
         title.SetForegroundColour(wx.Colour(240, 240, 245))
         tps = wx.BoxSizer(wx.HORIZONTAL)
         tps.AddStretchSpacer()
@@ -218,7 +216,7 @@ class MainWindow(wx.Frame):
             b = wx.Button(toolbar_panel, label=label, style=wx.BORDER_NONE)
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
+            b.SetFont(mkfont(9))  # bold not strictly needed on dark buttons
             b.SetMinSize((150, 34))
             b.Bind(wx.EVT_BUTTON, handler)
             toolbar.Add(b, 0, wx.ALL, 4)
@@ -248,12 +246,12 @@ class MainWindow(wx.Frame):
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
         lab.SetForegroundColour(TXT)
-        lab.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
+        lab.SetFont(mkfont(9, bold=True))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
 
         self.knowledge_line = wx.StaticText(info_panel, label="(none)")
         self.knowledge_line.SetForegroundColour(wx.Colour(210, 210, 210))
-        self.knowledge_line.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
+        self.knowledge_line.SetFont(mkfont(9))
         hz.Add(self.knowledge_line, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
         info_panel.SetSizer(hz)
         main.Add(info_panel, 0, wx.EXPAND)
@@ -269,7 +267,7 @@ class MainWindow(wx.Frame):
         self.grid.SetDefaultCellTextColour(wx.Colour(220, 220, 220))
         self.grid.SetLabelBackgroundColour(wx.Colour(80, 80, 80))
         self.grid.SetLabelTextColour(wx.Colour(240, 240, 240))
-        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
+        self.grid.SetLabelFont(mkfont(9, bold=True))
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
 
         vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
@@ -278,7 +276,9 @@ class MainWindow(wx.Frame):
 
         self.SetSizer(main)
 
-    # -------------------------------------------- actions
+    # ──────────────────────────────────────────────────────────────────────
+    # Actions
+    # ──────────────────────────────────────────────────────────────────────
     def on_settings(self, _):
         SettingsWindow(self).Show()
 
@@ -453,7 +453,9 @@ class MainWindow(wx.Frame):
         self.raw_data = data
         self._display(hdr, data)
 
-    # ------------------------------- grid utils
+    # ──────────────────────────────────────────────────────────────────────
+    # Grid helpers
+    # ──────────────────────────────────────────────────────────────────────
     def _display(self, hdr, data):
         self.grid.ClearGrid()
         if self.grid.GetNumberRows():
