@@ -1,6 +1,15 @@
 import os
 import csv
-import wx
+
+def mkfont(size: int, *, bold: bool = False, italic: bool = False,
+          family: int = wx.FONTFAMILY_SWISS) -> wx.Font:
+    info = wx.FontInfo(size).Family(family)
+    if italic:
+        info = info.Italic()
+    if bold:
+        info = info.Bold()
+    return wx.Font(info)
+
 import wx.grid as gridlib
 import pandas as pd
 
