@@ -4,9 +4,27 @@ import wx.grid as gridlib
 import pandas as pd
 from datetime import datetime
 import os
+from typing import Any, Callable, Optional
+
+# Optional integrations with your existing code
+try:
+    from app import analysis as _analysis
+except Exception:
+    _analysis = None
+
+try:
+    from app import dialogs as _dialogs
+except Exception:
+    _dialogs = None
+
+try:
+    from app import s3_utils as _s3utils
+except Exception:
+    _s3utils = None
+
 
 # ============================================================
-# Font helper (compatible with wx 4.x)
+# Font helper (wx 4.x compatible)
 # ============================================================
 def mkfont(size=9, bold=False):
     return wx.Font(
@@ -16,8 +34,9 @@ def mkfont(size=9, bold=False):
         weight=(wx.FONTWEIGHT_BOLD if bold else wx.FONTWEIGHT_NORMAL),
     )
 
+
 # ============================================================
-# Header helpers (pill, metric cards, quick buttons)
+# Header widgets
 # ============================================================
 class Pill(wx.Panel):
     def __init__(self, parent, label, color=wx.Colour(90, 72, 198)):
@@ -90,14 +109,12 @@ class QuickBtn(wx.Button):
 # ============================================================
 class MainWindow(wx.Frame):
     def __init__(self):
-        wx.Frame.__init__(self, None, title="Data Buddy — Sidecar Application",
-                          size=(1280, 800))
+        wx.Frame.__init__(self, None, title="Data Buddy — Sidecar Application", size=(1280, 800))
         self.Centre()
         self.SetBackgroundColour(wx.Colour(32, 32, 38))
 
-        # dataset
-        self.current_path = None
-        self.df: pd.DataFrame | None = None
+        self.current_path: Optional[str] = None
+        self.df: Optional[pd.DataFrame] = None
 
         self._build_ui()
         self.Show()
@@ -106,15 +123,12 @@ class MainWindow(wx.Frame):
     def _build_ui(self):
         main = wx.BoxSizer(wx.VERTICAL)
 
-        # Header band (professional command center)
         header = self._build_header(self)
         main.Add(header, 0, wx.EXPAND)
 
-        # Toolbar (your existing buttons)
         toolbar = self._build_toolbar(self)
         main.Add(toolbar, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
-        # Knowledge files label strip (kept to match your layout)
         kn_panel = wx.Panel(self)
         kn_panel.SetBackgroundColour(wx.Colour(40, 40, 48))
         kn_s = wx.BoxSizer(wx.HORIZONTAL)
@@ -129,12 +143,10 @@ class MainWindow(wx.Frame):
         kn_panel.SetSizer(kn_s)
         main.Add(kn_panel, 0, wx.EXPAND)
 
-        # Insights drawer (collapsible)
         self.insights = wx.CollapsiblePane(self, label="Insights from last run")
         pane = self.insights.GetPane()
         box = wx.BoxSizer(wx.VERTICAL)
-        self.insights_out = wx.TextCtrl(
-            pane, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.insights_out = wx.TextCtrl(pane, style=wx.TE_MULTILINE | wx.TE_READONLY)
         self.insights_out.SetMinSize((100, 80))
         self.insights_out.SetBackgroundColour(wx.Colour(46, 46, 54))
         self.insights_out.SetForegroundColour(wx.Colour(230, 230, 238))
@@ -143,7 +155,6 @@ class MainWindow(wx.Frame):
         pane.SetSizer(box)
         main.Add(self.insights, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
-        # Grid (central data area)
         self.grid = gridlib.Grid(self)
         self.grid.CreateGrid(0, 0)
         self.grid.EnableEditing(False)
@@ -157,9 +168,7 @@ class MainWindow(wx.Frame):
         panel.SetBackgroundColour(wx.Colour(36, 36, 44))
         s = wx.BoxSizer(wx.VERTICAL)
 
-        # Top row: Title + env pill + search
         top = wx.BoxSizer(wx.HORIZONTAL)
-
         title = wx.StaticText(panel, label="Data Buddy — Sidecar Application")
         title.SetFont(mkfont(16, True))
         title.SetForegroundColour(wx.WHITE)
@@ -176,7 +185,6 @@ class MainWindow(wx.Frame):
         top.AddStretchSpacer(1)
         top.Add(self.search, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 10)
 
-        # KPI strip
         kpis = wx.BoxSizer(wx.HORIZONTAL)
         self.card_rows    = MetricCard(panel, "Rows", "—", wx.Colour(120, 99, 255))
         self.card_cols    = MetricCard(panel, "Columns", "—", wx.Colour(151, 133, 255))
@@ -186,7 +194,6 @@ class MainWindow(wx.Frame):
         for c in (self.card_rows, self.card_cols, self.card_nulls, self.card_quality, self.card_anoms):
             kpis.Add(c, 0, wx.ALL, 6)
 
-        # Quick actions
         qa = wx.BoxSizer(wx.HORIZONTAL)
         qa.Add(QuickBtn(panel, "Profile",            self.on_profile), 0, wx.ALL, 4)
         qa.Add(QuickBtn(panel, "Quality",            self.on_quality), 0, wx.ALL, 4)
@@ -194,12 +201,10 @@ class MainWindow(wx.Frame):
         qa.Add(QuickBtn(panel, "Detect Anomalies",   self.on_anomalies), 0, wx.ALL, 4)
         qa.Add(QuickBtn(panel, "Compliance",         self.on_compliance), 0, wx.ALL, 4)
 
-        # Build header
         s.Add(top, 0, wx.EXPAND)
         s.Add(kpis, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         s.Add(qa,   0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
-        # bottom hairline
         rule = wx.Panel(panel, size=(-1, 1))
         rule.SetBackgroundColour(wx.Colour(58, 58, 66))
         s.Add(rule, 0, wx.EXPAND)
@@ -212,7 +217,6 @@ class MainWindow(wx.Frame):
         panel.SetBackgroundColour(wx.Colour(40, 40, 48))
         s = wx.WrapSizer(wx.HORIZONTAL)
 
-        # match your existing labels
         def add_btn(label, handler):
             b = wx.Button(panel, label=label)
             b.SetBackgroundColour(wx.Colour(121, 103, 255))
@@ -221,7 +225,6 @@ class MainWindow(wx.Frame):
             b.SetMinSize((160, 36))
             b.Bind(wx.EVT_BUTTON, handler)
             s.Add(b, 0, wx.ALL, 6)
-            return b
 
         add_btn("Load Knowledge Files", self.on_load_knowledge)
         add_btn("Load File",            self.on_load_file)
@@ -256,16 +259,12 @@ class MainWindow(wx.Frame):
                 "compliance": self.on_compliance,
                 "open": self.on_load_file,
             }
-            if cmd in mapping:
-                mapping[cmd](None)
-            else:
-                wx.MessageBox(f"Unknown command: {cmd}", "Command",
-                              wx.OK | wx.ICON_INFORMATION)
+            mapping.get(cmd, lambda _e: wx.MessageBox(f"Unknown command: {cmd}", "Command",
+                        wx.OK | wx.ICON_INFORMATION))(None)
         else:
-            # hook to your knowledge/file search if desired
-            wx.MessageBox(f"Search: {q}", "Search",
-                          wx.OK | wx.ICON_INFORMATION)
+            wx.MessageBox(f"Search: {q}", "Search", wx.OK | wx.ICON_INFORMATION)
 
+    # ---------------- Convenience hooks for header ----------------
     def update_header_stats(self, *, rows=None, cols=None, null_pct=None, dq_score=None, anomalies=None):
         if rows      is not None: self.card_rows.set(rows)
         if cols      is not None: self.card_cols.set(cols)
@@ -273,12 +272,11 @@ class MainWindow(wx.Frame):
         if dq_score  is not None: self.card_quality.set(f"{dq_score:.0f}")
         if anomalies is not None: self.card_anoms.set(anomalies)
 
-    def update_last_run(self, when: str | None = None):
+    def update_last_run(self, when: Optional[str] = None):
         when = when or datetime.now().strftime("%Y-%m-%d %H:%M")
         self.search.SetDescriptiveText(f"Search or type /command…  (Last run: {when})")
 
     def set_environment(self, name="LOCAL", ok=True):
-        # relabel pill (simple rebuild of child text)
         parent = self.env_pill.GetParent()
         self.env_pill.Destroy()
         self.env_pill = Pill(parent, name, wx.Colour(90, 72, 198))
@@ -290,7 +288,6 @@ class MainWindow(wx.Frame):
 
     # ---------------- Data helpers ----------------
     def _load_dataframe_to_grid(self, df: pd.DataFrame):
-        # reset grid
         self.grid.ClearGrid()
         if self.grid.GetNumberRows():
             self.grid.DeleteRows(0, self.grid.GetNumberRows(), True)
@@ -303,28 +300,70 @@ class MainWindow(wx.Frame):
         self.grid.AppendCols(len(df.columns))
         self.grid.AppendRows(len(df.index))
 
-        # headers
         for c, name in enumerate(df.columns):
             self.grid.SetColLabelValue(c, str(name))
 
-        # data
         for r in range(len(df.index)):
             for c in range(len(df.columns)):
-                self.grid.SetCellValue(r, c, "" if pd.isna(df.iat[r, c]) else str(df.iat[r, c]))
+                v = df.iat[r, c]
+                self.grid.SetCellValue(r, c, "" if pd.isna(v) else str(v))
 
         self.grid.AutoSizeColumns()
         self.grid.ForceRefresh()
 
-        # Update header KPIs quickly
         rows = len(df.index)
         cols = len(df.columns)
         null_pct = float(df.isna().sum().sum()) / (rows * cols) * 100 if rows and cols else 0.0
         self.update_header_stats(rows=rows, cols=cols, null_pct=null_pct)
         self.update_last_run()
 
-    # ---------------- Button handlers ----------------
+    # ---------------- Helper: find & call user functions ----------------
+    def _resolve_callable(self, module, names: list[str]) -> Optional[Callable[..., Any]]:
+        if module is None:
+            return None
+        for n in names:
+            fn = getattr(module, n, None)
+            if callable(fn):
+                return fn
+        return None
+
+    def _maybe_update_from_result(self, result: Any):
+        """
+        Accepts common shapes your analysis code might return and updates UI:
+          - dict with any of: rows, cols, null_pct, dq_score, anomalies, df, message
+          - tuple (df, info_str) or (df,)
+          - DataFrame alone
+        """
+        if isinstance(result, dict):
+            if "df" in result and isinstance(result["df"], pd.DataFrame):
+                self.df = result["df"]
+                self._load_dataframe_to_grid(self.df)
+            self.update_header_stats(
+                rows=result.get("rows"),
+                cols=result.get("cols"),
+                null_pct=result.get("null_pct"),
+                dq_score=result.get("dq_score"),
+                anomalies=result.get("anomalies"),
+            )
+            if msg := result.get("message"):
+                self.insights_append(str(msg))
+            return
+
+        if isinstance(result, tuple):
+            if len(result) >= 1 and isinstance(result[0], pd.DataFrame):
+                self.df = result[0]
+                self._load_dataframe_to_grid(self.df)
+            if len(result) >= 2 and result[1]:
+                self.insights_append(str(result[1]))
+            return
+
+        if isinstance(result, pd.DataFrame):
+            self.df = result
+            self._load_dataframe_to_grid(self.df)
+            return
+
+    # ---------------- Button handlers (delegate to your modules if present) ----------------
     def on_load_knowledge(self, evt):
-        # Example: pick files and show names as chips/text
         with wx.FileDialog(self, "Select knowledge files", wildcard="All files (*.*)|*.*",
                            style=wx.FD_OPEN | wx.FD_MULTIPLE) as dlg:
             if dlg.ShowModal() == wx.ID_OK:
@@ -345,27 +384,62 @@ class MainWindow(wx.Frame):
                     self._load_dataframe_to_grid(df)
                     self.insights_append(f"Loaded file: {os.path.basename(path)}")
                 except Exception as e:
-                    wx.MessageBox(f"Failed to read file.\n{e}", "Error",
-                                  wx.OK | wx.ICON_ERROR)
+                    wx.MessageBox(f"Failed to read file.\n{e}", "Error", wx.OK | wx.ICON_ERROR)
 
     def on_load_from_uri(self, evt):
-        wx.MessageBox("Load from URI/S3 not yet implemented in this demo.",
-                      "Info", wx.OK | wx.ICON_INFORMATION)
+        # Try analysis.load_from_uri(self) or .load_from_s3(self)
+        fn = self._resolve_callable(_analysis, ["load_from_uri", "load_from_s3", "open_uri"])
+        if fn:
+            try:
+                res = fn(self)  # let your function work with the window
+                self._maybe_update_from_result(res)
+                return
+            except Exception as e:
+                wx.MessageBox(str(e), "Load from URI/S3", wx.OK | wx.ICON_ERROR)
+                return
+        wx.MessageBox("Load from URI/S3 not implemented.", "Info", wx.OK | wx.ICON_INFORMATION)
 
     def on_generate_synth(self, evt):
-        wx.MessageBox("Generate Synthetic Data placeholder.",
-                      "Info", wx.OK | wx.ICON_INFORMATION)
+        fn = self._resolve_callable(_analysis, ["generate_synthetic", "synth_data", "generate_synthetic_data"])
+        if fn:
+            try:
+                res = fn(self.df, self)
+                self._maybe_update_from_result(res)
+                return
+            except Exception as e:
+                wx.MessageBox(str(e), "Synthetic Data", wx.OK | wx.ICON_ERROR)
+                return
+        wx.MessageBox("Generate Synthetic Data placeholder.", "Info", wx.OK | wx.ICON_INFORMATION)
 
     def on_quality_rules(self, evt):
-        wx.MessageBox("Quality Rule Assignment placeholder.",
-                      "Info", wx.OK | wx.ICON_INFORMATION)
+        fn = self._resolve_callable(_analysis, ["quality_rule_assignment", "assign_quality_rules"])
+        if fn:
+            try:
+                res = fn(self.df, self)
+                self._maybe_update_from_result(res)
+                return
+            except Exception as e:
+                wx.MessageBox(str(e), "Quality Rules", wx.OK | wx.ICON_ERROR)
+                return
+        wx.MessageBox("Quality Rule Assignment placeholder.", "Info", wx.OK | wx.ICON_INFORMATION)
 
     def on_profile(self, evt):
         if self.df is None:
-            wx.MessageBox("Load a dataset first.", "Profile",
-                          wx.OK | wx.ICON_INFORMATION)
+            # If your function loads data itself, allow calling with None
+            pass
+        fn = self._resolve_callable(_analysis, ["run_profile", "profile", "do_profile"])
+        if fn:
+            try:
+                res = fn(self.df, self) if fn.__code__.co_argcount >= 2 else fn(self.df)
+                self._maybe_update_from_result(res)
+                return
+            except Exception as e:
+                wx.MessageBox(str(e), "Profile", wx.OK | wx.ICON_ERROR)
+                return
+        # fallback quick profile
+        if self.df is None:
+            wx.MessageBox("Load a dataset first.", "Profile", wx.OK | wx.ICON_INFORMATION)
             return
-        # quick sample profile
         rows, cols = self.df.shape
         null_pct = float(self.df.isna().sum().sum()) / (rows * cols) * 100 if rows and cols else 0.0
         self.update_header_stats(rows=rows, cols=cols, null_pct=null_pct)
@@ -373,10 +447,19 @@ class MainWindow(wx.Frame):
 
     def on_quality(self, evt):
         if self.df is None:
-            wx.MessageBox("Load a dataset first.", "Quality",
-                          wx.OK | wx.ICON_INFORMATION)
+            pass
+        fn = self._resolve_callable(_analysis, ["run_quality", "quality", "compute_quality"])
+        if fn:
+            try:
+                res = fn(self.df, self) if fn.__code__.co_argcount >= 2 else fn(self.df)
+                self._maybe_update_from_result(res)
+                return
+            except Exception as e:
+                wx.MessageBox(str(e), "Quality", wx.OK | wx.ICON_ERROR)
+                return
+        if self.df is None:
+            wx.MessageBox("Load a dataset first.", "Quality", wx.OK | wx.ICON_INFORMATION)
             return
-        # Example: naive score (100 - null penalty)
         rows, cols = self.df.shape
         null_pct = float(self.df.isna().sum().sum()) / (rows * cols) * 100 if rows and cols else 0.0
         score = max(0, 100 - int(null_pct))
@@ -385,30 +468,63 @@ class MainWindow(wx.Frame):
 
     def on_anomalies(self, evt):
         if self.df is None:
-            wx.MessageBox("Load a dataset first.", "Anomalies",
-                          wx.OK | wx.ICON_INFORMATION)
+            pass
+        fn = self._resolve_callable(_analysis, ["run_anomalies", "detect_anomalies", "anomalies"])
+        if fn:
+            try:
+                res = fn(self.df, self) if fn.__code__.co_argcount >= 2 else fn(self.df)
+                self._maybe_update_from_result(res)
+                return
+            except Exception as e:
+                wx.MessageBox(str(e), "Anomalies", wx.OK | wx.ICON_ERROR)
+                return
+        if self.df is None:
+            wx.MessageBox("Load a dataset first.", "Anomalies", wx.OK | wx.ICON_INFORMATION)
             return
-        # Placeholder: report 0 anomalies
-        anoms = 0
-        self.update_header_stats(anomalies=anoms)
+        self.update_header_stats(anomalies=0)
         self.insights_append("Anomaly detection run complete (0 found in demo).")
 
     def on_catalog(self, evt):
-        wx.MessageBox("Catalog operation placeholder.",
-                      "Info", wx.OK | wx.ICON_INFORMATION)
+        fn = self._resolve_callable(_analysis, ["run_catalog", "catalog", "build_catalog"])
+        if fn:
+            try:
+                res = fn(self.df, self) if fn.__code__.co_argcount >= 2 else fn(self.df)
+                self._maybe_update_from_result(res)
+                return
+            except Exception as e:
+                wx.MessageBox(str(e), "Catalog", wx.OK | wx.ICON_ERROR)
+                return
+        wx.MessageBox("Catalog operation placeholder.", "Info", wx.OK | wx.ICON_INFORMATION)
 
     def on_compliance(self, evt):
-        wx.MessageBox("Compliance check placeholder.",
-                      "Info", wx.OK | wx.ICON_INFORMATION)
+        fn = self._resolve_callable(_analysis, ["run_compliance", "compliance", "check_compliance"])
+        if fn:
+            try:
+                res = fn(self.df, self) if fn.__code__.co_argcount >= 2 else fn(self.df)
+                self._maybe_update_from_result(res)
+                return
+            except Exception as e:
+                wx.MessageBox(str(e), "Compliance", wx.OK | wx.ICON_ERROR)
+                return
+        wx.MessageBox("Compliance check placeholder.", "Info", wx.OK | wx.ICON_INFORMATION)
 
     def on_little_buddy(self, evt):
-        wx.MessageBox("Little Buddy (conversational assistant) placeholder.",
-                      "Info", wx.OK | wx.ICON_INFORMATION)
+        # Try to open your dialog if it exists
+        dlg_cls = getattr(_dialogs, "LittleBuddyDialog", None) if _dialogs else None
+        if dlg_cls:
+            try:
+                dlg = dlg_cls(self)
+                dlg.ShowModal()
+                dlg.Destroy()
+                return
+            except Exception as e:
+                wx.MessageBox(str(e), "Little Buddy", wx.OK | wx.ICON_ERROR)
+                return
+        wx.MessageBox("Little Buddy (assistant) placeholder.", "Info", wx.OK | wx.ICON_INFORMATION)
 
     def on_export_csv(self, evt):
         if self.df is None:
-            wx.MessageBox("Nothing to export.", "Export CSV",
-                          wx.OK | wx.ICON_INFORMATION)
+            wx.MessageBox("Nothing to export.", "Export CSV", wx.OK | wx.ICON_INFORMATION)
             return
         with wx.FileDialog(self, "Save CSV", wildcard="CSV files (*.csv)|*.csv",
                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dlg:
@@ -418,13 +534,11 @@ class MainWindow(wx.Frame):
                     self.df.to_csv(path, index=False)
                     self.insights_append(f"Exported CSV: {os.path.basename(path)}")
                 except Exception as e:
-                    wx.MessageBox(f"Export failed.\n{e}", "Error",
-                                  wx.OK | wx.ICON_ERROR)
+                    wx.MessageBox(f"Export failed.\n{e}", "Error", wx.OK | wx.ICON_ERROR)
 
     def on_export_txt(self, evt):
         if self.df is None:
-            wx.MessageBox("Nothing to export.", "Export TXT",
-                          wx.OK | wx.ICON_INFORMATION)
+            wx.MessageBox("Nothing to export.", "Export TXT", wx.OK | wx.ICON_INFORMATION)
             return
         with wx.FileDialog(self, "Save TXT", wildcard="Text files (*.txt)|*.txt",
                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dlg:
@@ -435,15 +549,30 @@ class MainWindow(wx.Frame):
                         f.write(self.df.to_string(index=False))
                     self.insights_append(f"Exported TXT: {os.path.basename(path)}")
                 except Exception as e:
-                    wx.MessageBox(f"Export failed.\n{e}", "Error",
-                                  wx.OK | wx.ICON_ERROR)
+                    wx.MessageBox(f"Export failed.\n{e}", "Error", wx.OK | wx.ICON_ERROR)
 
     def on_upload_s3(self, evt):
-        wx.MessageBox("Upload to S3 placeholder.",
-                      "Info", wx.OK | wx.ICON_INFORMATION)
+        # Try to delegate to s3 utils if available
+        fn = self._resolve_callable(_s3utils, ["upload_file_to_s3", "upload_csv", "upload"])
+        if fn:
+            try:
+                with wx.FileDialog(self, "Select file to upload", wildcard="All files (*.*)|*.*",
+                                   style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dlg:
+                    if dlg.ShowModal() == wx.ID_OK:
+                        path = dlg.GetPath()
+                        res = fn(path, self) if fn.__code__.co_argcount >= 2 else fn(path)
+                        if isinstance(res, dict) and res.get("ok"):
+                            self.insights_append(f"Uploaded to S3: {os.path.basename(path)}")
+                        else:
+                            self.insights_append(f"Upload attempted: {os.path.basename(path)}")
+                return
+            except Exception as e:
+                wx.MessageBox(str(e), "Upload to S3", wx.OK | wx.ICON_ERROR)
+                return
+        wx.MessageBox("Upload to S3 placeholder.", "Info", wx.OK | wx.ICON_INFORMATION)
 
 
-# If you run this file directly (optional dev convenience)
+# Optional dev entry
 if __name__ == "__main__":
     app = wx.App(False)
     MainWindow()
