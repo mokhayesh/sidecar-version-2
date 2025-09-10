@@ -128,8 +128,6 @@ class MetricCard(wx.Panel):
         v.Add(line, 0, wx.EXPAND | wx.ALL, 10)
         self.SetSizer(v)
 
-        self._accent = accent
-
     def SetValue(self, text: str):
         self.value.SetLabel(str(text))
         self.Layout()
@@ -170,6 +168,101 @@ def _synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Visual helpers: rounded shadow button & shadow panel
+# ──────────────────────────────────────────────────────────────────────────────
+class RoundedShadowButton(wx.Control):
+    """
+    Custom rounded button with soft shadow / glow.
+    """
+    def __init__(self, parent, label, handler, *, colour=wx.Colour(66, 133, 244),
+                 radius=12, glow=6):
+        super().__init__(parent, style=wx.BORDER_NONE | wx.WANTS_CHARS)
+        self.label = label
+        self.colour = colour
+        self.radius = radius
+        self.glow = glow
+        self.SetMinSize((150, 36))
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.Bind(wx.EVT_LEFT_DOWN, lambda e: handler(e))
+        self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self.Refresh())
+        self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self.Refresh())
+        self._font = mkfont(9, bold=True)
+
+    def _on_paint(self, _evt):
+        dc = wx.AutoBufferedPaintDC(self)
+        rect = self.GetClientRect()
+
+        dc.SetBackground(wx.Brush(self.GetParent().GetBackgroundColour()))
+        dc.Clear()
+
+        # soft shadow/glow
+        for i in range(self.glow, 0, -1):
+            alpha = int(18 * (i / self.glow)) + 8  # very soft
+            dc.SetPen(wx.Pen(wx.Colour(0, 0, 0, alpha)))
+            dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, alpha)))
+            dc.DrawRoundedRectangle(i, i, rect.width - 2*i, rect.height - 2*i, self.radius + i)
+
+        # main button
+        dc.SetPen(wx.Pen(self.colour))
+        dc.SetBrush(wx.Brush(self.colour))
+        dc.DrawRoundedRectangle(0, 0, rect.width, rect.height, self.radius)
+
+        # label
+        dc.SetFont(self._font)
+        dc.SetTextForeground(wx.WHITE)
+        tw, th = dc.GetTextExtent(self.label)
+        dc.DrawText(self.label, (rect.width - tw)//2, (rect.height - th)//2)
+
+
+class ShadowPanel(wx.Panel):
+    """
+    A container panel that paints a soft shadow and rounded body –
+    use .body as the inner container to place real content.
+    """
+    def __init__(self, parent, *, radius=12, shadow=10,
+                 bg=wx.Colour(40, 40, 40), body_bg=wx.Colour(50, 50, 50)):
+        super().__init__(parent, style=wx.BORDER_NONE)
+        self.radius = radius
+        self.shadow = shadow
+        self.bg = bg
+        self.body_bg = body_bg
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+
+        # inner body panel where content goes
+        self.body = wx.Panel(self, style=wx.BORDER_NONE)
+        self.body.SetBackgroundColour(self.body_bg)
+
+        s = wx.BoxSizer(wx.VERTICAL)
+        # padding leaves room for shadow glow
+        s.Add(self.body, 1, wx.EXPAND | wx.ALL, self.shadow)
+        self.SetSizer(s)
+
+    def _on_paint(self, _evt):
+        dc = wx.AutoBufferedPaintDC(self)
+        rect = self.GetClientRect()
+
+        # clear to parent bg
+        dc.SetBackground(wx.Brush(self.GetParent().GetBackgroundColour()))
+        dc.Clear()
+
+        # soft shadow layers
+        for i in range(self.shadow, 0, -1):
+            alpha = int(15 * (i / self.shadow)) + 10
+            dc.SetPen(wx.Pen(wx.Colour(0, 0, 0, alpha)))
+            dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, alpha)))
+            dc.DrawRoundedRectangle(i, i, rect.width - 2*i, rect.height - 2*i, self.radius + i)
+
+        # body outline (optional subtle border)
+        dc.SetPen(wx.Pen(wx.Colour(70, 70, 70)))
+        dc.SetBrush(wx.Brush(self.body_bg))
+        dc.DrawRoundedRectangle(self.shadow, self.shadow,
+                                rect.width - 2*self.shadow, rect.height - 2*self.shadow,
+                                self.radius)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Main Window
 # ──────────────────────────────────────────────────────────────────────────────
 class MainWindow(wx.Frame):
@@ -203,7 +296,7 @@ class MainWindow(wx.Frame):
         BG = wx.Colour(40, 40, 40)
         PANEL = wx.Colour(45, 45, 45)
         TXT = wx.Colour(235, 235, 235)
-        ACCENT = wx.Colour(110, 82, 255)  # deep purple accent
+        BLUE = wx.Colour(66, 133, 244)  # button/header blue
 
         self.SetBackgroundColour(BG)
         main = wx.BoxSizer(wx.VERTICAL)
@@ -218,7 +311,7 @@ class MainWindow(wx.Frame):
         title_panel = wx.Panel(self)
         title_panel.SetBackgroundColour(header_bg)
         title = wx.StaticText(title_panel, label="Data Buddy — Sidecar Application")
-        title.SetFont(mkfont(16, bold=True))  # slightly smaller to match reduced header
+        title.SetFont(mkfont(16, bold=True))
         title.SetForegroundColour(wx.Colour(240, 240, 245))
         tps = wx.BoxSizer(wx.HORIZONTAL)
         tps.AddStretchSpacer()
@@ -227,7 +320,7 @@ class MainWindow(wx.Frame):
         title_panel.SetSizer(tps)
 
         header_row.Add(title_panel, 1, wx.EXPAND)
-        main.Add(header_row, 0, wx.EXPAND | wx.BOTTOM, 4)  # tighter gap below header
+        main.Add(header_row, 0, wx.EXPAND | wx.BOTTOM, 4)
 
         # ── KPI STRIP ───────────────────────────────────────────────────────
         kpi_panel = wx.Panel(self)
@@ -257,19 +350,14 @@ class MainWindow(wx.Frame):
         mb.Append(m_set, "&Settings")
         self.SetMenuBar(mb)
 
-        # Toolbar (wraps on resize)
+        # Toolbar (wraps on resize) with rounded/glow buttons
         toolbar_panel = wx.Panel(self)
         toolbar_panel.SetBackgroundColour(PANEL)
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
 
         def add_btn(label, handler):
-            b = wx.Button(toolbar_panel, label=label, style=wx.BORDER_NONE)
-            b.SetBackgroundColour(ACCENT)
-            b.SetForegroundColour(wx.WHITE)
-            b.SetFont(mkfont(9))
-            b.SetMinSize((150, 34))
-            b.Bind(wx.EVT_BUTTON, handler)
-            toolbar.Add(b, 0, wx.ALL, 4)
+            b = RoundedShadowButton(toolbar_panel, label, handler, colour=BLUE, radius=12, glow=6)
+            toolbar.Add(b, 0, wx.ALL, 6)
             return b
 
         add_btn("Load Knowledge Files", self.on_load_knowledge)
@@ -306,24 +394,28 @@ class MainWindow(wx.Frame):
         info_panel.SetSizer(hz)
         main.Add(info_panel, 0, wx.EXPAND)
 
-        # Grid
-        grid_panel = wx.Panel(self)
-        grid_panel.SetBackgroundColour(BG)
-        vbox = wx.BoxSizer(wx.VERTICAL)
+        # Grid in a rounded shadow panel
+        grid_shell = ShadowPanel(self, radius=12, shadow=10,
+                                 bg=BG, body_bg=wx.Colour(50, 50, 50))
+        grid_host = grid_shell.body  # place grid here
 
-        self.grid = gridlib.Grid(grid_panel)
+        vbox = wx.BoxSizer(wx.VERTICAL)
+        self.grid = gridlib.Grid(grid_host)
         self.grid.CreateGrid(0, 0)
+
+        # Header styled to same blue
+        self.grid.SetLabelBackgroundColour(BLUE)
+        self.grid.SetLabelTextColour(wx.WHITE)
+        self.grid.SetLabelFont(mkfont(9, bold=True))
+
         self.grid.SetDefaultCellBackgroundColour(wx.Colour(55, 55, 55))
         self.grid.SetDefaultCellTextColour(wx.Colour(220, 220, 220))
-        self.grid.SetLabelBackgroundColour(wx.Colour(80, 80, 80))
-        self.grid.SetLabelTextColour(wx.Colour(240, 240, 240))
-        self.grid.SetLabelFont(mkfont(9, bold=True))
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
 
-        vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
-        grid_panel.SetSizer(vbox)
-        main.Add(grid_panel, 1, wx.EXPAND)
+        vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 10)  # small inner padding
+        grid_host.SetSizer(vbox)
 
+        main.Add(grid_shell, 1, wx.EXPAND | wx.ALL, 10)
         self.SetSizer(main)
 
     # ──────────────────────────────────────────────────────────────────────
