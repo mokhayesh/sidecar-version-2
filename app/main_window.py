@@ -137,6 +137,38 @@ def _synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# KPI Card (NEW)
+# ──────────────────────────────────────────────────────────────────────────────
+class MetricCard(wx.Panel):
+    """Small pill-style card used in the KPI strip."""
+    def __init__(self, parent, title: str, value="—", accent=wx.Colour(120, 99, 255)):
+        super().__init__(parent)
+        self.SetBackgroundColour(wx.Colour(46, 46, 56))
+
+        v = wx.BoxSizer(wx.VERTICAL)
+
+        t = wx.StaticText(self, label=title.upper())
+        t.SetFont(mkfont(8, bold=True))
+        t.SetForegroundColour(wx.Colour(190, 190, 198))
+
+        self.val = wx.StaticText(self, label=str(value))
+        self.val.SetFont(mkfont(14, bold=True))
+        self.val.SetForegroundColour(wx.WHITE)
+
+        bar = wx.Panel(self, size=(-1, 3))
+        bar.SetBackgroundColour(accent)
+
+        v.Add(t, 0, wx.ALL, 6)
+        v.Add(self.val, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+        v.Add(bar, 0, wx.EXPAND)
+
+        self.SetSizer(v)
+
+    def set(self, value):
+        self.val.SetLabel(str(value))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Main Window
 # ──────────────────────────────────────────────────────────────────────────────
 class MainWindow(wx.Frame):
@@ -195,6 +227,24 @@ class MainWindow(wx.Frame):
 
         header_row.Add(title_panel, 1, wx.EXPAND)
         main.Add(header_row, 0, wx.EXPAND)
+
+        # ── KPI strip (NEW) ────────────────────────────────────────────────
+        kpi_panel = wx.Panel(self)
+        kpi_panel.SetBackgroundColour(wx.Colour(36, 36, 44))
+        kpis = wx.BoxSizer(wx.HORIZONTAL)
+
+        self.card_rows     = MetricCard(kpi_panel, "Rows",      "—", wx.Colour(120, 99, 255))
+        self.card_cols     = MetricCard(kpi_panel, "Columns",   "—", wx.Colour(151, 133, 255))
+        self.card_nulls    = MetricCard(kpi_panel, "Null %",    "—", wx.Colour(187, 168, 255))
+        self.card_quality  = MetricCard(kpi_panel, "DQ Score",  "—", wx.Colour(255, 207, 92))
+        self.card_anoms    = MetricCard(kpi_panel, "Anomalies", "—", wx.Colour(255, 113, 113))
+
+        for c in (self.card_rows, self.card_cols, self.card_nulls, self.card_quality, self.card_anoms):
+            kpis.Add(c, 0, wx.ALL, 6)
+
+        kpi_panel.SetSizer(kpis)
+        main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        # ───────────────────────────────────────────────────────────────────
 
         # Menu bar
         mb = wx.MenuBar()
@@ -294,6 +344,15 @@ class MainWindow(wx.Frame):
         self.headers, self.raw_data = detect_and_split_data(text)
         self._display(self.headers, self.raw_data)
 
+        # Update KPIs (basic)
+        try:
+            rows = len(self.raw_data)
+            cols = len(self.headers)
+            self.card_rows.set(rows)
+            self.card_cols.set(cols)
+        except Exception:
+            pass
+
     def on_load_s3(self, _):
         uri = wx.GetTextFromUser("Enter HTTP(S) or S3 URI:", "Load from URI/S3")
         if not uri:
@@ -302,6 +361,12 @@ class MainWindow(wx.Frame):
             text = download_text_from_uri(uri)
             self.headers, self.raw_data = detect_and_split_data(text)
             self._display(self.headers, self.raw_data)
+
+            # Update KPIs (basic)
+            rows = len(self.raw_data)
+            cols = len(self.headers)
+            self.card_rows.set(rows)
+            self.card_cols.set(cols)
         except Exception as e:
             wx.MessageBox(f"Failed to load data:\n{e}", "Error", wx.OK | wx.ICON_ERROR)
 
@@ -452,6 +517,13 @@ class MainWindow(wx.Frame):
         self.headers = hdr
         self.raw_data = data
         self._display(hdr, data)
+
+        # Update KPIs after synthetic generation
+        try:
+            self.card_rows.set(len(data))
+            self.card_cols.set(len(hdr))
+        except Exception:
+            pass
 
     # ──────────────────────────────────────────────────────────────────────
     # Grid helpers
