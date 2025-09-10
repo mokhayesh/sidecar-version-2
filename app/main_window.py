@@ -161,7 +161,7 @@ class MainWindow(wx.Frame):
         BG = wx.Colour(40, 40, 40)
         PANEL = wx.Colour(45, 45, 45)
         TXT = wx.Colour(235, 235, 235)
-        ACCENT = wx.Colour(70, 130, 180)
+        ACCENT = wx.Colour(110, 82, 255)  # deep purple accent
 
         self.SetBackgroundColour(BG)
         main = wx.BoxSizer(wx.VERTICAL)
@@ -175,9 +175,9 @@ class MainWindow(wx.Frame):
 
         title_panel = wx.Panel(self)
         title_panel.SetBackgroundColour(header_bg)
-        title = wx.StaticText(title_panel, label="Sidecar Application: Data Governance")
-        title.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        title.SetForegroundColour(wx.Colour(240, 240, 240))
+        title = wx.StaticText(title_panel, label="Data Buddy — Sidecar Application")
+        title.SetFont(wx.Font(18, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
+        title.SetForegroundColour(wx.Colour(240, 240, 245))
         tps = wx.BoxSizer(wx.HORIZONTAL)
         tps.AddStretchSpacer()
         tps.Add(title, 0, wx.ALIGN_CENTER_VERTICAL)
@@ -198,16 +198,17 @@ class MainWindow(wx.Frame):
         mb.Append(m_set, "&Settings")
         self.SetMenuBar(mb)
 
-        # Toolbar
+        # Toolbar (wraps on resize)
         toolbar_panel = wx.Panel(self)
         toolbar_panel.SetBackgroundColour(PANEL)
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
 
         def add_btn(label, handler):
-            b = wx.Button(toolbar_panel, label=label)
+            b = wx.Button(toolbar_panel, label=label, style=wx.BORDER_NONE)
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+            b.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
+            b.SetMinSize((150, 34))
             b.Bind(wx.EVT_BUTTON, handler)
             toolbar.Add(b, 0, wx.ALL, 4)
             return b
@@ -236,12 +237,12 @@ class MainWindow(wx.Frame):
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
         lab.SetForegroundColour(TXT)
-        lab.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        lab.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
 
         self.knowledge_line = wx.StaticText(info_panel, label="(none)")
         self.knowledge_line.SetForegroundColour(wx.Colour(210, 210, 210))
-        self.knowledge_line.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.knowledge_line.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
         hz.Add(self.knowledge_line, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
         info_panel.SetSizer(hz)
         main.Add(info_panel, 0, wx.EXPAND)
@@ -257,7 +258,7 @@ class MainWindow(wx.Frame):
         self.grid.SetDefaultCellTextColour(wx.Colour(220, 220, 220))
         self.grid.SetLabelBackgroundColour(wx.Colour(80, 80, 80))
         self.grid.SetLabelTextColour(wx.Colour(240, 240, 240))
-        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        self.grid.SetLabelFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
 
         vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
@@ -375,8 +376,7 @@ class MainWindow(wx.Frame):
         dlg.Destroy()
         try:
             hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
-            data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))]
-                    for r in range(self.grid.GetNumberRows())]
+            data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))] for r in range(self.grid.GetNumberRows())]
             pd.DataFrame(data, columns=hdr).to_csv(path, index=False, sep=",")
             wx.MessageBox("CSV exported.", "Export", wx.OK | wx.ICON_INFORMATION)
         except Exception as e:
@@ -391,8 +391,7 @@ class MainWindow(wx.Frame):
         dlg.Destroy()
         try:
             hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
-            data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))]
-                    for r in range(self.grid.GetNumberRows())]
+            data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))] for r in range(self.grid.GetNumberRows())]
             pd.DataFrame(data, columns=hdr).to_csv(path, index=False, sep="\t")
             wx.MessageBox("TXT exported.", "Export", wx.OK | wx.ICON_INFORMATION)
         except Exception as e:
@@ -400,8 +399,7 @@ class MainWindow(wx.Frame):
 
     def on_upload_s3(self, _):
         hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
-        data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))]
-                for r in range(self.grid.GetNumberRows())]
+        data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))] for r in range(self.grid.GetNumberRows())]
         try:
             msg = upload_to_s3(self.current_process or "Unknown", hdr, data)
             wx.MessageBox(msg, "Upload", wx.OK | wx.ICON_INFORMATION)
