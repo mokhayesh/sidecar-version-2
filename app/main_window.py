@@ -71,7 +71,6 @@ class HeaderBanner(wx.Panel):
         dc = wx.AutoBufferedPaintDC(self)
         w, h = self.GetClientSize()
         dc.GradientFillLinear((0, 0, w, h), CartoonTheme.PANEL, CartoonTheme.BG, wx.SOUTH)
-        # subtle bottom highlight line
         dc.SetPen(wx.Pen(wx.Colour(255, 255, 255, 18)))
         dc.DrawLine(0, h-1, w, h-1)
 
@@ -109,7 +108,6 @@ class GlossyButton(wx.Control):
         self._hover = False
 
     def _tick(self, _):
-        # simple harmonic pulse
         self._pulse += 0.12
         if not self._hover and self._pulse > math.pi * 2:
             self._timer.Stop()
@@ -120,25 +118,21 @@ class GlossyButton(wx.Control):
         dc = wx.AutoBufferedPaintDC(self)
         rect = self.GetClientRect()
 
-        # clear
         dc.SetBackground(wx.Brush(self.GetParent().GetBackgroundColour()))
         dc.Clear()
 
-        # pulse scale
         scale = 1.0 + (0.02 * math.sin(self._pulse)) if self._hover else 1.0
         w, h = rect.width, rect.height
         pad = int(4 * (1/scale))
         x, y = pad, pad
         w2, h2 = w - pad*2, h - pad*2
 
-        # shadow/glow
         for i in range(self.glow, 0, -1):
             alpha = int(22 * (i / self.glow)) + 8
             dc.SetPen(wx.Pen(wx.Colour(0, 0, 0, alpha)))
             dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, alpha)))
             dc.DrawRoundedRectangle(x+i, y+i, w2-2*i, h2-2*i, self.radius + i)
 
-        # button body gradient
         top = self.colour
         bottom = CartoonTheme.BLUE_DARK if self.colour == CartoonTheme.BLUE else self.colour
         dc.SetPen(wx.Pen(top))
@@ -146,13 +140,11 @@ class GlossyButton(wx.Control):
         dc.GradientFillLinear(path_rect, top, bottom, wx.SOUTH)
         dc.DrawRoundedRectangle(x, y, w2, h2, self.radius)
 
-        # glossy highlight
         shine_h = max(10, h2//2)
         dc.GradientFillLinear((x+6, y+6, w2-12, shine_h),
                               wx.Colour(255, 255, 255, 120),
                               wx.Colour(255, 255, 255, 0),
                               wx.SOUTH)
-        # label
         dc.SetFont(self._font)
         dc.SetTextForeground(wx.WHITE)
         tw, th = dc.GetTextExtent(self.label)
@@ -183,13 +175,11 @@ class ShadowPanel(wx.Panel):
         rect = self.GetClientRect()
         dc.SetBackground(wx.Brush(self.GetParent().GetBackgroundColour()))
         dc.Clear()
-        # soft halo
         for i in range(self.shadow, 0, -1):
             alpha = int(18 * (i / self.shadow)) + 10
             dc.SetPen(wx.Pen(wx.Colour(0, 0, 0, alpha)))
             dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, alpha)))
             dc.DrawRoundedRectangle(i, i, rect.width - 2*i, rect.height - 2*i, self.radius + i)
-        # body
         dc.SetPen(wx.Pen(wx.Colour(80, 70, 110)))
         dc.SetBrush(wx.Brush(self.body_bg))
         dc.DrawRoundedRectangle(self.shadow, self.shadow,
@@ -220,28 +210,21 @@ class CartoonCard(wx.Panel):
         dc = wx.AutoBufferedPaintDC(self)
         w, h = self.GetClientSize()
 
-        # card body gradient
         dc.GradientFillLinear((0, 0, w, h), wx.Colour(54, 48, 74), wx.Colour(40, 36, 56), wx.SOUTH)
-        # border
         dc.SetPen(wx.Pen(wx.Colour(15, 12, 24)))
         dc.SetBrush(wx.TRANSPARENT_BRUSH)
         dc.DrawRoundedRectangle(0, 0, w, h, 14)
-        # highlight bar
         dc.SetPen(wx.Pen(self.accent))
         dc.SetBrush(wx.Brush(self.accent))
         dc.DrawRoundedRectangle(14, h-10, w-28, 6, 3)
-
-        # glossy arc at top
         dc.GradientFillLinear((10, 8, w-20, 16),
                               wx.Colour(255, 255, 255, 50),
                               wx.Colour(255, 255, 255, 0), wx.SOUTH)
 
-        # title
         dc.SetFont(self._title_font)
         dc.SetTextForeground(wx.Colour(188, 192, 210))
         dc.DrawText(self.title, 16, 8)
 
-        # value (slight text outline for pop)
         dc.SetFont(self._value_font)
         x = 16; y = 26
         for dx, dy in ((1,0),(0,1),(-1,0),(0,-1)):
@@ -252,7 +235,7 @@ class CartoonCard(wx.Panel):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Simple synthetic data fallback (unchanged)
+# Simple synthetic data fallback
 # ──────────────────────────────────────────────────────────────────────────────
 _FIRST_NAMES = ["JAY", "ANA", "KIM", "LEE", "OMAR", "SARA", "NIA", "LIV", "RAJ"]
 _LAST_NAMES  = ["SMITH", "NG", "GARCIA", "BROWN", "TAYLOR", "KHAN", "LI", "LEE"]
@@ -290,7 +273,6 @@ class MainWindow(wx.Frame):
     def __init__(self):
         super().__init__(None, title="Sidecar Application: Data Governance", size=(1220, 840))
 
-        # Icon (best-effort)
         for p in (
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "sidecar-01.ico"),
             os.path.join(os.getcwd(), "assets", "sidecar-01.ico"),
@@ -317,10 +299,8 @@ class MainWindow(wx.Frame):
         self.SetBackgroundColour(CartoonTheme.BG)
         main = wx.BoxSizer(wx.VERTICAL)
 
-        # Header strip
         main.Add(HeaderBanner(self), 0, wx.EXPAND)
 
-        # Title
         title_panel = wx.Panel(self)
         title_panel.SetBackgroundColour(CartoonTheme.PANEL)
         tbox = wx.BoxSizer(wx.HORIZONTAL)
@@ -333,7 +313,7 @@ class MainWindow(wx.Frame):
         title_panel.SetSizer(tbox)
         main.Add(title_panel, 0, wx.EXPAND | wx.BOTTOM, 6)
 
-        # ── KPI BAR + Buddy button ─────────────────────────────────────────
+        # KPI BAR + Buddy
         kpi_bar = wx.Panel(self)
         kpi_bar.SetBackgroundColour(CartoonTheme.PANEL)
         kbar = wx.BoxSizer(wx.HORIZONTAL)
@@ -352,10 +332,8 @@ class MainWindow(wx.Frame):
         for c in (self.card_rows, self.card_cols, self.card_nulls, self.card_quality,
                   self.card_complete, self.card_anoms):
             kpis.Add(c, 1, wx.ALL | wx.EXPAND, 6)
-
         kpi_panel.SetSizer(kpis)
 
-        # Buddy top-right
         buddy_host = wx.Panel(kpi_bar)
         buddy_host.SetBackgroundColour(CartoonTheme.PANEL)
         right = wx.BoxSizer(wx.HORIZONTAL)
@@ -383,7 +361,7 @@ class MainWindow(wx.Frame):
         mb.Append(m_set, "&Settings")
         self.SetMenuBar(mb)
 
-        # Toolbar (cartoon buttons)
+        # Toolbar
         tb_panel = wx.Panel(self)
         tb_panel.SetBackgroundColour(CartoonTheme.PANEL)
         wrap = wx.WrapSizer(wx.HORIZONTAL)
@@ -501,6 +479,42 @@ class MainWindow(wx.Frame):
 
     def on_buddy(self, _):
         DataBuddyDialog(self, self.raw_data, self.headers, knowledge=self.knowledge_files).ShowModal()
+
+    def on_generate_synth(self, _):
+        """Generate synthetic data via dialog; fallback to local generator."""
+        if not self.headers:
+            wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
+            return
+
+        dlg = SyntheticDataDialog(self, self.headers)
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return
+
+        df = None
+        if hasattr(dlg, "get_dataframe"):
+            try:
+                df = dlg.get_dataframe()
+            except Exception:
+                df = None
+
+        if df is None:
+            try:
+                n, fields = dlg.get_values()
+                if not fields:
+                    fields = list(self.headers)
+                df = _synth_dataframe(n, fields)
+            except Exception as e:
+                wx.MessageBox(f"Synthetic data error: {e}", "Error", wx.OK | wx.ICON_ERROR)
+                dlg.Destroy()
+                return
+
+        dlg.Destroy()
+        hdr = list(df.columns)
+        data = df.values.tolist()
+        self.headers = hdr
+        self.raw_data = data
+        self._display(hdr, data)
 
     def do_analysis_process(self, name: str):
         if not self.headers:
