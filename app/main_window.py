@@ -374,16 +374,29 @@ class MainWindow(wx.Frame):
     # Menu handlers
     # ──────────────────────────────────────────────────────────────────────
     def open_settings(self, _evt=None):
+        """Open Settings — handle both dialog-like and frame-like implementations."""
         try:
-            SettingsWindow(self).ShowModal()
+            dlg = SettingsWindow(self)
+            # Use modal if available, else non-modal Show()
+            if hasattr(dlg, "ShowModal"):
+                dlg.ShowModal()
+                # If it supports Destroy after modal, do so
+                if hasattr(dlg, "Destroy"):
+                    dlg.Destroy()
+            else:
+                dlg.Show()
         except Exception as e:
             wx.MessageBox(f"Could not open Settings:\n{e}", "Settings", wx.OK | wx.ICON_ERROR)
 
     def on_little_buddy(self, _evt=None):
         try:
             dlg = DataBuddyDialog(self)
-            dlg.ShowModal()
-            dlg.Destroy()
+            if hasattr(dlg, "ShowModal"):
+                dlg.ShowModal()
+                if hasattr(dlg, "Destroy"):
+                    dlg.Destroy()
+            else:
+                dlg.Show()
         except Exception as e:
             wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Buddy", wx.OK | wx.ICON_ERROR)
 
@@ -440,10 +453,39 @@ class MainWindow(wx.Frame):
         self._display(hdr, data)
 
     def on_rules(self, _evt=None):
-        dlg = QualityRuleDialog(self, rules=self.quality_rules)
-        if dlg.ShowModal() == wx.ID_OK:
-            self.quality_rules = dlg.get_rules()
-        dlg.Destroy()
+        """Open Quality Rule Assignment dialog, tolerant of differing ctor signatures."""
+        dlg = None
+        try:
+            # Try (parent, rules=...) if supported
+            sig = inspect.signature(QualityRuleDialog)
+            params = list(sig.parameters.keys())
+            if "rules" in params:
+                dlg = QualityRuleDialog(self, rules=self.quality_rules)
+            else:
+                # Try positional (parent, rules)
+                if len(params) >= 2:
+                    try:
+                        dlg = QualityRuleDialog(self, self.quality_rules)
+                    except TypeError:
+                        dlg = QualityRuleDialog(self)
+                else:
+                    dlg = QualityRuleDialog(self)
+
+            if hasattr(dlg, "ShowModal"):
+                res = dlg.ShowModal()
+                # Try reading updated rules if possible
+                if res == wx.ID_OK and hasattr(dlg, "get_rules"):
+                    self.quality_rules = dlg.get_rules()
+                elif res == wx.ID_OK and hasattr(dlg, "rules"):
+                    self.quality_rules = dlg.rules
+                if hasattr(dlg, "Destroy"):
+                    dlg.Destroy()
+            else:
+                dlg.Show()
+        except Exception as e:
+            if dlg and hasattr(dlg, "Destroy"):
+                dlg.Destroy()
+            wx.MessageBox(f"Could not open Quality Rule Assignment:\n{e}", "Quality Rules", wx.OK | wx.ICON_ERROR)
 
     # ──────────────────────────────────────────────────────────────────────
     # Analyses
@@ -541,23 +583,33 @@ class MainWindow(wx.Frame):
                 rows.append(row)
             return pd.DataFrame(rows, columns=fields)
 
-        # FIX: pass fields=..., not columns=...
         dlg = SyntheticDataDialog(self, fields=list(self.headers))
-        if dlg.ShowModal() != wx.ID_OK:
-            dlg.Destroy()
-            return
+        if hasattr(dlg, "ShowModal"):
+            if dlg.ShowModal() != wx.ID_OK:
+                dlg.Destroy()
+                return
+        # If not modal, fall through — assume dialog populated values immediately
 
         try:
-            n, fields = dlg.get_values()
+            # Prefer method, else attribute
+            if hasattr(dlg, "get_values"):
+                n, fields = dlg.get_values()
+            else:
+                n = getattr(dlg, "n_rows", 0)
+                fields = getattr(dlg, "fields", list(self.headers))
+
             if not fields:
                 fields = list(self.headers)
             df = _synth_dataframe(n, fields)
         except Exception as e:
             wx.MessageBox(f"Synthetic data error: {e}", "Error", wx.OK | wx.ICON_ERROR)
-            dlg.Destroy()
+            if hasattr(dlg, "Destroy"):
+                dlg.Destroy()
             return
 
-        dlg.Destroy()
+        if hasattr(dlg, "Destroy"):
+            dlg.Destroy()
+
         hdr = list(df.columns)
         data = df.values.tolist()
         self.headers = hdr
