@@ -230,7 +230,8 @@ class MainWindow(wx.Frame):
         self.headers = []
         self.raw_data = []
         self.knowledge_files = []
-        self.quality_rules = []
+        # IMPORTANT: dict of {field: compiled_regex}; dialog expects a dict
+        self.quality_rules = {}
         self.current_process = ""
 
         self._build_ui()
@@ -456,8 +457,16 @@ class MainWindow(wx.Frame):
             wx.MessageBox("Load data first so fields are available.", "Quality Rules", wx.OK | wx.ICON_WARNING)
             return
 
+        # Ensure a dict for the dialog; it expects mapping with .get()
+        if not isinstance(self.quality_rules, dict):
+            try:
+                # Try to coerce list of pairs etc. into a dict; else start clean
+                self.quality_rules = dict(self.quality_rules)
+            except Exception:
+                self.quality_rules = {}
+
         fields = list(self.headers)
-        current_rules = self.quality_rules or []
+        current_rules = self.quality_rules  # pass the dict itself (dialog mutates it)
 
         dlg = None
         try:
@@ -467,15 +476,11 @@ class MainWindow(wx.Frame):
             if hasattr(dlg, "ShowModal"):
                 res = dlg.ShowModal()
                 if res == wx.ID_OK:
-                    # Prefer explicit getter; fall back to attribute
-                    if hasattr(dlg, "get_rules"):
-                        self.quality_rules = dlg.get_rules()
-                    elif hasattr(dlg, "rules"):
-                        self.quality_rules = dlg.rules
+                    # dialog updates current_rules in place; capture final state
+                    self.quality_rules = dlg.current_rules if hasattr(dlg, "current_rules") else current_rules
                 if hasattr(dlg, "Destroy"):
                     dlg.Destroy()
             else:
-                # Non-modal variant
                 dlg.Show()
         except Exception as e:
             if dlg and hasattr(dlg, "Destroy"):
