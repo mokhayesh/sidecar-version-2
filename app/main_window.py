@@ -333,7 +333,7 @@ class MainWindow(wx.Frame):
             toolbar.Add(b, 0, wx.ALL, 6)
             return b
 
-        add_btn("Load Knowledge Files", self.on_load_knowledge)
+        add_btn("Knowledge Files", self.on_load_knowledge)
         add_btn("Load File", self.on_load_file)
         add_btn("Load from URI/S3", self.on_load_s3)
         add_btn("Generate Synthetic Data", self.on_generate_synth)
