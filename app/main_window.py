@@ -1,8 +1,14 @@
 # app/main_window.py
 import os
+import re
 import json
+import math
+import random
 import threading
 import inspect
+from datetime import datetime, timedelta
+from collections import Counter
+
 import wx
 import wx.grid as gridlib
 import pandas as pd
@@ -91,7 +97,6 @@ class RoundedShadowButton(wx.Control):
         self.Refresh()
 
     def _invoke_handler(self, evt):
-        """Call handler whether it accepts 0 or 1 positional arg; show real errors."""
         try:
             sig = inspect.signature(self._handler)
             if len(sig.parameters) == 0:
@@ -230,7 +235,7 @@ class MainWindow(wx.Frame):
         self.headers = []
         self.raw_data = []
         self.knowledge_files = []
-        # IMPORTANT: dict of {field: compiled_regex}; dialog expects a dict
+        # dict of quality rules (dialog expects mapping)
         self.quality_rules = {}
         self.current_process = ""
 
@@ -259,7 +264,7 @@ class MainWindow(wx.Frame):
         title_panel.SetBackgroundColour(header_bg)
         title = wx.StaticText(title_panel, label="Data Buddy — Sidecar Application")
         title.SetForegroundColour(wx.Colour(230, 230, 230))
-        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
         tp_sizer = wx.BoxSizer(wx.VERTICAL)
         tp_sizer.AddStretchSpacer()
         tp_sizer.Add(title, 0, wx.ALL, 4)
@@ -340,7 +345,7 @@ class MainWindow(wx.Frame):
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
         lab.SetForegroundColour(TXT)
-        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_MEDIUM))
+        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.MEDIUM))
         self.knowledge_lbl = wx.StaticText(info_panel, label="(none)")
         self.knowledge_lbl.SetForegroundColour(wx.Colour(200, 200, 200))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
@@ -375,7 +380,6 @@ class MainWindow(wx.Frame):
     # Menu handlers
     # ──────────────────────────────────────────────────────────────────────
     def open_settings(self, _evt=None):
-        """Open Settings — handle both dialog-like and frame-like implementations."""
         try:
             dlg = SettingsWindow(self)
             if hasattr(dlg, "ShowModal"):
@@ -452,32 +456,27 @@ class MainWindow(wx.Frame):
         self._display(hdr, data)
 
     def on_rules(self, _evt=None):
-        """Open Quality Rule Assignment with (fields, current_rules) signature."""
         if not self.headers:
             wx.MessageBox("Load data first so fields are available.", "Quality Rules", wx.OK | wx.ICON_WARNING)
             return
 
-        # Ensure a dict for the dialog; it expects mapping with .get()
+        # Ensure dict for dialog
         if not isinstance(self.quality_rules, dict):
             try:
-                # Try to coerce list of pairs etc. into a dict; else start clean
                 self.quality_rules = dict(self.quality_rules)
             except Exception:
                 self.quality_rules = {}
 
         fields = list(self.headers)
-        current_rules = self.quality_rules  # pass the dict itself (dialog mutates it)
+        current_rules = self.quality_rules
 
         dlg = None
         try:
-            # Your dialog expects: (parent, fields, current_rules)
             dlg = QualityRuleDialog(self, fields, current_rules)
-
             if hasattr(dlg, "ShowModal"):
                 res = dlg.ShowModal()
                 if res == wx.ID_OK:
-                    # dialog updates current_rules in place; capture final state
-                    self.quality_rules = dlg.current_rules if hasattr(dlg, "current_rules") else current_rules
+                    self.quality_rules = getattr(dlg, "current_rules", current_rules)
                 if hasattr(dlg, "Destroy"):
                     dlg.Destroy()
             else:
@@ -564,24 +563,324 @@ class MainWindow(wx.Frame):
             wx.MessageBox(f"Upload failed: {e}", "Upload", wx.OK | wx.ICON_ERROR)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Synthetic data
+    # Helpers for realistic synthetic data
+    # ──────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _clean_float(x):
+        if x is None:
+            return None
+        if isinstance(x, (int, float)):
+            return float(x)
+        s = str(x).strip()
+        if not s:
+            return None
+        s = s.replace(",", "")
+        m = re.search(r"([-+]?\d*\.?\d+)", s)
+        if not m:
+            return None
+        try:
+            return float(m.group(1))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _most_common_format(strings, default_mask="DDD-DDD-DDDD"):
+        """Return the most common phone-like mask from sample strings."""
+        def mask_one(s):
+            m = re.sub(r"\d", "D", s)
+            # collapse 3+ Ds into D-blocks to keep shape
+            return m
+        masks = [mask_one(s) for s in strings if isinstance(s, str)]
+        if not masks:
+            return default_mask
+        return Counter(masks).most_common(1)[0][0]
+
+    @staticmethod
+    def _sample_with_weights(values):
+        if not values:
+            return lambda *_: None
+        counts = Counter(values)
+        vals, weights = zip(*counts.items())
+        total = float(sum(weights))
+        probs = [w / total for w in weights]
+
+        def pick(_row=None):
+            r = random.random()
+            acc = 0.0
+            for v, p in zip(vals, probs):
+                acc += p
+                if r <= acc:
+                    return v
+            return vals[-1]
+        return pick
+
+    def _build_generators(self, src_df: pd.DataFrame, fields):
+        """
+        For each field, build a generator function row -> value that:
+        - learns from the existing column (distribution, formats)
+        - uses simple patterns from header names (email/phone/names/amounts/dates)
+        """
+        gens = {}
+        low_name_lists = {
+            "first": ["james","mary","robert","patricia","john","jennifer","michael","linda","william","elizabeth","david","barbara","richard","susan","joseph","jessica"],
+            "last": ["smith","johnson","williams","brown","jones","garcia","miller","davis","rodriguez","martinez","hernandez","lopez","gonzalez","wilson","anderson","thomas"],
+            "street": ["Main","Oak","Maple","Pine","Cedar","Elm","Washington","Lake","Hill","Sunset","Park","Ridge","Highland","Jackson","Adams"],
+            "city": ["Springfield","Riverton","Franklin","Greenville","Clinton","Fairview","Madison","Georgetown","Arlington","Ashland","Milton"],
+            "state": ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"]
+        }
+
+        fields_present = {f.lower(): f for f in src_df.columns}
+
+        # Some reusable lookups
+        first_col = next((fields_present[k] for k in fields_present if "first" in k and "name" in k), None)
+        last_col  = next((fields_present[k] for k in fields_present if "last" in k and "name" in k), None)
+
+        # Precompute per-column stats
+        for col in fields:
+            name = col
+            lower = name.lower()
+            series = src_df[name] if name in src_df.columns else pd.Series([], dtype=object)
+
+            # Drop NA-like values for training
+            col_vals = [v for v in series.tolist() if (v is not None and str(v).strip() != "")]
+            col_strs = [str(v) for v in col_vals]
+
+            # Email
+            if "email" in lower:
+                # learn domains from current column; else fallback
+                domains = [s.split("@", 1)[1].lower()
+                           for s in col_strs if "@" in s and len(s.split("@", 1)[1]) > 0]
+                dom_pick = self._sample_with_weights(domains) if domains else self._sample_with_weights(
+                    ["gmail.com", "yahoo.com", "outlook.com", "example.com"]
+                )
+
+                # if name cols exist, sample realistic emails from them; else sample observed emails
+                if first_col or last_col:
+                    first_values = [str(x) for x in src_df[first_col].dropna().tolist()] if first_col else []
+                    last_values  = [str(x) for x in src_df[last_col].dropna().tolist()] if last_col else []
+                    if not first_values:
+                        first_values = [n.title() for n in low_name_lists["first"]]
+                    if not last_values:
+                        last_values = [n.title() for n in low_name_lists["last"]]
+                    pick_first = self._sample_with_weights(first_values)
+                    pick_last  = self._sample_with_weights(last_values)
+
+                    def gen_email(row):
+                        f = str(pick_first() or "user").lower().replace(" ", "")
+                        l = str(pick_last() or "name").lower().replace(" ", "")
+                        style = random.choice([0, 1, 2])
+                        if style == 0:
+                            local = f"{f}.{l}"
+                        elif style == 1:
+                            local = f"{f}{l[:1]}"
+                        else:
+                            local = f"{f}{random.randint(1, 99)}"
+                        return f"{local}@{dom_pick()}"
+                    gens[name] = gen_email
+                else:
+                    # Bootstrap from existing with slight mutation
+                    pick_existing = self._sample_with_weights(col_vals) if col_vals else None
+                    def gen_email(_row):
+                        if pick_existing and random.random() < 0.7:
+                            return pick_existing()
+                        local = f"user{random.randint(1000,9999)}"
+                        return f"{local}@{dom_pick()}"
+                    gens[name] = gen_email
+                continue
+
+            # Phone
+            if any(k in lower for k in ["phone", "mobile", "cell", "telephone"]):
+                # learn most common mask
+                mask = self._most_common_format([s for s in col_strs if re.search(r"\d", s)])
+                def gen_phone(_row):
+                    # replace every 'D' with digits while preserving separators
+                    out = []
+                    for ch in mask:
+                        if ch == "D":
+                            out.append(str(random.randint(0, 9)))
+                        else:
+                            out.append(ch)
+                    return "".join(out)
+                gens[name] = gen_phone
+                continue
+
+            # Date / datetime
+            if "date" in lower or "dob" in lower or "dt" in lower:
+                # parseable dates -> get min/max
+                parsed = []
+                for s in col_strs:
+                    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d", "%b %d %Y", "%d-%b-%Y"):
+                        try:
+                            parsed.append(datetime.strptime(s, fmt))
+                            break
+                        except Exception:
+                            continue
+                if parsed:
+                    dmin, dmax = min(parsed), max(parsed)
+                else:
+                    dmax = datetime.today()
+                    dmin = dmax - timedelta(days=3650)  # 10 years
+                delta = (dmax - dmin).days or 365
+
+                # choose an output format based on most common sample
+                fmts = Counter()
+                for s in col_strs:
+                    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d"):
+                        try:
+                            datetime.strptime(s, fmt)
+                            fmts[fmt] += 1
+                        except Exception:
+                            pass
+                out_fmt = fmts.most_common(1)[0][0] if fmts else "%Y-%m-%d"
+
+                def gen_date(_row):
+                    rd = dmin + timedelta(days=random.randint(0, max(1, delta)))
+                    return rd.strftime(out_fmt)
+                gens[name] = gen_date
+                continue
+
+            # Amounts / currency / numeric
+            looks_numeric = 0
+            for v in col_vals[: min(100, len(col_vals))]:
+                if self._clean_float(v) is not None:
+                    looks_numeric += 1
+            if looks_numeric >= max(5, int(0.6 * max(1, len(col_vals)))) or any(
+                k in lower for k in ["amount", "balance", "score", "qty", "quantity", "count", "loan"]
+            ):
+                # learn prefix/suffix (e.g., $ and decimals)
+                sample_str = next((s for s in col_strs if re.search(r"\d", s)), "")
+                prefix = ""
+                suffix = ""
+                m_prefix = re.match(r"^\s*([^\d\-+]*)", sample_str)
+                m_suffix = re.search(r"([^\d]*)\s*$", sample_str)
+                if m_prefix:
+                    prefix = m_prefix.group(1).strip()
+                if m_suffix:
+                    suffix = m_suffix.group(1).strip()
+                # decimals
+                decimals = 2 if re.search(r"\d+\.\d{2}", sample_str) else 0
+
+                nums = [self._clean_float(v) for v in col_vals]
+                nums = [x for x in nums if x is not None]
+                if nums:
+                    mu = float(pd.Series(nums).mean())
+                    sd = float(pd.Series(nums).std(ddof=0) or 1.0)
+                    mn = min(nums)
+                    mx = max(nums)
+                else:
+                    mu, sd, mn, mx = 100.0, 30.0, 0.0, 1000.0
+
+                def gen_num(_row):
+                    # 70%: bootstrap from existing + tiny noise, 30%: truncated normal
+                    if nums and random.random() < 0.7:
+                        base = random.choice(nums)
+                        noise = random.uniform(-0.05, 0.05) * (abs(base) + 1)
+                        x = base + noise
+                    else:
+                        x = random.gauss(mu, sd)
+                        x = min(max(x, mn), mx)
+                    if decimals == 0:
+                        x = int(round(x))
+                    else:
+                        x = round(x, decimals)
+                    s = f"{x}"
+                    if decimals and "." not in s:
+                        s += "." + "0" * decimals
+                    if prefix:
+                        s = f"{prefix}{s}"
+                    if suffix:
+                        s = f"{s}{suffix}"
+                    return s
+                gens[name] = gen_num
+                continue
+
+            # Names (first/last/middle)
+            if "first" in lower and "name" in lower:
+                pool = [str(v).title() for v in col_vals if str(v).isalpha()] or [n.title() for n in low_name_lists["first"]]
+                gens[name] = self._sample_with_weights(pool)
+                continue
+            if "last" in lower and "name" in lower:
+                pool = [str(v).title() for v in col_vals if str(v).isalpha()] or [n.title() for n in low_name_lists["last"]]
+                gens[name] = self._sample_with_weights(pool)
+                continue
+            if "middle" in lower and "name" in lower:
+                # often initial
+                initials = [str(v)[0].upper() for v in col_vals if isinstance(v, str) and v]
+                if not initials:
+                    initials = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+                def gen_mid(_row):
+                    return random.choice(initials)
+                gens[name] = gen_mid
+                continue
+
+            # Address
+            if "address" in lower:
+                if col_vals:
+                    # bootstrap with slight mutations: house number tweak
+                    street_pool = [str(v) for v in col_vals]
+                    pick = self._sample_with_weights(street_pool)
+                    def gen_addr(_row):
+                        s = pick()
+                        m = re.match(r"\s*(\d+)(.*)", s)
+                        if m and random.random() < 0.6:
+                            base = int(m.group(1))
+                            base = max(1, base + random.randint(-20, 20))
+                            return f"{base}{m.group(2)}"
+                        return s
+                    gens[name] = gen_addr
+                else:
+                    def gen_addr(_row):
+                        num = random.randint(10, 9999)
+                        street = random.choice(low_name_lists["street"])
+                        suf = random.choice(["St", "Ave", "Rd", "Blvd", "Ln", "Dr"])
+                        return f"{num} {street} {suf}"
+                    gens[name] = gen_addr
+                continue
+
+            # City/State/Zip quick heuristics
+            if "city" in lower:
+                pool = col_strs or low_name_lists["city"]
+                gens[name] = self._sample_with_weights(pool)
+                continue
+            if "state" in lower and len(lower) <= 10:
+                pool = col_strs or low_name_lists["state"]
+                gens[name] = self._sample_with_weights(pool)
+                continue
+            if "zip" in lower or "postal" in lower:
+                # keep 5-digit by default
+                def gen_zip(_row):
+                    return f"{random.randint(10000, 99999)}"
+                gens[name] = gen_zip
+                continue
+
+            # Low-cardinality categorical -> weighted sampling
+            unique_ratio = (len(set(col_vals)) / max(1, len(col_vals))) if col_vals else 0.0
+            if col_vals and (len(set(col_vals)) <= 50 or unique_ratio <= 0.5):
+                gens[name] = self._sample_with_weights(col_vals)
+                continue
+
+            # Fallback: bootstrap from existing or short random word
+            if col_vals:
+                pick = self._sample_with_weights(col_vals)
+                gens[name] = lambda _row, p=pick: p()
+            else:
+                alphabet = "abcdefghijklmnopqrstuvwxyz"
+                def gen_word(_row):
+                    L = random.randint(5, 10)
+                    return "".join(random.choice(alphabet) for _ in range(L))
+                gens[name] = gen_word
+
+        return gens
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Synthetic data (realistic)
     # ──────────────────────────────────────────────────────────────────────
     def on_generate_synth(self, _evt=None):
         if not self.headers:
             wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
             return
 
-        def _synth_dataframe(n, fields):
-            import random
-            import string
-            rows = []
-            for _ in range(int(n)):
-                row = []
-                for _f in fields:
-                    val = "".join(random.choice(string.ascii_letters + string.digits) for _ in range(8))
-                    row.append(val)
-                rows.append(row)
-            return pd.DataFrame(rows, columns=fields)
+        src_df = pd.DataFrame(self.raw_data, columns=self.headers)
 
         dlg = SyntheticDataDialog(self, fields=list(self.headers))
         if hasattr(dlg, "ShowModal"):
@@ -591,14 +890,28 @@ class MainWindow(wx.Frame):
 
         try:
             if hasattr(dlg, "get_values"):
-                n, fields = dlg.get_values()
+                n_rows, fields = dlg.get_values()
             else:
-                n = getattr(dlg, "n_rows", 0)
+                n_rows = getattr(dlg, "n_rows", 0)
                 fields = getattr(dlg, "fields", list(self.headers))
 
             if not fields:
                 fields = list(self.headers)
-            df = _synth_dataframe(n, fields)
+
+            # Build per-column generators conditioned on the uploaded data
+            gens = self._build_generators(src_df, fields)
+
+            # Generate row-by-row so fields can optionally depend on each other
+            out_rows = []
+            for _ in range(int(n_rows)):
+                row_map = {}
+                for f in fields:
+                    g = gens.get(f)
+                    val = g(row_map) if callable(g) else None
+                    row_map[f] = "" if val is None else val
+                out_rows.append([row_map[f] for f in fields])
+
+            df = pd.DataFrame(out_rows, columns=fields)
         except Exception as e:
             wx.MessageBox(f"Synthetic data error: {e}", "Error", wx.OK | wx.ICON_ERROR)
             if hasattr(dlg, "Destroy"):
