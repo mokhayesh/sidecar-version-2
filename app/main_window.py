@@ -59,7 +59,7 @@ class HeaderBanner(wx.Panel):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Rounded button widget (now with safer handler invocation & useful error box)
+# Rounded button widget (safer handler invocation & useful error box)
 # ──────────────────────────────────────────────────────────────────────────────
 class RoundedShadowButton(wx.Control):
     def __init__(self, parent, label, handler, colour=wx.Colour(66, 133, 244), radius=12):
@@ -94,7 +94,6 @@ class RoundedShadowButton(wx.Control):
         """Call handler whether it accepts 0 or 1 positional arg; show real errors."""
         try:
             sig = inspect.signature(self._handler)
-            # Allow handlers that take no args OR one arg (event)
             if len(sig.parameters) == 0:
                 self._handler()
             else:
@@ -375,14 +374,12 @@ class MainWindow(wx.Frame):
     # Menu handlers
     # ──────────────────────────────────────────────────────────────────────
     def open_settings(self, _evt=None):
-        """Open the Settings dialog (wired to the 'Settings' top menu)."""
         try:
             SettingsWindow(self).ShowModal()
         except Exception as e:
             wx.MessageBox(f"Could not open Settings:\n{e}", "Settings", wx.OK | wx.ICON_ERROR)
 
     def on_little_buddy(self, _evt=None):
-        """Open the Little Buddy chat/dialog."""
         try:
             dlg = DataBuddyDialog(self)
             dlg.ShowModal()
@@ -544,7 +541,8 @@ class MainWindow(wx.Frame):
                 rows.append(row)
             return pd.DataFrame(rows, columns=fields)
 
-        dlg = SyntheticDataDialog(self, columns=list(self.headers))
+        # FIX: pass fields=..., not columns=...
+        dlg = SyntheticDataDialog(self, fields=list(self.headers))
         if dlg.ShowModal() != wx.ID_OK:
             dlg.Destroy()
             return
