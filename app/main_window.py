@@ -83,7 +83,7 @@ class RoundedShadowButton(wx.Control):
         self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
         self.Bind(wx.EVT_LEFT_UP, self.on_up)
         self._padx, self._pady = 16, 10
-        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_MEDIUM)
+        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
         self._text_colour = wx.Colour(240, 240, 240)
         self.SetMinSize((120, 32))
 
@@ -172,7 +172,7 @@ class KPIBadge(wx.Panel):
         self._colour = colour
         self._accent = wx.Colour(90, 180, 255)
         self._accent2 = wx.Colour(80, 210, 140)
-        self._font_title = wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_MEDIUM)
+        self._font_title = wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
         self._font_value = wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
         self.Bind(wx.EVT_PAINT, self.on_paint)
 
@@ -264,7 +264,7 @@ class MainWindow(wx.Frame):
         title_panel.SetBackgroundColour(header_bg)
         title = wx.StaticText(title_panel, label="Data Buddy — Sidecar Application")
         title.SetForegroundColour(wx.Colour(230, 230, 230))
-        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
+        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         tp_sizer = wx.BoxSizer(wx.VERTICAL)
         tp_sizer.AddStretchSpacer()
         tp_sizer.Add(title, 0, wx.ALL, 4)
@@ -345,7 +345,7 @@ class MainWindow(wx.Frame):
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
         lab.SetForegroundColour(TXT)
-        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.MEDIUM))
+        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         self.knowledge_lbl = wx.StaticText(info_panel, label="(none)")
         self.knowledge_lbl.SetForegroundColour(wx.Colour(200, 200, 200))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
@@ -460,7 +460,6 @@ class MainWindow(wx.Frame):
             wx.MessageBox("Load data first so fields are available.", "Quality Rules", wx.OK | wx.ICON_WARNING)
             return
 
-        # Ensure dict for dialog
         if not isinstance(self.quality_rules, dict):
             try:
                 self.quality_rules = dict(self.quality_rules)
@@ -588,7 +587,6 @@ class MainWindow(wx.Frame):
         """Return the most common phone-like mask from sample strings."""
         def mask_one(s):
             m = re.sub(r"\d", "D", s)
-            # collapse 3+ Ds into D-blocks to keep shape
             return m
         masks = [mask_one(s) for s in strings if isinstance(s, str)]
         if not masks:
@@ -631,30 +629,25 @@ class MainWindow(wx.Frame):
 
         fields_present = {f.lower(): f for f in src_df.columns}
 
-        # Some reusable lookups
         first_col = next((fields_present[k] for k in fields_present if "first" in k and "name" in k), None)
         last_col  = next((fields_present[k] for k in fields_present if "last" in k and "name" in k), None)
 
-        # Precompute per-column stats
         for col in fields:
             name = col
             lower = name.lower()
             series = src_df[name] if name in src_df.columns else pd.Series([], dtype=object)
 
-            # Drop NA-like values for training
             col_vals = [v for v in series.tolist() if (v is not None and str(v).strip() != "")]
             col_strs = [str(v) for v in col_vals]
 
             # Email
             if "email" in lower:
-                # learn domains from current column; else fallback
                 domains = [s.split("@", 1)[1].lower()
                            for s in col_strs if "@" in s and len(s.split("@", 1)[1]) > 0]
                 dom_pick = self._sample_with_weights(domains) if domains else self._sample_with_weights(
                     ["gmail.com", "yahoo.com", "outlook.com", "example.com"]
                 )
 
-                # if name cols exist, sample realistic emails from them; else sample observed emails
                 if first_col or last_col:
                     first_values = [str(x) for x in src_df[first_col].dropna().tolist()] if first_col else []
                     last_values  = [str(x) for x in src_df[last_col].dropna().tolist()] if last_col else []
@@ -678,7 +671,6 @@ class MainWindow(wx.Frame):
                         return f"{local}@{dom_pick()}"
                     gens[name] = gen_email
                 else:
-                    # Bootstrap from existing with slight mutation
                     pick_existing = self._sample_with_weights(col_vals) if col_vals else None
                     def gen_email(_row):
                         if pick_existing and random.random() < 0.7:
@@ -690,10 +682,8 @@ class MainWindow(wx.Frame):
 
             # Phone
             if any(k in lower for k in ["phone", "mobile", "cell", "telephone"]):
-                # learn most common mask
                 mask = self._most_common_format([s for s in col_strs if re.search(r"\d", s)])
                 def gen_phone(_row):
-                    # replace every 'D' with digits while preserving separators
                     out = []
                     for ch in mask:
                         if ch == "D":
@@ -706,7 +696,6 @@ class MainWindow(wx.Frame):
 
             # Date / datetime
             if "date" in lower or "dob" in lower or "dt" in lower:
-                # parseable dates -> get min/max
                 parsed = []
                 for s in col_strs:
                     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d", "%b %d %Y", "%d-%b-%Y"):
@@ -719,10 +708,9 @@ class MainWindow(wx.Frame):
                     dmin, dmax = min(parsed), max(parsed)
                 else:
                     dmax = datetime.today()
-                    dmin = dmax - timedelta(days=3650)  # 10 years
+                    dmin = dmax - timedelta(days=3650)
                 delta = (dmax - dmin).days or 365
 
-                # choose an output format based on most common sample
                 fmts = Counter()
                 for s in col_strs:
                     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d"):
@@ -739,7 +727,7 @@ class MainWindow(wx.Frame):
                 gens[name] = gen_date
                 continue
 
-            # Amounts / currency / numeric
+            # Amounts / numeric
             looks_numeric = 0
             for v in col_vals[: min(100, len(col_vals))]:
                 if self._clean_float(v) is not None:
@@ -747,7 +735,6 @@ class MainWindow(wx.Frame):
             if looks_numeric >= max(5, int(0.6 * max(1, len(col_vals)))) or any(
                 k in lower for k in ["amount", "balance", "score", "qty", "quantity", "count", "loan"]
             ):
-                # learn prefix/suffix (e.g., $ and decimals)
                 sample_str = next((s for s in col_strs if re.search(r"\d", s)), "")
                 prefix = ""
                 suffix = ""
@@ -757,7 +744,6 @@ class MainWindow(wx.Frame):
                     prefix = m_prefix.group(1).strip()
                 if m_suffix:
                     suffix = m_suffix.group(1).strip()
-                # decimals
                 decimals = 2 if re.search(r"\d+\.\d{2}", sample_str) else 0
 
                 nums = [self._clean_float(v) for v in col_vals]
@@ -771,7 +757,6 @@ class MainWindow(wx.Frame):
                     mu, sd, mn, mx = 100.0, 30.0, 0.0, 1000.0
 
                 def gen_num(_row):
-                    # 70%: bootstrap from existing + tiny noise, 30%: truncated normal
                     if nums and random.random() < 0.7:
                         base = random.choice(nums)
                         noise = random.uniform(-0.05, 0.05) * (abs(base) + 1)
@@ -794,7 +779,7 @@ class MainWindow(wx.Frame):
                 gens[name] = gen_num
                 continue
 
-            # Names (first/last/middle)
+            # Names
             if "first" in lower and "name" in lower:
                 pool = [str(v).title() for v in col_vals if str(v).isalpha()] or [n.title() for n in low_name_lists["first"]]
                 gens[name] = self._sample_with_weights(pool)
@@ -804,7 +789,6 @@ class MainWindow(wx.Frame):
                 gens[name] = self._sample_with_weights(pool)
                 continue
             if "middle" in lower and "name" in lower:
-                # often initial
                 initials = [str(v)[0].upper() for v in col_vals if isinstance(v, str) and v]
                 if not initials:
                     initials = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -816,7 +800,6 @@ class MainWindow(wx.Frame):
             # Address
             if "address" in lower:
                 if col_vals:
-                    # bootstrap with slight mutations: house number tweak
                     street_pool = [str(v) for v in col_vals]
                     pick = self._sample_with_weights(street_pool)
                     def gen_addr(_row):
@@ -837,7 +820,7 @@ class MainWindow(wx.Frame):
                     gens[name] = gen_addr
                 continue
 
-            # City/State/Zip quick heuristics
+            # City/State/Zip
             if "city" in lower:
                 pool = col_strs or low_name_lists["city"]
                 gens[name] = self._sample_with_weights(pool)
@@ -847,19 +830,18 @@ class MainWindow(wx.Frame):
                 gens[name] = self._sample_with_weights(pool)
                 continue
             if "zip" in lower or "postal" in lower:
-                # keep 5-digit by default
                 def gen_zip(_row):
                     return f"{random.randint(10000, 99999)}"
                 gens[name] = gen_zip
                 continue
 
-            # Low-cardinality categorical -> weighted sampling
+            # Categorical
             unique_ratio = (len(set(col_vals)) / max(1, len(col_vals))) if col_vals else 0.0
             if col_vals and (len(set(col_vals)) <= 50 or unique_ratio <= 0.5):
                 gens[name] = self._sample_with_weights(col_vals)
                 continue
 
-            # Fallback: bootstrap from existing or short random word
+            # Fallback
             if col_vals:
                 pick = self._sample_with_weights(col_vals)
                 gens[name] = lambda _row, p=pick: p()
@@ -898,10 +880,8 @@ class MainWindow(wx.Frame):
             if not fields:
                 fields = list(self.headers)
 
-            # Build per-column generators conditioned on the uploaded data
             gens = self._build_generators(src_df, fields)
 
-            # Generate row-by-row so fields can optionally depend on each other
             out_rows = []
             for _ in range(int(n_rows)):
                 row_map = {}
