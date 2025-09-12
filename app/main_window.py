@@ -6,7 +6,8 @@ import random
 import threading
 import inspect
 from datetime import datetime, timedelta
-from collections import Counter
+from collections import Counter, defaultdict
+from difflib import SequenceMatcher
 
 import wx
 import wx.grid as gridlib
@@ -31,7 +32,6 @@ class HeaderBanner(wx.Panel):
         super().__init__(parent, size=(-1, height), style=wx.BORDER_NONE)
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
         self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
-
         self._bg = bg
         self._img = None
         try:
@@ -41,7 +41,6 @@ class HeaderBanner(wx.Panel):
                 self._img = wx.Image(p)
         except Exception:
             self._img = None
-
         self.Bind(wx.EVT_PAINT, self.on_paint)
         self.Bind(wx.EVT_SIZE, lambda e: self.Refresh())
 
@@ -49,7 +48,6 @@ class HeaderBanner(wx.Panel):
         dc = wx.AutoBufferedPaintDC(self)
         dc.SetBackground(wx.Brush(self._bg))
         dc.Clear()
-
         if not self._img:
             return
         w, h = self.GetClientSize()
@@ -212,6 +210,109 @@ class KPIBadge(wx.Panel):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# MDM Dialog (add sources + threshold + fields)
+# ──────────────────────────────────────────────────────────────────────────────
+class MDMDialog(wx.Dialog):
+    def __init__(self, parent):
+        super().__init__(parent, title="Master Data Management (MDM)", size=(560, 420))
+        panel = wx.Panel(self)
+        v = wx.BoxSizer(wx.VERTICAL)
+
+        self.chk_include_current = wx.CheckBox(panel, label="Include current dataset as a source")
+        self.chk_include_current.SetValue(True)
+        v.Add(self.chk_include_current, 0, wx.ALL, 8)
+
+        v.Add(wx.StaticText(panel, label="Sources to merge (local files or URIs):"), 0, wx.LEFT | wx.TOP, 8)
+        self.lst = wx.ListBox(panel, style=wx.LB_EXTENDED)
+        v.Add(self.lst, 1, wx.EXPAND | wx.ALL, 8)
+
+        btns = wx.BoxSizer(wx.HORIZONTAL)
+        btn_add = wx.Button(panel, label="Add Local…")
+        btn_uri = wx.Button(panel, label="Add URI/S3…")
+        btn_rm = wx.Button(panel, label="Remove Selected")
+        btns.Add(btn_add, 0, wx.RIGHT, 6)
+        btns.Add(btn_uri, 0, wx.RIGHT, 6)
+        btns.Add(btn_rm, 0)
+        v.Add(btns, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        grid = wx.FlexGridSizer(2, 2, 6, 6)
+        grid.AddGrowableCol(1, 1)
+
+        grid.Add(wx.StaticText(panel, label="Match threshold (percent):"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.spn_thresh = wx.SpinCtrl(panel, min=50, max=100, initial=85)
+        grid.Add(self.spn_thresh, 0, wx.EXPAND)
+
+        grid.Add(wx.StaticText(panel, label="Fields to match on:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        h = wx.BoxSizer(wx.HORIZONTAL)
+        self.chk_email = wx.CheckBox(panel, label="Email")
+        self.chk_phone = wx.CheckBox(panel, label="Phone")
+        self.chk_name = wx.CheckBox(panel, label="Name")
+        self.chk_addr = wx.CheckBox(panel, label="Address")
+        for c in (self.chk_email, self.chk_phone, self.chk_name, self.chk_addr):
+            c.SetValue(True)
+            h.Add(c, 0, wx.RIGHT, 8)
+        grid.Add(h, 0, wx.EXPAND)
+
+        v.Add(grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        line = wx.StaticLine(panel)
+        v.Add(line, 0, wx.EXPAND | wx.ALL, 6)
+
+        ok_cancel = wx.StdDialogButtonSizer()
+        ok = wx.Button(panel, wx.ID_OK)
+        cancel = wx.Button(panel, wx.ID_CANCEL)
+        ok_cancel.AddButton(ok)
+        ok_cancel.AddButton(cancel)
+        ok_cancel.Realize()
+        v.Add(ok_cancel, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
+
+        panel.SetSizer(v)
+
+        self.sources = []  # list of dicts: {"type": "file"/"uri", "value": str}
+
+        btn_add.Bind(wx.EVT_BUTTON, self._on_add_file)
+        btn_uri.Bind(wx.EVT_BUTTON, self._on_add_uri)
+        btn_rm.Bind(wx.EVT_BUTTON, self._on_rm)
+
+    def _on_add_file(self, _):
+        dlg = wx.FileDialog(self, "Select data file", wildcard="Data|*.csv;*.tsv;*.txt|All|*.*",
+                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE)
+        if dlg.ShowModal() != wx.ID_OK:
+            return
+        for p in dlg.GetPaths():
+            self.sources.append({"type": "file", "value": p})
+            self.lst.Append(f"[FILE] {p}")
+        dlg.Destroy()
+
+    def _on_add_uri(self, _):
+        with wx.TextEntryDialog(self, "Enter HTTP/HTTPS/S3 URI:", "Add URI/S3") as d:
+            if d.ShowModal() != wx.ID_OK:
+                return
+            uri = d.GetValue().strip()
+        if uri:
+            self.sources.append({"type": "uri", "value": uri})
+            self.lst.Append(f"[URI]  {uri}")
+
+    def _on_rm(self, _):
+        sel = list(self.lst.GetSelections())
+        sel.reverse()
+        for i in sel:
+            self.lst.Delete(i)
+            del self.sources[i]
+
+    def get_params(self):
+        return {
+            "include_current": self.chk_include_current.GetValue(),
+            "threshold": self.spn_thresh.GetValue() / 100.0,
+            "use_email": self.chk_email.GetValue(),
+            "use_phone": self.chk_phone.GetValue(),
+            "use_name": self.chk_name.GetValue(),
+            "use_addr": self.chk_addr.GetValue(),
+            "sources": list(self.sources)
+        }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Main Window
 # ──────────────────────────────────────────────────────────────────────────────
 class MainWindow(wx.Frame):
@@ -309,7 +410,6 @@ class MainWindow(wx.Frame):
 
         # Menu bar with separate "File" and "Settings" menus
         mb = wx.MenuBar()
-
         m_file = wx.Menu()
         m_file.Append(wx.ID_EXIT, "&Quit\tCtrl+Q")
         mb.Append(m_file, "&File")
@@ -320,7 +420,6 @@ class MainWindow(wx.Frame):
         m_settings.Append(OPEN_SETTINGS_ID, "&Preferences...\tCtrl+,")
         mb.Append(m_settings, "&Settings")
         self.Bind(wx.EVT_MENU, self.open_settings, id=OPEN_SETTINGS_ID)
-
         self.SetMenuBar(mb)
 
         # Toolbar
@@ -336,6 +435,8 @@ class MainWindow(wx.Frame):
         add_btn("Knowledge Files", self.on_load_knowledge)
         add_btn("Load File", self.on_load_file)
         add_btn("Load from URI/S3", self.on_load_s3)
+        # MDM button here
+        add_btn("MDM", self.on_mdm)
         add_btn("Synthetic Data", self.on_generate_synth)
         add_btn("Rule Assignment", self.on_rules)
         add_btn("Profile", lambda e: self.do_analysis_process("Profile"))
@@ -393,7 +494,6 @@ class MainWindow(wx.Frame):
     # KPI helpers
     # ──────────────────────────────────────────────────────────────────────
     def _reset_kpis_for_new_dataset(self, hdr, data):
-        """Called after loading/generating a dataset."""
         self.metrics.update({
             "rows": len(data),
             "cols": len(hdr),
@@ -407,31 +507,24 @@ class MainWindow(wx.Frame):
         self._render_kpis()
 
     def _render_kpis(self):
-        # Rows / Cols always available after load
         self.card_rows.SetValue(self.metrics["rows"] if self.metrics["rows"] is not None else "—")
         self.card_cols.SetValue(self.metrics["cols"] if self.metrics["cols"] is not None else "—")
-        # Profile-derived
         self.card_nulls.SetValue(f"{self.metrics['null_pct']:.1f}%" if self.metrics["null_pct"] is not None else "—")
         self.card_unique.SetValue(f"{self.metrics['uniqueness']:.1f}%" if self.metrics["uniqueness"] is not None else "—")
-        # Quality-derived
         self.card_quality.SetValue(f"{self.metrics['dq_score']:.1f}" if self.metrics["dq_score"] is not None else "—")
         self.card_validity.SetValue(f"{self.metrics['validity']:.1f}%" if self.metrics["validity"] is not None else "—")
         self.card_complete.SetValue(f"{self.metrics['completeness']:.1f}%" if self.metrics["completeness"] is not None else "—")
-        # Anomalies-derived
         self.card_anoms.SetValue(str(self.metrics["anomalies"]) if self.metrics["anomalies"] is not None else "—")
 
     @staticmethod
     def _as_df(rows, cols):
         df = pd.DataFrame(rows, columns=cols)
-        # treat "" as nulls
         return df.applymap(lambda x: None if (x is None or (isinstance(x, str) and x.strip() == "")) else x)
 
     def _compute_profile_metrics(self, df: pd.DataFrame):
         total_cells = df.shape[0] * max(1, df.shape[1])
         nulls = int(df.isna().sum().sum())
         null_pct = (nulls / total_cells) * 100.0 if total_cells else 0.0
-
-        # average per-column uniqueness on non-null values
         uniqs = []
         for c in df.columns:
             s = df[c].dropna()
@@ -449,45 +542,34 @@ class MainWindow(wx.Frame):
                 try:
                     compiled[k] = re.compile(str(v))
                 except Exception:
-                    compiled[k] = re.compile(".*")  # always true if bad pattern
+                    compiled[k] = re.compile(".*")
         return compiled
 
     def _compute_quality_metrics(self, df: pd.DataFrame):
-        # completeness (% of non-null cells)
         total_cells = df.shape[0] * max(1, df.shape[1])
         nulls = int(df.isna().sum().sum())
         completeness = (1.0 - (nulls / total_cells)) * 100.0 if total_cells else 0.0
-
-        # validity: cells with explicit rules that match
         rules = self._compile_rules()
         checked = 0
         valid = 0
         for col, rx in rules.items():
             if col in df.columns:
-                series = df[col].astype(str)
-                # NaNs count as invalid here; adjust if you want them ignored
-                for val in series:
+                for val in df[col].astype(str):
                     checked += 1
                     if rx.fullmatch(val) or rx.search(val):
                         valid += 1
-        validity = (valid / checked) * 100.0 if checked else None  # None if no rules
-
-        # if we don't yet have profile metrics, compute to include in DQ
+        validity = (valid / checked) * 100.0 if checked else None
         if self.metrics["uniqueness"] is None or self.metrics["null_pct"] is None:
             null_pct, uniq_pct = self._compute_profile_metrics(df)
             self.metrics["null_pct"] = null_pct
             self.metrics["uniqueness"] = uniq_pct
-
-        # DQ score = avg of available components: completeness, validity, uniqueness
         components = [self.metrics["uniqueness"], completeness]
         if validity is not None:
             components.append(validity)
         dq_score = sum(components) / len(components) if components else 0.0
-
         return completeness, validity, dq_score
 
     def _detect_anomalies(self, df: pd.DataFrame):
-        """Simple z-score based anomaly detection on numeric-like columns."""
         work = df.copy()
 
         def to_num(s):
@@ -562,12 +644,8 @@ class MainWindow(wx.Frame):
             return
         files = dlg.GetPaths()
         dlg.Destroy()
-
         self.knowledge_files = files
-        if files:
-            self.knowledge_lbl.SetLabel(", ".join(os.path.basename(p) for p in files))
-        else:
-            self.knowledge_lbl.SetLabel("(none)")
+        self.knowledge_lbl.SetLabel(", ".join(os.path.basename(p) for p in files) if files else "(none)")
 
     def _load_text_file(self, path):
         return open(path, "r", encoding="utf-8", errors="ignore").read()
@@ -585,7 +663,6 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Could not read file: {e}", "Error", wx.OK | wx.ICON_ERROR)
             return
-
         self.headers = hdr
         self.raw_data = data
         self._display(hdr, data)
@@ -596,14 +673,12 @@ class MainWindow(wx.Frame):
             if dlg.ShowModal() != wx.ID_OK:
                 return
             uri = dlg.GetValue().strip()
-
         try:
             text = download_text_from_uri(uri)
             hdr, data = detect_and_split_data(text)
         except Exception as e:
             wx.MessageBox(f"Download failed: {e}", "Error", wx.OK | wx.ICON_ERROR)
             return
-
         self.headers = hdr
         self.raw_data = data
         self._display(hdr, data)
@@ -613,16 +688,13 @@ class MainWindow(wx.Frame):
         if not self.headers:
             wx.MessageBox("Load data first so fields are available.", "Quality Rules", wx.OK | wx.ICON_WARNING)
             return
-
         if not isinstance(self.quality_rules, dict):
             try:
                 self.quality_rules = dict(self.quality_rules)
             except Exception:
                 self.quality_rules = {}
-
         fields = list(self.headers)
         current_rules = self.quality_rules
-
         dlg = None
         try:
             dlg = QualityRuleDialog(self, fields, current_rules)
@@ -640,57 +712,26 @@ class MainWindow(wx.Frame):
             wx.MessageBox(f"Could not open Quality Rule Assignment:\n{e}", "Quality Rules", wx.OK | wx.ICON_ERROR)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Synthetic data (still realistic, from prior step)
+    # Synthetic data (generator helpers)
     # ──────────────────────────────────────────────────────────────────────
-    def on_generate_synth(self, _evt=None):
-        if not self.headers:
-            wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
-            return
-
-        src_df = pd.DataFrame(self.raw_data, columns=self.headers)
-
-        dlg = SyntheticDataDialog(self, fields=list(self.headers))
-        if hasattr(dlg, "ShowModal"):
-            if dlg.ShowModal() != wx.ID_OK:
-                dlg.Destroy()
-                return
-
+    @staticmethod
+    def _clean_float(x):
+        if x is None:
+            return None
+        if isinstance(x, (int, float)):
+            return float(x)
+        s = str(x).strip()
+        if not s:
+            return None
+        s = s.replace(",", "")
+        m = re.search(r"([-+]?\d*\.?\d+)", s)
+        if not m:
+            return None
         try:
-            if hasattr(dlg, "get_values"):
-                n_rows, fields = dlg.get_values()
-            else:
-                n_rows = getattr(dlg, "n_rows", 0)
-                fields = getattr(dlg, "fields", list(self.headers))
-            if not fields:
-                fields = list(self.headers)
-            # Generators re-used from previous response (omitted here for brevity)
-            gens = self._build_generators(src_df, fields)
-            out_rows = []
-            for _ in range(int(n_rows)):
-                row_map = {}
-                for f in fields:
-                    g = gens.get(f)
-                    val = g(row_map) if callable(g) else None
-                    row_map[f] = "" if val is None else val
-                out_rows.append([row_map[f] for f in fields])
-            df = pd.DataFrame(out_rows, columns=fields)
-        except Exception as e:
-            wx.MessageBox(f"Synthetic data error: {e}", "Error", wx.OK | wx.ICON_ERROR)
-            if hasattr(dlg, "Destroy"):
-                dlg.Destroy()
-            return
+            return float(m.group(1))
+        except Exception:
+            return None
 
-        if hasattr(dlg, "Destroy"):
-            dlg.Destroy()
-
-        hdr = list(df.columns)
-        data = df.values.tolist()
-        self.headers = hdr
-        self.raw_data = data
-        self._display(hdr, data)
-        self._reset_kpis_for_new_dataset(hdr, data)
-
-    # (Generators used above; same as previous message)
     @staticmethod
     def _most_common_format(strings, default_mask="DDD-DDD-DDDD"):
         def mask_one(s): return re.sub(r"\d", "D", s)
@@ -715,7 +756,6 @@ class MainWindow(wx.Frame):
 
     def _build_generators(self, src_df: pd.DataFrame, fields):
         gens = {}
-        # (shortened name/address domains for brevity)
         name_first = [ "James","Mary","Robert","Patricia","John","Jennifer","Michael","Linda","William","Elizabeth" ]
         name_last  = [ "Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez" ]
         first_col = next((c for c in src_df.columns if "first" in c.lower() and "name" in c.lower()), None)
@@ -766,7 +806,6 @@ class MainWindow(wx.Frame):
                     return (dmin+timedelta(days=random.randint(0, max(1,delta)))).strftime(out_fmt)
                 gens[col]=gen; continue
 
-            # simple categorical / fallback
             uniq = set(col_vals)
             if uniq and len(uniq) <= 50:
                 gens[col] = self._sample_with_weights(col_vals); continue
@@ -780,6 +819,339 @@ class MainWindow(wx.Frame):
                 gens[col]=gen
         return gens
 
+    def on_generate_synth(self, _evt=None):
+        if not self.headers:
+            wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
+            return
+        src_df = pd.DataFrame(self.raw_data, columns=self.headers)
+        dlg = SyntheticDataDialog(self, fields=list(self.headers))
+        if hasattr(dlg, "ShowModal"):
+            if dlg.ShowModal() != wx.ID_OK:
+                dlg.Destroy()
+                return
+        try:
+            if hasattr(dlg, "get_values"):
+                n_rows, fields = dlg.get_values()
+            else:
+                n_rows = getattr(dlg, "n_rows", 0)
+                fields = getattr(dlg, "fields", list(self.headers))
+            if not fields:
+                fields = list(self.headers)
+            gens = self._build_generators(src_df, fields)
+            out_rows = []
+            for _ in range(int(n_rows)):
+                row_map = {}
+                for f in fields:
+                    g = gens.get(f)
+                    val = g(row_map) if callable(g) else None
+                    row_map[f] = "" if val is None else val
+                out_rows.append([row_map[f] for f in fields])
+            df = pd.DataFrame(out_rows, columns=fields)
+        except Exception as e:
+            wx.MessageBox(f"Synthetic data error: {e}", "Error", wx.OK | wx.ICON_ERROR)
+            if hasattr(dlg, "Destroy"):
+                dlg.Destroy()
+            return
+        if hasattr(dlg, "Destroy"):
+            dlg.Destroy()
+        hdr = list(df.columns)
+        data = df.values.tolist()
+        self.headers = hdr
+        self.raw_data = data
+        self._display(hdr, data)
+        self._reset_kpis_for_new_dataset(hdr, data)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # MDM — match & merge to golden records
+    # ──────────────────────────────────────────────────────────────────────
+    def on_mdm(self, _evt=None):
+        if not self.headers:
+            wx.MessageBox("Load a base dataset first (or generate synthetic data).", "MDM", wx.OK | wx.ICON_WARNING)
+            return
+
+        dlg = MDMDialog(self)
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return
+        params = dlg.get_params()
+        dlg.Destroy()
+
+        # Collect dataframes
+        dataframes = []
+        labels = []
+
+        if params["include_current"]:
+            dataframes.append(pd.DataFrame(self.raw_data, columns=self.headers))
+            labels.append("current")
+
+        # Add extra sources
+        try:
+            for src in params["sources"]:
+                if src["type"] == "file":
+                    text = self._load_text_file(src["value"])
+                    hdr, data = detect_and_split_data(text)
+                    dataframes.append(pd.DataFrame(data, columns=hdr))
+                    labels.append(os.path.basename(src["value"]))
+                else:
+                    text = download_text_from_uri(src["value"])
+                    hdr, data = detect_and_split_data(text)
+                    dataframes.append(pd.DataFrame(data, columns=hdr))
+                    labels.append(src["value"])
+        except Exception as e:
+            wx.MessageBox(f"Failed to load a source:\n{e}", "MDM", wx.OK | wx.ICON_ERROR)
+            return
+
+        if len(dataframes) < 2:
+            wx.MessageBox("Please add at least one additional dataset.", "MDM", wx.OK | wx.ICON_WARNING)
+            return
+
+        try:
+            golden = self._run_mdm(
+                dataframes,
+                use_email=params["use_email"],
+                use_phone=params["use_phone"],
+                use_name=params["use_name"],
+                use_addr=params["use_addr"],
+                threshold=params["threshold"]
+            )
+        except Exception as e:
+            import traceback
+            wx.MessageBox(f"MDM failed:\n{e}\n\n{traceback.format_exc()}", "MDM", wx.OK | wx.ICON_ERROR)
+            return
+
+        hdr = list(golden.columns)
+        data = golden.astype(str).values.tolist()
+        self.headers = hdr
+        self.raw_data = data
+        self._display(hdr, data)
+        self._reset_kpis_for_new_dataset(hdr, data)
+        self.current_process = "MDM"
+
+    # Field name helpers
+    @staticmethod
+    def _find_col(cols, *candidates):
+        cl = {c.lower(): c for c in cols}
+        for cand in candidates:
+            for c in cl:
+                if cand in c:
+                    return cl[c]
+        return None
+
+    @staticmethod
+    def _norm_email(x):
+        return str(x).strip().lower() if x is not None else None
+
+    @staticmethod
+    def _norm_phone(x):
+        if x is None:
+            return None
+        digits = re.sub(r"\D+", "", str(x))
+        if len(digits) >= 10:
+            return digits[-10:]
+        return digits or None
+
+    @staticmethod
+    def _norm_name(x):
+        if x is None:
+            return None
+        return re.sub(r"[^a-z]", "", str(x).lower())
+
+    @staticmethod
+    def _norm_text(x):
+        if x is None:
+            return None
+        return re.sub(r"\s+", " ", str(x).strip().lower())
+
+    @staticmethod
+    def _sim(a, b):
+        if not a or not b:
+            return 0.0
+        return SequenceMatcher(None, a, b).ratio()
+
+    def _block_key(self, row, cols):
+        """Simple blocking: prefer email/phone; else name initials + zip/city."""
+        e = row.get(cols.get("email"))
+        if e:
+            return f"e:{self._norm_email(e)}"
+        p = row.get(cols.get("phone"))
+        if p:
+            return f"p:{self._norm_phone(p)}"
+        fi = (row.get(cols.get("first")) or "")[:1].lower()
+        li = (row.get(cols.get("last")) or "")[:1].lower()
+        zipc = str(row.get(cols.get("zip")) or "")[:3]
+        city = str(row.get(cols.get("city")) or "")[:3].lower()
+        key = f"n:{fi}{li}|{zipc or city}"
+        return key
+
+    def _score_pair(self, a, b, cols, use_email, use_phone, use_name, use_addr):
+        parts = []
+        weights = []
+
+        if use_email and cols.get("email"):
+            ea = self._norm_email(a.get(cols["email"]))
+            eb = self._norm_email(b.get(cols["email"]))
+            if ea and eb:
+                parts.append(1.0 if ea == eb else self._sim(ea, eb))
+                weights.append(0.5)
+
+        if use_phone and cols.get("phone"):
+            pa = self._norm_phone(a.get(cols["phone"]))
+            pb = self._norm_phone(b.get(cols["phone"]))
+            if pa and pb:
+                parts.append(1.0 if pa == pb else self._sim(pa, pb))
+                weights.append(0.5)
+
+        if use_name and (cols.get("first") or cols.get("last")):
+            fa = self._norm_name(a.get(cols.get("first")))
+            fb = self._norm_name(b.get(cols.get("first")))
+            la = self._norm_name(a.get(cols.get("last")))
+            lb = self._norm_name(b.get(cols.get("last")))
+            if fa and fb:
+                parts.append(self._sim(fa, fb))
+                weights.append(0.25)
+            if la and lb:
+                parts.append(self._sim(la, lb))
+                weights.append(0.3)
+
+        if use_addr and (cols.get("addr") or cols.get("city")):
+            aa = self._norm_text(a.get(cols.get("addr")))
+            ab = self._norm_text(b.get(cols.get("addr")))
+            ca = self._norm_text(a.get(cols.get("city")))
+            cb = self._norm_text(b.get(cols.get("city")))
+            sa = self._norm_text(a.get(cols.get("state")))
+            sb = self._norm_text(b.get(cols.get("state")))
+            za = self._norm_text(a.get(cols.get("zip")))
+            zb = self._norm_text(b.get(cols.get("zip")))
+            chunk = []
+            if aa and ab: chunk.append(self._sim(aa, ab))
+            if ca and cb: chunk.append(self._sim(ca, cb))
+            if sa and sb: chunk.append(self._sim(sa, sb))
+            if za and zb: chunk.append(1.0 if za == zb else self._sim(za, zb))
+            if chunk:
+                parts.append(sum(chunk) / len(chunk))
+                weights.append(0.25)
+
+        if not parts:
+            return 0.0
+        wsum = sum(weights) or 1.0
+        score = sum(p * w for p, w in zip(parts, weights)) / wsum
+        return score
+
+    def _run_mdm(self, dataframes, use_email=True, use_phone=True, use_name=True, use_addr=True, threshold=0.85):
+        """Return golden-record DataFrame from a list of DataFrames."""
+        # Normalize column names & pick likely identity columns
+        datasets = []
+        union_cols = set()
+        for df in dataframes:
+            cols = list(df.columns)
+            lc = [c.lower() for c in cols]
+            colmap = {
+                "email": self._find_col(cols, "email"),
+                "phone": self._find_col(cols, "phone", "mobile", "cell", "telephone"),
+                "first": self._find_col(cols, "first name", "firstname", "given"),
+                "last":  self._find_col(cols, "last name", "lastname", "surname", "family"),
+                "addr":  self._find_col(cols, "address", "street"),
+                "city":  self._find_col(cols, "city",),
+                "state": self._find_col(cols, "state", "province", "region"),
+                "zip":   self._find_col(cols, "zip", "postal"),
+            }
+            # keep all original columns for merging
+            union_cols.update(cols)
+            datasets.append((df.reset_index(drop=True), colmap))
+
+        # Prepare records with blocking
+        records = []
+        ds_offsets = []
+        offset = 0
+        for df, colmap in datasets:
+            ds_offsets.append(offset)
+            for i in range(len(df)):
+                row = df.iloc[i].to_dict()
+                records.append((offset + i, row, colmap))
+            offset += len(df)
+
+        # Build blocks
+        blocks = defaultdict(list)
+        for rec_id, row, cmap in records:
+            key = self._block_key(row, cmap)
+            blocks[(key, tuple(sorted(cmap.items())) )].append((rec_id, row, cmap))
+
+        # DSU for clustering
+        parent = {}
+        def find(x):
+            parent.setdefault(x, x)
+            if parent[x] != x:
+                parent[x] = find(parent[x])
+            return parent[x]
+        def union(a, b):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        # Pairwise within blocks
+        for _, members in blocks.items():
+            n = len(members)
+            if n <= 1:
+                continue
+            for i in range(n):
+                for j in range(i + 1, n):
+                    (id_a, row_a, cmap_a) = members[i]
+                    (id_b, row_b, cmap_b) = members[j]
+                    # use the intersection of available columns in either map
+                    cols = {}
+                    for k in ("email","phone","first","last","addr","city","state","zip"):
+                        cols[k] = cmap_a.get(k) or cmap_b.get(k)
+                    score = self._score_pair(row_a, row_b, cols, use_email, use_phone, use_name, use_addr)
+                    if score >= threshold:
+                        union(id_a, id_b)
+
+        # Collect clusters
+        clusters = defaultdict(list)
+        for rec_id, row, cmap in records:
+            clusters[find(rec_id)].append((row, cmap))
+
+        # Merge strategy per column
+        def best_value(values):
+            """Majority vote; numeric -> median; date -> most recent; tie -> longest string."""
+            vals = [v for v in values if (v is not None and str(v).strip() != "")]
+            if not vals:
+                return ""
+            # Date-like?
+            parsed = []
+            for v in vals:
+                s = str(v)
+                for fmt in ("%Y-%m-%d","%m/%d/%Y","%d/%m/%Y","%Y/%m/%d"):
+                    try:
+                        parsed.append(datetime.strptime(s, fmt))
+                        break
+                    except Exception:
+                        continue
+            if parsed and len(parsed) >= len(vals) * 0.6:
+                return max(parsed).strftime("%Y-%m-%d")
+            # Numeric?
+            nums = pd.to_numeric(pd.Series(vals).astype(str).str.replace(",", ""), errors="coerce").dropna()
+            if len(nums) >= len(vals) * 0.6:
+                return str(int(nums.median())) if float(nums.median()).is_integer() else f"{float(nums.median()):.2f}"
+            # Majority / longest
+            counts = Counter([str(v).strip() for v in vals])
+            top, freq = counts.most_common(1)[0]
+            ties = [k for k, c in counts.items() if c == freq]
+            if len(ties) == 1:
+                return ties[0]
+            return max(ties, key=len)
+
+        # Create golden rows
+        all_cols = list(sorted(union_cols, key=lambda x: x.lower()))
+        golden_rows = []
+        for cluster_rows in clusters.values():
+            merged = {}
+            for col in all_cols:
+                merged[col] = best_value([r.get(col) for r, _ in cluster_rows])
+            golden_rows.append(merged)
+
+        golden_df = pd.DataFrame(golden_rows, columns=all_cols)
+        return golden_df
+
     # ──────────────────────────────────────────────────────────────────────
     # Analyses
     # ──────────────────────────────────────────────────────────────────────
@@ -791,30 +1163,25 @@ class MainWindow(wx.Frame):
         df = self._as_df(self.raw_data, self.headers)
 
         if proc_name == "Profile":
-            # Run the existing profile view, but compute KPIs here
             try:
                 hdr, data = profile_analysis(df)
             except Exception:
-                # If profile_analysis returns something else, show a summary table
                 desc = pd.DataFrame({
                     "Field": df.columns,
                     "Null %": [f"{df[c].isna().mean()*100:.1f}%" for c in df.columns],
                     "Unique": [df[c].nunique() for c in df.columns],
                 })
                 hdr, data = list(desc.columns), desc.values.tolist()
-
             null_pct, uniq_pct = self._compute_profile_metrics(df)
             self.metrics["null_pct"] = null_pct
             self.metrics["uniqueness"] = uniq_pct
             self._render_kpis()
 
         elif proc_name == "Quality":
-            # Show whatever quality_analysis produces; compute KPIs here
             try:
                 hdr, data = quality_analysis(df, self.quality_rules)
             except Exception:
                 hdr, data = list(df.columns), df.values.tolist()
-
             completeness, validity, dq = self._compute_quality_metrics(df)
             self.metrics["completeness"] = completeness
             self.metrics["validity"] = validity
@@ -822,7 +1189,6 @@ class MainWindow(wx.Frame):
             self._render_kpis()
 
         elif proc_name == "Detect Anomalies":
-            # Compute anomalies and decorate the dataframe
             try:
                 work, count = self._detect_anomalies(df)
                 hdr, data = list(work.columns), work.values.tolist()
@@ -833,7 +1199,6 @@ class MainWindow(wx.Frame):
             self._render_kpis()
 
         elif proc_name == "Catalog":
-            # Prefer your existing catalog_analysis; otherwise, build a heuristic catalog
             try:
                 hdr, data = catalog_analysis(df)
             except Exception:
@@ -859,7 +1224,7 @@ class MainWindow(wx.Frame):
         self._display(hdr, data)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Export / Upload
+    # Export / Upload / Tasks
     # ──────────────────────────────────────────────────────────────────────
     def on_export_csv(self, _evt=None):
         dlg = wx.FileDialog(self, "Save CSV", wildcard="CSV|*.csv",
@@ -900,9 +1265,6 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Upload failed: {e}", "Upload", wx.OK | wx.ICON_ERROR)
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Tasks runner (unchanged)
-    # ──────────────────────────────────────────────────────────────────────
     def on_run_tasks(self, _evt=None):
         dlg = wx.FileDialog(
             self,
@@ -915,13 +1277,11 @@ class MainWindow(wx.Frame):
             return
         path = dlg.GetPath()
         dlg.Destroy()
-
         try:
             tasks = self._load_tasks_from_file(path)
         except Exception as e:
             wx.MessageBox(f"Could not read tasks file:\n{e}", "Tasks", wx.OK | wx.ICON_ERROR)
             return
-
         threading.Thread(target=self._run_tasks_worker, args=(tasks,), daemon=True).start()
 
     def _load_tasks_from_file(self, path: str):
@@ -1052,7 +1412,6 @@ class MainWindow(wx.Frame):
                 if r % 2 == 0:
                     self.grid.SetCellBackgroundColour(r, c, wx.Colour(45, 45, 45))
         self.adjust_grid()
-        # KPIs already updated by the calling action
         self._render_kpis()
 
     def adjust_grid(self):
