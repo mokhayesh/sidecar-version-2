@@ -17,27 +17,6 @@ from app.analysis import (
     compliance_analysis,
 )
 
-# NOTE:
-# This file contains custom widgets (rounded buttons, kpi cards, etc.)
-# and the main window wiring for the Sidecar app. The new "Tasks" button
-# and the task runner logic are included near the bottom of the class.
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Fonts helper
-# ──────────────────────────────────────────────────────────────────────────────
-def mk_font(size=10, bold=False, face="", colour=None):
-    info = wx.FontInfo(size)
-    if bold:
-        info = info.Bold()
-    if face:
-        info = info.FaceName(face)
-    f = wx.Font(info)
-    if colour:
-        f.SetWeight(wx.FONTWEIGHT_BOLD if bold else wx.FONTWEIGHT_NORMAL)
-    return f
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Header banner (double-buffered, no flicker)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -48,12 +27,8 @@ class HeaderBanner(wx.Panel):
         self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
 
         self._bg = bg
-        self._min_w = 320
-        self.SetBackgroundColour(bg)
-
         self._img = None
         try:
-            # Try to load banner image
             base = os.path.dirname(os.path.abspath(__file__))
             p = os.path.join(base, "assets", "sidecar-architecture.png")
             if os.path.exists(p):
@@ -83,16 +58,15 @@ class HeaderBanner(wx.Panel):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Rounded/Shadow widgets
+# Rounded button widget
 # ──────────────────────────────────────────────────────────────────────────────
 class RoundedShadowButton(wx.Control):
-    def __init__(self, parent, label, handler, colour=wx.Colour(66, 133, 244), radius=10, glow=8):
+    def __init__(self, parent, label, handler, colour=wx.Colour(66, 133, 244), radius=12):
         super().__init__(parent, style=wx.BORDER_NONE)
         self._label = label
         self._handler = handler
         self._colour = colour
         self._radius = radius
-        self._glow = glow
         self._hover = False
         self._down = False
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
@@ -149,23 +123,26 @@ class RoundedShadowButton(wx.Control):
         if self._down:
             base = wx.Colour(max(0, base.Red() - 20), max(0, base.Green() - 20), max(0, base.Blue() - 20))
 
-        # Glow/shadow
-        dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, 70)))
+        # shadow
+        dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, 60)))
         dc.SetPen(wx.Pen(wx.Colour(0, 0, 0, 0)))
         dc.DrawRoundedRectangle(2, 3, w - 4, h - 3, self._radius + 1)
 
-        # Button
+        # body
         dc.SetBrush(wx.Brush(base))
         dc.SetPen(wx.Pen(base))
         dc.DrawRoundedRectangle(0, 0, w - 2, h - 2, self._radius)
 
-        # Label
+        # label
         dc.SetTextForeground(self._text_colour)
         dc.SetFont(self._font)
         tw, th = dc.GetTextExtent(self._label)
         dc.DrawText(self._label, (w - tw) // 2, (h - th) // 2)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# KPI badge
+# ──────────────────────────────────────────────────────────────────────────────
 class KPIBadge(wx.Panel):
     def __init__(self, parent, title, init_value="—", colour=wx.Colour(32, 35, 41)):
         super().__init__(parent, size=(260, 92))
@@ -175,7 +152,6 @@ class KPIBadge(wx.Panel):
         self._colour = colour
         self._accent = wx.Colour(90, 180, 255)
         self._accent2 = wx.Colour(80, 210, 140)
-        self._accent_red = wx.Colour(200, 70, 70)
         self._font_title = wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_MEDIUM)
         self._font_value = wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
         self.Bind(wx.EVT_PAINT, self.on_paint)
@@ -223,7 +199,7 @@ class MainWindow(wx.Frame):
     def __init__(self):
         super().__init__(None, title="Sidecar Application: Data Governance", size=(1200, 820))
 
-        # Best-effort app icon
+        # icon (best-effort)
         for p in (
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "sidecar-01.ico"),
             os.path.join(os.getcwd(), "assets", "sidecar-01.ico"),
@@ -267,7 +243,7 @@ class MainWindow(wx.Frame):
         title_panel.SetBackgroundColour(header_bg)
         title = wx.StaticText(title_panel, label="Data Buddy — Sidecar Application")
         title.SetForegroundColour(wx.Colour(230, 230, 230))
-        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
         tp_sizer = wx.BoxSizer(wx.VERTICAL)
         tp_sizer.AddStretchSpacer()
         tp_sizer.Add(title, 0, wx.ALL, 4)
@@ -295,24 +271,29 @@ class MainWindow(wx.Frame):
         kpi_panel.SetSizer(kpi_row)
         main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
-        # Menu
+        # Menu bar with separate "File" and "Settings" menus (fixes Settings not opening)
         mb = wx.MenuBar()
+
         m_file = wx.Menu()
-        m_file.Append(1001, "&Settings...\tCtrl+,")
-        m_file.AppendSeparator()
-        m_file.Append(1002, "&Quit\tCtrl+Q")
+        m_file.Append(wx.ID_EXIT, "&Quit\tCtrl+Q")
         mb.Append(m_file, "&File")
-        self.Bind(wx.EVT_MENU, lambda e: SettingsWindow(self).ShowModal(), id=1001)
-        self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=1002)
+        self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=wx.ID_EXIT)
+
+        m_settings = wx.Menu()
+        OPEN_SETTINGS_ID = wx.NewIdRef()
+        m_settings.Append(OPEN_SETTINGS_ID, "&Preferences...\tCtrl+,")
+        mb.Append(m_settings, "&Settings")
+        self.Bind(wx.EVT_MENU, self.open_settings, id=OPEN_SETTINGS_ID)
+
         self.SetMenuBar(mb)
 
-        # Toolbar (Little Buddy removed from here)
+        # Toolbar
         toolbar_panel = wx.Panel(self)
         toolbar_panel.SetBackgroundColour(PANEL)
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
 
         def add_btn(label, handler):
-            b = RoundedShadowButton(toolbar_panel, label, handler, colour=BLUE, radius=12, glow=6)
+            b = RoundedShadowButton(toolbar_panel, label, handler, colour=BLUE, radius=12)
             toolbar.Add(b, 0, wx.ALL, 6)
             return b
 
@@ -326,11 +307,13 @@ class MainWindow(wx.Frame):
         add_btn("Detect Anomalies", lambda e: self.do_analysis_process("Detect Anomalies"))
         add_btn("Catalog", lambda e: self.do_analysis_process("Catalog"))
         add_btn("Compliance", lambda e: self.do_analysis_process("Compliance"))
-        # NEW: Tasks button
+        # NEW: Tasks button (sits between Compliance and Export CSV)
         add_btn("Tasks", self.on_run_tasks)
         add_btn("Export CSV", self.on_export_csv)
         add_btn("Export TXT", self.on_export_txt)
         add_btn("Upload to S3", self.on_upload_s3)
+        # Little Buddy button restored
+        add_btn("Little Buddy", self.on_little_buddy)
 
         toolbar_panel.SetSizer(toolbar)
         main.Add(toolbar_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
@@ -341,9 +324,7 @@ class MainWindow(wx.Frame):
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
         lab.SetForegroundColour(TXT)
-        lab.SetFont(
-            wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_MEDIUM)
-        )
+        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_MEDIUM))
         self.knowledge_lbl = wx.StaticText(info_panel, label="(none)")
         self.knowledge_lbl.SetForegroundColour(wx.Colour(200, 200, 200))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
@@ -373,6 +354,25 @@ class MainWindow(wx.Frame):
         main.Add(grid_panel, 1, wx.EXPAND | wx.ALL, 4)
 
         self.SetSizer(main)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Menu handlers
+    # ──────────────────────────────────────────────────────────────────────
+    def open_settings(self, _evt):
+        """Open the Settings dialog (wired to the 'Settings' top menu)."""
+        try:
+            SettingsWindow(self).ShowModal()
+        except Exception as e:
+            wx.MessageBox(f"Could not open Settings: {e}", "Settings", wx.OK | wx.ICON_ERROR)
+
+    def on_little_buddy(self, _evt):
+        """Open the Little Buddy chat/dialog."""
+        try:
+            dlg = DataBuddyDialog(self)
+            dlg.ShowModal()
+            dlg.Destroy()
+        except Exception as e:
+            wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Buddy", wx.OK | wx.ICON_ERROR)
 
     # ──────────────────────────────────────────────────────────────────────
     # File / S3 / Knowledge / Rules
@@ -410,7 +410,6 @@ class MainWindow(wx.Frame):
         self._display(hdr, data)
 
     def on_load_s3(self, _):
-        # Simple URI dialog; user can paste S3 presigned URL or HTTP(S)
         with wx.TextEntryDialog(self, "Enter URI (S3 presigned or HTTP/HTTPS):", "Load from URI/S3") as dlg:
             if dlg.ShowModal() != wx.ID_OK:
                 return
@@ -452,12 +451,11 @@ class MainWindow(wx.Frame):
         elif proc_name == "Compliance":
             func = compliance_analysis
         elif proc_name == "Detect Anomalies":
-            # Reuse quality_analysis to flag anomalies if available; otherwise mock
+            # If you have a dedicated anomalies fn, wire it here.
             def func(d):
                 hdr = list(d.columns)
                 if "__anomaly__" in hdr:
                     return hdr, d.values.tolist()
-                # simple: add a placeholder column
                 d2 = d.copy()
                 d2["__anomaly__"] = ""
                 return list(d2.columns), d2.values.tolist()
@@ -519,14 +517,13 @@ class MainWindow(wx.Frame):
             wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
             return
 
-        # helper to generate synthetic frame (very simple / placeholder)
         def _synth_dataframe(n, fields):
             import random
             import string
             rows = []
             for _ in range(int(n)):
                 row = []
-                for f in fields:
+                for _f in fields:
                     val = "".join(random.choice(string.ascii_letters + string.digits) for _ in range(8))
                     row.append(val)
                 rows.append(row)
@@ -555,7 +552,7 @@ class MainWindow(wx.Frame):
         self._display(hdr, data)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Tasks runner: open a file (JSON or TXT) and execute actions in order
+    # Tasks runner
     # ──────────────────────────────────────────────────────────────────────
     def on_run_tasks(self, _evt):
         dlg = wx.FileDialog(
@@ -583,7 +580,7 @@ class MainWindow(wx.Frame):
         if not text:
             return []
 
-        # Try JSON structure first
+        # JSON first
         try:
             obj = json.loads(text)
             if isinstance(obj, dict):
@@ -599,9 +596,9 @@ class MainWindow(wx.Frame):
                 out.append(task)
             return out
         except Exception:
-            pass  # fall back to line-based
+            pass  # fall back to text
 
-        # Plain text lines: ACTION [arg]
+        # Plain-text lines: ACTION [arg]
         tasks = []
         for line in text.splitlines():
             line = line.strip()
