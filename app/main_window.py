@@ -377,10 +377,8 @@ class MainWindow(wx.Frame):
         """Open Settings — handle both dialog-like and frame-like implementations."""
         try:
             dlg = SettingsWindow(self)
-            # Use modal if available, else non-modal Show()
             if hasattr(dlg, "ShowModal"):
                 dlg.ShowModal()
-                # If it supports Destroy after modal, do so
                 if hasattr(dlg, "Destroy"):
                     dlg.Destroy()
             else:
@@ -453,34 +451,31 @@ class MainWindow(wx.Frame):
         self._display(hdr, data)
 
     def on_rules(self, _evt=None):
-        """Open Quality Rule Assignment dialog, tolerant of differing ctor signatures."""
+        """Open Quality Rule Assignment with (fields, current_rules) signature."""
+        if not self.headers:
+            wx.MessageBox("Load data first so fields are available.", "Quality Rules", wx.OK | wx.ICON_WARNING)
+            return
+
+        fields = list(self.headers)
+        current_rules = self.quality_rules or []
+
         dlg = None
         try:
-            # Try (parent, rules=...) if supported
-            sig = inspect.signature(QualityRuleDialog)
-            params = list(sig.parameters.keys())
-            if "rules" in params:
-                dlg = QualityRuleDialog(self, rules=self.quality_rules)
-            else:
-                # Try positional (parent, rules)
-                if len(params) >= 2:
-                    try:
-                        dlg = QualityRuleDialog(self, self.quality_rules)
-                    except TypeError:
-                        dlg = QualityRuleDialog(self)
-                else:
-                    dlg = QualityRuleDialog(self)
+            # Your dialog expects: (parent, fields, current_rules)
+            dlg = QualityRuleDialog(self, fields, current_rules)
 
             if hasattr(dlg, "ShowModal"):
                 res = dlg.ShowModal()
-                # Try reading updated rules if possible
-                if res == wx.ID_OK and hasattr(dlg, "get_rules"):
-                    self.quality_rules = dlg.get_rules()
-                elif res == wx.ID_OK and hasattr(dlg, "rules"):
-                    self.quality_rules = dlg.rules
+                if res == wx.ID_OK:
+                    # Prefer explicit getter; fall back to attribute
+                    if hasattr(dlg, "get_rules"):
+                        self.quality_rules = dlg.get_rules()
+                    elif hasattr(dlg, "rules"):
+                        self.quality_rules = dlg.rules
                 if hasattr(dlg, "Destroy"):
                     dlg.Destroy()
             else:
+                # Non-modal variant
                 dlg.Show()
         except Exception as e:
             if dlg and hasattr(dlg, "Destroy"):
@@ -588,10 +583,8 @@ class MainWindow(wx.Frame):
             if dlg.ShowModal() != wx.ID_OK:
                 dlg.Destroy()
                 return
-        # If not modal, fall through — assume dialog populated values immediately
 
         try:
-            # Prefer method, else attribute
             if hasattr(dlg, "get_values"):
                 n, fields = dlg.get_values()
             else:
