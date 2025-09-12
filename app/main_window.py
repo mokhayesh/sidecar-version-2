@@ -2,6 +2,7 @@
 import os
 import json
 import threading
+import inspect
 import wx
 import wx.grid as gridlib
 import pandas as pd
@@ -58,7 +59,7 @@ class HeaderBanner(wx.Panel):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Rounded button widget
+# Rounded button widget (now with safer handler invocation & useful error box)
 # ──────────────────────────────────────────────────────────────────────────────
 class RoundedShadowButton(wx.Control):
     def __init__(self, parent, label, handler, colour=wx.Colour(66, 133, 244), radius=12):
@@ -89,6 +90,24 @@ class RoundedShadowButton(wx.Control):
         self.CaptureMouse()
         self.Refresh()
 
+    def _invoke_handler(self, evt):
+        """Call handler whether it accepts 0 or 1 positional arg; show real errors."""
+        try:
+            sig = inspect.signature(self._handler)
+            # Allow handlers that take no args OR one arg (event)
+            if len(sig.parameters) == 0:
+                self._handler()
+            else:
+                self._handler(evt)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            wx.MessageBox(
+                f"Button '{self._label}' failed:\n\n{e}\n\n{tb}",
+                "Button Error",
+                wx.OK | wx.ICON_ERROR
+            )
+
     def on_up(self, evt):
         if self.HasCapture():
             self.ReleaseMouse()
@@ -96,10 +115,7 @@ class RoundedShadowButton(wx.Control):
         self._down = False
         self.Refresh()
         if was_down and self.GetClientRect().Contains(evt.GetPosition()):
-            try:
-                self._handler(evt)
-            except Exception:
-                wx.LogError("Button handler failed.")
+            self._invoke_handler(evt)
 
     def DoGetBestSize(self):
         dc = wx.ClientDC(self)
@@ -243,7 +259,6 @@ class MainWindow(wx.Frame):
         title_panel.SetBackgroundColour(header_bg)
         title = wx.StaticText(title_panel, label="Data Buddy — Sidecar Application")
         title.SetForegroundColour(wx.Colour(230, 230, 230))
-        # FIX: use wx.FONTSTYLE_NORMAL / wx.FONTWEIGHT_BOLD
         title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         tp_sizer = wx.BoxSizer(wx.VERTICAL)
         tp_sizer.AddStretchSpacer()
@@ -359,14 +374,14 @@ class MainWindow(wx.Frame):
     # ──────────────────────────────────────────────────────────────────────
     # Menu handlers
     # ──────────────────────────────────────────────────────────────────────
-    def open_settings(self, _evt):
+    def open_settings(self, _evt=None):
         """Open the Settings dialog (wired to the 'Settings' top menu)."""
         try:
             SettingsWindow(self).ShowModal()
         except Exception as e:
-            wx.MessageBox(f"Could not open Settings: {e}", "Settings", wx.OK | wx.ICON_ERROR)
+            wx.MessageBox(f"Could not open Settings:\n{e}", "Settings", wx.OK | wx.ICON_ERROR)
 
-    def on_little_buddy(self, _evt):
+    def on_little_buddy(self, _evt=None):
         """Open the Little Buddy chat/dialog."""
         try:
             dlg = DataBuddyDialog(self)
@@ -378,7 +393,7 @@ class MainWindow(wx.Frame):
     # ──────────────────────────────────────────────────────────────────────
     # File / S3 / Knowledge / Rules
     # ──────────────────────────────────────────────────────────────────────
-    def on_load_knowledge(self, _):
+    def on_load_knowledge(self, _evt=None):
         dlg = wx.FileDialog(self, "Load knowledge files", wildcard="Text|*.txt;*.csv;*.tsv|All|*.*",
                             style=wx.FD_OPEN | wx.FD_MULTIPLE | wx.FD_FILE_MUST_EXIST)
         if dlg.ShowModal() != wx.ID_OK:
@@ -392,7 +407,7 @@ class MainWindow(wx.Frame):
         else:
             self.knowledge_lbl.SetLabel("(none)")
 
-    def on_load_file(self, _):
+    def on_load_file(self, _evt=None):
         dlg = wx.FileDialog(self, "Open data file", wildcard="Data|*.csv;*.tsv;*.txt|All|*.*",
                             style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
         if dlg.ShowModal() != wx.ID_OK:
@@ -410,7 +425,7 @@ class MainWindow(wx.Frame):
         self.raw_data = data
         self._display(hdr, data)
 
-    def on_load_s3(self, _):
+    def on_load_s3(self, _evt=None):
         with wx.TextEntryDialog(self, "Enter URI (S3 presigned or HTTP/HTTPS):", "Load from URI/S3") as dlg:
             if dlg.ShowModal() != wx.ID_OK:
                 return
@@ -427,7 +442,7 @@ class MainWindow(wx.Frame):
         self.raw_data = data
         self._display(hdr, data)
 
-    def on_rules(self, _):
+    def on_rules(self, _evt=None):
         dlg = QualityRuleDialog(self, rules=self.quality_rules)
         if dlg.ShowModal() == wx.ID_OK:
             self.quality_rules = dlg.get_rules()
@@ -470,7 +485,7 @@ class MainWindow(wx.Frame):
 
         self._display(hdr, data)
 
-    def on_export_csv(self, _):
+    def on_export_csv(self, _evt=None):
         dlg = wx.FileDialog(self, "Save CSV", wildcard="CSV|*.csv",
                             style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
         if dlg.ShowModal() != wx.ID_OK:
@@ -485,7 +500,7 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Export failed: {e}", "Export", wx.OK | wx.ICON_ERROR)
 
-    def on_export_txt(self, _):
+    def on_export_txt(self, _evt=None):
         dlg = wx.FileDialog(self, "Save TXT", wildcard="TXT|*.txt",
                             style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
         if dlg.ShowModal() != wx.ID_OK:
@@ -500,7 +515,7 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Export failed: {e}", "Export", wx.OK | wx.ICON_ERROR)
 
-    def on_upload_s3(self, _):
+    def on_upload_s3(self, _evt=None):
         hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
         data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))] for r in range(self.grid.GetNumberRows())]
         try:
@@ -512,7 +527,7 @@ class MainWindow(wx.Frame):
     # ──────────────────────────────────────────────────────────────────────
     # Synthetic data
     # ──────────────────────────────────────────────────────────────────────
-    def on_generate_synth(self, _):
+    def on_generate_synth(self, _evt=None):
         if not self.headers:
             wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
             return
@@ -554,7 +569,7 @@ class MainWindow(wx.Frame):
     # ──────────────────────────────────────────────────────────────────────
     # Tasks runner
     # ──────────────────────────────────────────────────────────────────────
-    def on_run_tasks(self, _evt):
+    def on_run_tasks(self, _evt=None):
         dlg = wx.FileDialog(
             self,
             "Open Tasks File",
