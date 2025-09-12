@@ -1,5 +1,7 @@
 # app/main_window.py
 import os
+import json
+import threading
 import wx
 import wx.grid as gridlib
 import pandas as pd
@@ -15,30 +17,25 @@ from app.analysis import (
     compliance_analysis,
 )
 
-# Try anomalies under either name; provide a safe fallback if not present.
-try:
-    from app.analysis import anomalies_analysis as detect_anomalies_analysis
-except Exception:
-    try:
-        from app.analysis import detect_anomalies as detect_anomalies_analysis
-    except Exception:
-        def detect_anomalies_analysis(df: pd.DataFrame):
-            hdr = ["Issue", "Details"]
-            data = [["No analyzer", "Define detect_anomalies() or anomalies_analysis() in app.analysis"]]
-            return hdr, data
+# NOTE:
+# This file contains custom widgets (rounded buttons, kpi cards, etc.)
+# and the main window wiring for the Sidecar app. The new "Tasks" button
+# and the task runner logic are included near the bottom of the class.
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Font helper (wx 4.x & Py 3.13 safe)
+# Fonts helper
 # ──────────────────────────────────────────────────────────────────────────────
-def mkfont(size: int, *, bold: bool = False, italic: bool = False,
-           family: int = wx.FONTFAMILY_SWISS) -> wx.Font:
-    info = wx.FontInfo(size).Family(family)
-    if italic:
-        info = info.Italic()
+def mk_font(size=10, bold=False, face="", colour=None):
+    info = wx.FontInfo(size)
     if bold:
         info = info.Bold()
-    return wx.Font(info)
+    if face:
+        info = info.FaceName(face)
+    f = wx.Font(info)
+    if colour:
+        f.SetWeight(wx.FONTWEIGHT_BOLD if bold else wx.FONTWEIGHT_NORMAL)
+    return f
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -52,42 +49,26 @@ class HeaderBanner(wx.Panel):
 
         self._bg = bg
         self._min_w = 320
-        self.SetBackgroundColour(self._bg)
-        self._img = self._load_banner_image()
-        self.SetMinSize((self._min_w, height))
-        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.SetBackgroundColour(bg)
+
+        self._img = None
+        try:
+            # Try to load banner image
+            base = os.path.dirname(os.path.abspath(__file__))
+            p = os.path.join(base, "assets", "sidecar-architecture.png")
+            if os.path.exists(p):
+                self._img = wx.Image(p)
+        except Exception:
+            self._img = None
+
+        self.Bind(wx.EVT_PAINT, self.on_paint)
         self.Bind(wx.EVT_SIZE, lambda e: self.Refresh())
 
-    def _load_banner_image(self):
-        here = os.path.dirname(os.path.abspath(__file__))
-        candidates = [
-            os.path.join(here, "assets", "sidecar.gif"),
-            os.path.join(here, "assets", "sidecar.jpg"),
-            os.path.join(here, "assets", "sidecar.png"),
-            os.path.join(here, "sidecar.gif"),
-            os.path.join(here, "sidecar.jpg"),
-            os.path.join(here, "sidecar.png"),
-            os.path.join(os.getcwd(), "sidecar.gif"),
-            os.path.join(os.getcwd(), "sidecar.jpg"),
-            os.path.join(os.getcwd(), "sidecar.png"),
-        ]
-        for p in candidates:
-            if os.path.exists(p):
-                try:
-                    return wx.Image(p, wx.BITMAP_TYPE_ANY)
-                except Exception:
-                    pass
-        bmp = wx.Bitmap(self._min_w, 60)
-        dc = wx.MemoryDC(bmp)
-        dc.SetBackground(wx.Brush(self._bg))
-        dc.Clear()
-        dc.SelectObject(wx.NullBitmap)
-        return bmp.ConvertToImage()
-
-    def _on_paint(self, _):
+    def on_paint(self, _):
         dc = wx.AutoBufferedPaintDC(self)
         dc.SetBackground(wx.Brush(self._bg))
         dc.Clear()
+
         if not self._img:
             return
         w, h = self.GetClientSize()
@@ -105,148 +86,134 @@ class HeaderBanner(wx.Panel):
 # Rounded/Shadow widgets
 # ──────────────────────────────────────────────────────────────────────────────
 class RoundedShadowButton(wx.Control):
-    def __init__(self, parent, label, handler, *, colour=wx.Colour(66, 133, 244),
-                 radius=12, glow=6):
-        super().__init__(parent, style=wx.BORDER_NONE | wx.WANTS_CHARS)
-        self.label = label
-        self.colour = colour
-        self.radius = radius
-        self.glow = glow
-        self.SetMinSize((150, 36))
+    def __init__(self, parent, label, handler, colour=wx.Colour(66, 133, 244), radius=10, glow=8):
+        super().__init__(parent, style=wx.BORDER_NONE)
+        self._label = label
+        self._handler = handler
+        self._colour = colour
+        self._radius = radius
+        self._glow = glow
+        self._hover = False
+        self._down = False
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
-        self.Bind(wx.EVT_PAINT, self._on_paint)
-        self.Bind(wx.EVT_LEFT_DOWN, lambda e: handler(e))
-        self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self.Refresh())
-        self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self.Refresh())
-        self._font = mkfont(9, bold=True)
+        self.Bind(wx.EVT_PAINT, self.on_paint)
+        self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self._set_hover(True))
+        self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
+        self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
+        self.Bind(wx.EVT_LEFT_UP, self.on_up)
+        self._padx, self._pady = 16, 10
+        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_MEDIUM)
+        self._text_colour = wx.Colour(240, 240, 240)
+        self.SetMinSize((120, 32))
 
-    def _on_paint(self, _evt):
-        dc = wx.AutoBufferedPaintDC(self)
-        rect = self.GetClientRect()
+    def _set_hover(self, v):
+        self._hover = v
+        self.Refresh()
 
-        dc.SetBackground(wx.Brush(self.GetParent().GetBackgroundColour()))
-        dc.Clear()
+    def on_down(self, _):
+        self._down = True
+        self.CaptureMouse()
+        self.Refresh()
 
-        # soft shadow/glow
-        for i in range(self.glow, 0, -1):
-            alpha = int(18 * (i / self.glow)) + 8
-            dc.SetPen(wx.Pen(wx.Colour(0, 0, 0, alpha)))
-            dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, alpha)))
-            dc.DrawRoundedRectangle(i, i, rect.width - 2*i, rect.height - 2*i, self.radius + i)
+    def on_up(self, evt):
+        if self.HasCapture():
+            self.ReleaseMouse()
+        was_down = self._down
+        self._down = False
+        self.Refresh()
+        if was_down and self.GetClientRect().Contains(evt.GetPosition()):
+            try:
+                self._handler(evt)
+            except Exception:
+                wx.LogError("Button handler failed.")
 
-        # main button
-        dc.SetPen(wx.Pen(self.colour))
-        dc.SetBrush(wx.Brush(self.colour))
-        dc.DrawRoundedRectangle(0, 0, rect.width, rect.height, self.radius)
-
-        # label
+    def DoGetBestSize(self):
+        dc = wx.ClientDC(self)
         dc.SetFont(self._font)
-        dc.SetTextForeground(wx.WHITE)
-        tw, th = dc.GetTextExtent(self.label)
-        dc.DrawText(self.label, (rect.width - tw)//2, (rect.height - th)//2)
+        tw, th = dc.GetTextExtent(self._label)
+        return wx.Size(tw + self._padx * 2, th + self._pady * 2)
 
-
-class ShadowPanel(wx.Panel):
-    def __init__(self, parent, *, radius=12, shadow=10,
-                 bg=wx.Colour(40, 40, 40), body_bg=wx.Colour(50, 50, 50)):
-        super().__init__(parent, style=wx.BORDER_NONE)
-        self.radius = radius
-        self.shadow = shadow
-        self.bg = bg
-        self.body_bg = body_bg
-        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
-        self.Bind(wx.EVT_PAINT, self._on_paint)
-
-        self.body = wx.Panel(self, style=wx.BORDER_NONE)
-        self.body.SetBackgroundColour(self.body_bg)
-
-        s = wx.BoxSizer(wx.VERTICAL)
-        s.Add(self.body, 1, wx.EXPAND | wx.ALL, self.shadow)
-        self.SetSizer(s)
-
-    def _on_paint(self, _evt):
+    def on_paint(self, _):
         dc = wx.AutoBufferedPaintDC(self)
-        rect = self.GetClientRect()
-
-        dc.SetBackground(wx.Brush(self.GetParent().GetBackgroundColour()))
         dc.Clear()
+        w, h = self.GetClientSize()
 
-        for i in range(self.shadow, 0, -1):
-            alpha = int(15 * (i / self.shadow)) + 10
-            dc.SetPen(wx.Pen(wx.Colour(0, 0, 0, alpha)))
-            dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, alpha)))
-            dc.DrawRoundedRectangle(i, i, rect.width - 2*i, rect.height - 2*i, self.radius + i)
+        bg = self.GetParent().GetBackgroundColour()
+        dc.SetBrush(wx.Brush(bg))
+        dc.SetPen(wx.Pen(bg))
+        dc.DrawRectangle(0, 0, w, h)
 
-        dc.SetPen(wx.Pen(wx.Colour(70, 70, 70)))
-        dc.SetBrush(wx.Brush(self.body_bg))
-        dc.DrawRoundedRectangle(self.shadow, self.shadow,
-                                rect.width - 2*self.shadow, rect.height - 2*self.shadow,
-                                self.radius)
+        base = self._colour
+        if self._hover:
+            base = wx.Colour(min(255, base.Red() + 10), min(255, base.Green() + 10), min(255, base.Blue() + 10))
+        if self._down:
+            base = wx.Colour(max(0, base.Red() - 20), max(0, base.Green() - 20), max(0, base.Blue() - 20))
 
+        # Glow/shadow
+        dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, 70)))
+        dc.SetPen(wx.Pen(wx.Colour(0, 0, 0, 0)))
+        dc.DrawRoundedRectangle(2, 3, w - 4, h - 3, self._radius + 1)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# KPI Metric Card (now supports min width)
-# ──────────────────────────────────────────────────────────────────────────────
-class MetricCard(wx.Panel):
-    def __init__(self, parent, title: str, value: str, accent: wx.Colour, *, min_w: int = 130):
-        super().__init__(parent, style=wx.BORDER_NONE)
-        self.SetBackgroundColour(wx.Colour(38, 39, 46))
-        self.SetMinSize((min_w, -1))
+        # Button
+        dc.SetBrush(wx.Brush(base))
+        dc.SetPen(wx.Pen(base))
+        dc.DrawRoundedRectangle(0, 0, w - 2, h - 2, self._radius)
 
-        v = wx.BoxSizer(wx.VERTICAL)
-        self.title = wx.StaticText(self, label=title.upper())
-        self.title.SetForegroundColour(wx.Colour(180, 185, 200))
-        self.title.SetFont(mkfont(8, bold=True))
-
-        self.value = wx.StaticText(self, label=str(value))
-        self.value.SetForegroundColour(wx.WHITE)
-        self.value.SetFont(mkfont(16, bold=True))
-
-        line = wx.Panel(self, size=(-1, 2))
-        line.SetBackgroundColour(accent)
-
-        v.Add(self.title, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
-        v.Add(self.value, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
-        v.Add(line, 0, wx.EXPAND | wx.ALL, 10)
-        self.SetSizer(v)
-
-    def SetValue(self, text: str):
-        self.value.SetLabel(str(text))
-        self.Layout()
+        # Label
+        dc.SetTextForeground(self._text_colour)
+        dc.SetFont(self._font)
+        tw, th = dc.GetTextExtent(self._label)
+        dc.DrawText(self._label, (w - tw) // 2, (h - th) // 2)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Simple local synthetic data fallback
-# ──────────────────────────────────────────────────────────────────────────────
-import random as _r
+class KPIBadge(wx.Panel):
+    def __init__(self, parent, title, init_value="—", colour=wx.Colour(32, 35, 41)):
+        super().__init__(parent, size=(260, 92))
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self._title = title
+        self._value = init_value
+        self._colour = colour
+        self._accent = wx.Colour(90, 180, 255)
+        self._accent2 = wx.Colour(80, 210, 140)
+        self._accent_red = wx.Colour(200, 70, 70)
+        self._font_title = wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_MEDIUM)
+        self._font_value = wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        self.Bind(wx.EVT_PAINT, self.on_paint)
 
-_FIRST_NAMES = ["JAY", "ANA", "KIM", "LEE", "OMAR", "SARA", "NIA", "LIV", "RAJ"]
-_LAST_NAMES  = ["SMITH", "NG", "GARCIA", "BROWN", "TAYLOR", "KHAN", "LI", "LEE"]
-_STATES = ["AL","AK","AZ","CA","CO","CT","DC","DE","FL","GA","HI","IA","ID","IL","IN","KS","KY",
-           "LA","MA","MD","ME","MI","MN","MO","MS","MT","NC","ND","NE","NH","NJ","NM","NV","NY",
-           "OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VA","VT","WA","WI","WV","WY"]
+    def SetValue(self, v):
+        self._value = v
+        self.Refresh()
 
-def _synth_value(kind: str, i: int) -> str:
-    k = (kind or "").lower()
-    if "email" in k:
-        return f"user{i}@example.com"
-    if "first" in k and "name" in k:
-        return _r.choice(_FIRST_NAMES)
-    if "last" in k and "name" in k:
-        return _r.choice(_LAST_NAMES)
-    if "phone" in k:
-        return f"{_r.randint(200, 989)}-{_r.randint(100, 999)}-{_r.randint(1000, 9999)}"
-    if "address" in k:
-        return f"{_r.randint(100, 9999)} Main St, City, {_r.choice(_STATES)} {_r.randint(10000, 99999)}"
-    if "amount" in k or "loan" in k or "balance" in k:
-        return f"{_r.randint(100, 99999)}.{_r.randint(0, 99):02d}"
-    return f"value_{i}"
+    def on_paint(self, _):
+        dc = wx.AutoBufferedPaintDC(self)
+        w, h = self.GetClientSize()
 
-def _synth_dataframe(n: int, columns: list[str]) -> pd.DataFrame:
-    rows = []
-    for i in range(1, n + 1):
-        rows.append([_synth_value(col, i) for col in columns])
-    return pd.DataFrame(rows, columns=columns)
+        # background card
+        bg = wx.Colour(28, 28, 28)
+        dc.SetBrush(wx.Brush(bg))
+        dc.SetPen(wx.Pen(bg))
+        dc.DrawRoundedRectangle(0, 0, w, h, 10)
+
+        # inner
+        dc.SetBrush(wx.Brush(self._colour))
+        dc.SetPen(wx.Pen(self._colour))
+        dc.DrawRoundedRectangle(6, 6, w - 12, h - 12, 8)
+
+        # title
+        dc.SetTextForeground(wx.Colour(180, 180, 180))
+        dc.SetFont(self._font_title)
+        dc.DrawText(self._title.upper(), 18, 12)
+
+        # decorative bars
+        dc.SetPen(wx.Pen(self._accent, 3))
+        dc.DrawLine(16, h - 22, w - 24, h - 22)
+        dc.SetPen(wx.Pen(self._accent2, 3))
+        dc.DrawLine(16, h - 16, w - 24, h - 16)
+
+        # value
+        dc.SetTextForeground(wx.Colour(240, 240, 240))
+        dc.SetFont(self._font_value)
+        dc.DrawText(str(self._value), 18, 34)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -269,19 +236,20 @@ class MainWindow(wx.Frame):
                 except Exception:
                     pass
 
-        self.raw_data: list[list[str]] = []
-        self.headers: list[str] = []
-        self.current_process: str = ""
-        self.quality_rules: dict = {}
-        self.knowledge_files: list[dict] = []
+        self.headers = []
+        self.raw_data = []
+        self.knowledge_files = []
+        self.quality_rules = []
+        self.current_process = ""
 
         self._build_ui()
-        self.Centre()
+        self.CenterOnScreen()
         self.Show()
 
+    # UI
     def _build_ui(self):
-        BG = wx.Colour(40, 40, 40)
-        PANEL = wx.Colour(45, 45, 45)
+        BG = wx.Colour(21, 21, 21)
+        PANEL = wx.Colour(32, 35, 41)
         TXT = wx.Colour(235, 235, 235)
         BLUE = wx.Colour(66, 133, 244)
 
@@ -298,71 +266,44 @@ class MainWindow(wx.Frame):
         title_panel = wx.Panel(self)
         title_panel.SetBackgroundColour(header_bg)
         title = wx.StaticText(title_panel, label="Data Buddy — Sidecar Application")
-        title.SetFont(mkfont(16, bold=True))
-        title.SetForegroundColour(wx.Colour(240, 240, 245))
-        tps = wx.BoxSizer(wx.HORIZONTAL)
-        tps.AddStretchSpacer()
-        tps.Add(title, 0, wx.ALIGN_CENTER_VERTICAL)
-        tps.AddStretchSpacer()
-        title_panel.SetSizer(tps)
-
+        title.SetForegroundColour(wx.Colour(230, 230, 230))
+        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        tp_sizer = wx.BoxSizer(wx.VERTICAL)
+        tp_sizer.AddStretchSpacer()
+        tp_sizer.Add(title, 0, wx.ALL, 4)
+        tp_sizer.AddStretchSpacer()
+        title_panel.SetSizer(tp_sizer)
         header_row.Add(title_panel, 1, wx.EXPAND)
-        main.Add(header_row, 0, wx.EXPAND | wx.BOTTOM, 4)
 
-        # ── KPI BAR with Buddy button on right ─────────────────────────────
-        kpi_bar = wx.Panel(self)
-        kpi_bar.SetBackgroundColour(wx.Colour(33, 34, 39))
-        kbar = wx.BoxSizer(wx.HORIZONTAL)
+        main.Add(header_row, 0, wx.EXPAND)
 
-        kpi_panel = wx.Panel(kpi_bar)
-        kpi_panel.SetBackgroundColour(wx.Colour(33, 34, 39))
-        kpis = wx.BoxSizer(wx.HORIZONTAL)
+        # KPI row
+        kpi_panel = wx.Panel(self)
+        kpi_panel.SetBackgroundColour(BG)
+        kpi_row = wx.WrapSizer()
 
-        # Wider min width for large numbers on ROWS
-        self.card_rows    = MetricCard(kpi_panel, "Rows", "—", wx.Colour(120, 99, 255), min_w=170)
-        self.card_cols    = MetricCard(kpi_panel, "Columns", "—", wx.Colour(151, 133, 255), min_w=140)
-        self.card_nulls   = MetricCard(kpi_panel, "Null %", "—", wx.Colour(187, 168, 255), min_w=140)
-        self.card_quality = MetricCard(kpi_panel, "DQ Score", "—", wx.Colour(255, 207, 92), min_w=150)
-        # NEW: Completeness KPI (100 - null%)
-        self.card_complete = MetricCard(kpi_panel, "Completeness", "—", wx.Colour(72, 199, 142), min_w=170)
-        self.card_anoms   = MetricCard(kpi_panel, "Anomalies", "—", wx.Colour(255, 113, 113), min_w=150)
+        self.card_rows = KPIBadge(kpi_panel, "Rows")
+        self.card_cols = KPIBadge(kpi_panel, "Columns")
+        self.card_nulls = KPIBadge(kpi_panel, "Null %")
+        self.card_quality = KPIBadge(kpi_panel, "DQ Score")
+        self.card_complete = KPIBadge(kpi_panel, "Completeness")
+        self.card_anoms = KPIBadge(kpi_panel, "Anomalies")
 
         for c in (self.card_rows, self.card_cols, self.card_nulls, self.card_quality, self.card_complete, self.card_anoms):
-            # let cards expand to fill the row nicely
-            kpis.Add(c, 1, wx.ALL | wx.EXPAND, 6)
+            kpi_row.Add(c, 0, wx.ALL, 6)
 
-        kpi_panel.SetSizer(kpis)
+        kpi_panel.SetSizer(kpi_row)
+        main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
-        # Right side: Little Buddy quick access button
-        def _open_buddy(_):
-            self.on_buddy(None)
-
-        buddy_holder = wx.Panel(kpi_bar)
-        buddy_holder.SetBackgroundColour(wx.Colour(33, 34, 39))
-        bhz = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_buddy_top = RoundedShadowButton(
-            buddy_holder, "Little Buddy", _open_buddy, colour=BLUE, radius=12, glow=6
-        )
-        bhz.AddStretchSpacer()
-        bhz.Add(self.btn_buddy_top, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
-        buddy_holder.SetSizer(bhz)
-        buddy_holder.SetMinSize((240, -1))  # reserve right side area
-
-        kbar.Add(kpi_panel, 1, wx.EXPAND | wx.RIGHT, 6)
-        kbar.Add(buddy_holder, 0, wx.EXPAND)
-        kpi_bar.SetSizer(kbar)
-
-        main.Add(kpi_bar, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
-
-        # Menu bar
+        # Menu
         mb = wx.MenuBar()
-        m_file, m_set = wx.Menu(), wx.Menu()
-        m_file.Append(wx.ID_EXIT, "Exit")
-        self.Bind(wx.EVT_MENU, lambda _: self.Close(), id=wx.ID_EXIT)
-        m_set.Append(wx.ID_PREFERENCES, "Settings")
-        self.Bind(wx.EVT_MENU, self.on_settings, id=wx.ID_PREFERENCES)
+        m_file = wx.Menu()
+        m_file.Append(1001, "&Settings...\tCtrl+,")
+        m_file.AppendSeparator()
+        m_file.Append(1002, "&Quit\tCtrl+Q")
         mb.Append(m_file, "&File")
-        mb.Append(m_set, "&Settings")
+        self.Bind(wx.EVT_MENU, lambda e: SettingsWindow(self).ShowModal(), id=1001)
+        self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=1002)
         self.SetMenuBar(mb)
 
         # Toolbar (Little Buddy removed from here)
@@ -385,6 +326,8 @@ class MainWindow(wx.Frame):
         add_btn("Detect Anomalies", lambda e: self.do_analysis_process("Detect Anomalies"))
         add_btn("Catalog", lambda e: self.do_analysis_process("Catalog"))
         add_btn("Compliance", lambda e: self.do_analysis_process("Compliance"))
+        # NEW: Tasks button
+        add_btn("Tasks", self.on_run_tasks)
         add_btn("Export CSV", self.on_export_csv)
         add_btn("Export TXT", self.on_export_txt)
         add_btn("Upload to S3", self.on_upload_s3)
@@ -398,112 +341,101 @@ class MainWindow(wx.Frame):
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
         lab.SetForegroundColour(TXT)
-        lab.SetFont(mkfont(9, bold=True))
-        hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
-
-        self.knowledge_line = wx.StaticText(info_panel, label="(none)")
-        self.knowledge_line.SetForegroundColour(wx.Colour(210, 210, 210))
-        self.knowledge_line.SetFont(mkfont(9))
-        hz.Add(self.knowledge_line, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
+        lab.SetFont(
+            wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_MEDIUM)
+        )
+        self.knowledge_lbl = wx.StaticText(info_panel, label="(none)")
+        self.knowledge_lbl.SetForegroundColour(wx.Colour(200, 200, 200))
+        hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
+        hz.Add(self.knowledge_lbl, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
+        hz.AddStretchSpacer()
         info_panel.SetSizer(hz)
-        main.Add(info_panel, 0, wx.EXPAND)
+        main.Add(info_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
-        # Grid in rounded shadow panel
-        grid_shell = ShadowPanel(self, radius=12, shadow=10,
-                                 bg=BG, body_bg=wx.Colour(50, 50, 50))
-        grid_host = grid_shell.body
-
-        vbox = wx.BoxSizer(wx.VERTICAL)
-        self.grid = gridlib.Grid(grid_host)
+        # Grid
+        grid_panel = wx.Panel(self)
+        grid_panel.SetBackgroundColour(BG)
+        self.grid = gridlib.Grid(grid_panel)
         self.grid.CreateGrid(0, 0)
-        self.grid.SetLabelBackgroundColour(BLUE)
-        self.grid.SetLabelTextColour(wx.WHITE)
-        self.grid.SetLabelFont(mkfont(9, bold=True))
-        self.grid.SetDefaultCellBackgroundColour(wx.Colour(55, 55, 55))
-        self.grid.SetDefaultCellTextColour(wx.Colour(220, 220, 220))
+        self.grid.SetDefaultCellTextColour(wx.Colour(230, 230, 230))
+        self.grid.SetDefaultCellBackgroundColour(wx.Colour(35, 35, 35))
+        self.grid.SetLabelTextColour(wx.Colour(210, 210, 210))
+        self.grid.SetLabelBackgroundColour(wx.Colour(40, 40, 40))
+        self.grid.SetGridLineColour(wx.Colour(55, 55, 55))
+        self.grid.EnableEditing(False)
+        self.grid.SetRowLabelSize(36)
+        self.grid.SetColLabelSize(28)
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
 
-        vbox.Add(self.grid, 1, wx.EXPAND | wx.ALL, 10)
-        grid_host.SetSizer(vbox)
+        gp = wx.BoxSizer(wx.VERTICAL)
+        gp.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
+        grid_panel.SetSizer(gp)
+        main.Add(grid_panel, 1, wx.EXPAND | wx.ALL, 4)
 
-        main.Add(grid_shell, 1, wx.EXPAND | wx.ALL, 10)
         self.SetSizer(main)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Actions
+    # File / S3 / Knowledge / Rules
     # ──────────────────────────────────────────────────────────────────────
-    def on_settings(self, _):
-        SettingsWindow(self).Show()
+    def on_load_knowledge(self, _):
+        dlg = wx.FileDialog(self, "Load knowledge files", wildcard="Text|*.txt;*.csv;*.tsv|All|*.*",
+                            style=wx.FD_OPEN | wx.FD_MULTIPLE | wx.FD_FILE_MUST_EXIST)
+        if dlg.ShowModal() != wx.ID_OK:
+            return
+        files = dlg.GetPaths()
+        dlg.Destroy()
+
+        self.knowledge_files = files
+        if files:
+            self.knowledge_lbl.SetLabel(", ".join(os.path.basename(p) for p in files))
+        else:
+            self.knowledge_lbl.SetLabel("(none)")
 
     def on_load_file(self, _):
-        dlg = wx.FileDialog(self, "Open CSV/TXT", wildcard="CSV/TXT|*.csv;*.txt",
+        dlg = wx.FileDialog(self, "Open data file", wildcard="Data|*.csv;*.tsv;*.txt|All|*.*",
                             style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
         if dlg.ShowModal() != wx.ID_OK:
-            dlg.Destroy()
             return
         path = dlg.GetPath()
         dlg.Destroy()
-        text = open(path, "r", encoding="utf-8").read()
-        self.headers, self.raw_data = detect_and_split_data(text)
-        self._display(self.headers, self.raw_data)
+        try:
+            text = open(path, "r", encoding="utf-8", errors="ignore").read()
+            hdr, data = detect_and_split_data(text)
+        except Exception as e:
+            wx.MessageBox(f"Could not read file: {e}", "Error", wx.OK | wx.ICON_ERROR)
+            return
+
+        self.headers = hdr
+        self.raw_data = data
+        self._display(hdr, data)
 
     def on_load_s3(self, _):
-        uri = wx.GetTextFromUser("Enter HTTP(S) or S3 URI:", "Load from URI/S3")
-        if not uri:
-            return
+        # Simple URI dialog; user can paste S3 presigned URL or HTTP(S)
+        with wx.TextEntryDialog(self, "Enter URI (S3 presigned or HTTP/HTTPS):", "Load from URI/S3") as dlg:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            uri = dlg.GetValue().strip()
+
         try:
             text = download_text_from_uri(uri)
-            self.headers, self.raw_data = detect_and_split_data(text)
-            self._display(self.headers, self.raw_data)
+            hdr, data = detect_and_split_data(text)
         except Exception as e:
-            wx.MessageBox(f"Failed to load data:\n{e}", "Error", wx.OK | wx.ICON_ERROR)
-
-    def on_load_knowledge(self, _):
-        dlg = wx.FileDialog(self, "Add Knowledge Files",
-                            wildcard="All supported|*.txt;*.csv;*.json;*.md;*.png;*.jpg;*.jpeg;*.gif|"
-                                     "Text/CSV/JSON|*.txt;*.csv;*.json;*.md|"
-                                     "Images|*.png;*.jpg;*.jpeg;*.gif|All|*.*",
-                            style=wx.FD_OPEN | wx.FD_MULTIPLE)
-        if dlg.ShowModal() != wx.ID_OK:
-            dlg.Destroy()
+            wx.MessageBox(f"Download failed: {e}", "Error", wx.OK | wx.ICON_ERROR)
             return
-        paths = dlg.GetPaths()
-        dlg.Destroy()
 
-        added = []
-        for p in paths:
-            try:
-                ext = os.path.splitext(p)[1].lower()
-                if ext in (".txt", ".csv", ".json", ".md"):
-                    content = open(p, "r", encoding="utf-8", errors="ignore").read()
-                    self.knowledge_files.append({"name": os.path.basename(p), "content": content})
-                    added.append(os.path.basename(p))
-                elif ext in (".png", ".jpg", ".jpeg", ".gif"):
-                    self.knowledge_files.append({"name": os.path.basename(p), "path": p, "content": None})
-                    added.append(os.path.basename(p))
-                else:
-                    try:
-                        content = open(p, "r", encoding="utf-8", errors="ignore").read()
-                    except Exception:
-                        content = None
-                    self.knowledge_files.append({"name": os.path.basename(p), "path": p, "content": content})
-                    added.append(os.path.basename(p))
-            except Exception:
-                pass
-
-        if added:
-            self.knowledge_line.SetLabel("  • " + "  •  ".join(added))
-            self.Layout()
+        self.headers = hdr
+        self.raw_data = data
+        self._display(hdr, data)
 
     def on_rules(self, _):
-        if not self.headers:
-            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
-        else:
-            QualityRuleDialog(self, self.headers, self.quality_rules).ShowModal()
+        dlg = QualityRuleDialog(self, rules=self.quality_rules)
+        if dlg.ShowModal() == wx.ID_OK:
+            self.quality_rules = dlg.get_rules()
+        dlg.Destroy()
 
-    def on_buddy(self, _):
-        DataBuddyDialog(self, self.raw_data, self.headers, knowledge=self.knowledge_files).ShowModal()
-
+    # ──────────────────────────────────────────────────────────────────────
+    # Analyses
+    # ──────────────────────────────────────────────────────────────────────
     def do_analysis_process(self, proc_name: str):
         if not self.headers:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
@@ -520,9 +452,18 @@ class MainWindow(wx.Frame):
         elif proc_name == "Compliance":
             func = compliance_analysis
         elif proc_name == "Detect Anomalies":
-            func = detect_anomalies_analysis
+            # Reuse quality_analysis to flag anomalies if available; otherwise mock
+            def func(d):
+                hdr = list(d.columns)
+                if "__anomaly__" in hdr:
+                    return hdr, d.values.tolist()
+                # simple: add a placeholder column
+                d2 = d.copy()
+                d2["__anomaly__"] = ""
+                return list(d2.columns), d2.values.tolist()
         else:
-            func = profile_analysis
+            def func(d):
+                return ["Message"], [[f"Unknown process: {proc_name}"]]
 
         try:
             hdr, data = func(df)
@@ -570,41 +511,176 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Upload failed: {e}", "Upload", wx.OK | wx.ICON_ERROR)
 
+    # ──────────────────────────────────────────────────────────────────────
+    # Synthetic data
+    # ──────────────────────────────────────────────────────────────────────
     def on_generate_synth(self, _):
         if not self.headers:
             wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
             return
 
-        dlg = SyntheticDataDialog(self, self.headers)
+        # helper to generate synthetic frame (very simple / placeholder)
+        def _synth_dataframe(n, fields):
+            import random
+            import string
+            rows = []
+            for _ in range(int(n)):
+                row = []
+                for f in fields:
+                    val = "".join(random.choice(string.ascii_letters + string.digits) for _ in range(8))
+                    row.append(val)
+                rows.append(row)
+            return pd.DataFrame(rows, columns=fields)
+
+        dlg = SyntheticDataDialog(self, columns=list(self.headers))
         if dlg.ShowModal() != wx.ID_OK:
             dlg.Destroy()
             return
 
-        df = None
-        if hasattr(dlg, "get_dataframe"):
-            try:
-                df = dlg.get_dataframe()
-            except Exception:
-                df = None
-
-        if df is None:
-            try:
-                n, fields = dlg.get_values()
-                if not fields:
-                    fields = list(self.headers)
-                df = _synth_dataframe(n, fields)
-            except Exception as e:
-                wx.MessageBox(f"Synthetic data error: {e}", "Error", wx.OK | wx.ICON_ERROR)
-                dlg.Destroy()
-                return
+        try:
+            n, fields = dlg.get_values()
+            if not fields:
+                fields = list(self.headers)
+            df = _synth_dataframe(n, fields)
+        except Exception as e:
+            wx.MessageBox(f"Synthetic data error: {e}", "Error", wx.OK | wx.ICON_ERROR)
+            dlg.Destroy()
+            return
 
         dlg.Destroy()
-
         hdr = list(df.columns)
         data = df.values.tolist()
         self.headers = hdr
         self.raw_data = data
         self._display(hdr, data)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Tasks runner: open a file (JSON or TXT) and execute actions in order
+    # ──────────────────────────────────────────────────────────────────────
+    def on_run_tasks(self, _evt):
+        dlg = wx.FileDialog(
+            self,
+            "Open Tasks File",
+            wildcard="Tasks (*.json;*.txt)|*.json;*.txt|All|*.*",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST
+        )
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return
+        path = dlg.GetPath()
+        dlg.Destroy()
+
+        try:
+            tasks = self._load_tasks_from_file(path)
+        except Exception as e:
+            wx.MessageBox(f"Could not read tasks file:\n{e}", "Tasks", wx.OK | wx.ICON_ERROR)
+            return
+
+        threading.Thread(target=self._run_tasks_worker, args=(tasks,), daemon=True).start()
+
+    def _load_tasks_from_file(self, path: str):
+        text = open(path, "r", encoding="utf-8", errors="ignore").read().strip()
+        if not text:
+            return []
+
+        # Try JSON structure first
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                obj = obj.get("tasks") or obj.get("steps") or obj.get("actions") or []
+            if not isinstance(obj, list):
+                raise ValueError("JSON must be a list of task objects")
+            out = []
+            for it in obj:
+                if not isinstance(it, dict) or "action" not in it:
+                    raise ValueError("Each JSON task must be an object with 'action'")
+                task = {k: v for k, v in it.items()}
+                task["action"] = str(task["action"]).strip()
+                out.append(task)
+            return out
+        except Exception:
+            pass  # fall back to line-based
+
+        # Plain text lines: ACTION [arg]
+        tasks = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(maxsplit=1)
+            action = parts[0]
+            arg = parts[1] if len(parts) == 2 else None
+            t = {"action": action}
+            if arg:
+                if action.lower() in ("loadfile", "exportcsv", "exporttxt"):
+                    t["path"] = arg
+                elif action.lower() in ("loads3", "loaduri"):
+                    t["uri"] = arg
+                else:
+                    t["arg"] = arg
+            tasks.append(t)
+        return tasks
+
+    def _run_tasks_worker(self, tasks):
+        ran = 0
+        for i, t in enumerate(tasks, 1):
+            try:
+                act = (t.get("action") or "").strip().lower()
+
+                if act == "loadfile":
+                    p = t.get("path") or t.get("file")
+                    if not p: raise ValueError("LoadFile requires 'path'")
+                    text = open(p, "r", encoding="utf-8", errors="ignore").read()
+                    self.headers, self.raw_data = detect_and_split_data(text)
+                    wx.CallAfter(self._display, self.headers, self.raw_data)
+
+                elif act in ("loads3", "loaduri"):
+                    uri = t.get("uri") or t.get("path")
+                    if not uri: raise ValueError("LoadS3/LoadURI requires 'uri'")
+                    text = download_text_from_uri(uri)
+                    self.headers, self.raw_data = detect_and_split_data(text)
+                    wx.CallAfter(self._display, self.headers, self.raw_data)
+
+                elif act in ("profile", "quality", "catalog", "compliance", "detectanomalies"):
+                    name = {"detectanomalies": "Detect Anomalies"}.get(act, act.capitalize())
+                    wx.CallAfter(self.do_analysis_process, name)
+
+                elif act == "exportcsv":
+                    p = t.get("path")
+                    if not p: raise ValueError("ExportCSV requires 'path'")
+                    wx.CallAfter(self._export_to_path, p, ",")
+
+                elif act == "exporttxt":
+                    p = t.get("path")
+                    if not p: raise ValueError("ExportTXT requires 'path'")
+                    wx.CallAfter(self._export_to_path, p, "\t")
+
+                elif act == "uploads3":
+                    wx.CallAfter(self.on_upload_s3, None)
+
+                elif act == "sleep":
+                    import time
+                    time.sleep(float(t.get("seconds", 1)))
+
+                else:
+                    raise ValueError(f"Unknown action: {t.get('action')}")
+
+                ran += 1
+
+            except Exception as e:
+                wx.CallAfter(wx.MessageBox, f"Tasks stopped at step {i}:\n{t}\n\n{e}", "Tasks", wx.OK | wx.ICON_ERROR)
+                return
+
+        wx.CallAfter(wx.MessageBox, f"Tasks completed. {ran} step(s) executed.", "Tasks", wx.OK | wx.ICON_INFORMATION)
+
+    def _export_to_path(self, path: str, sep: str):
+        try:
+            hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
+            data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))]
+                    for r in range(self.grid.GetNumberRows())]
+            pd.DataFrame(data, columns=hdr).to_csv(path, index=False, sep=sep)
+        except Exception as e:
+            wx.MessageBox(f"Export failed: {e}", "Export", wx.OK | wx.ICON_ERROR)
 
     # ──────────────────────────────────────────────────────────────────────
     # Grid helpers + KPI updates
@@ -647,13 +723,13 @@ class MainWindow(wx.Frame):
                 for v in r:
                     if v is None or str(v).strip() == "":
                         empty += 1
+
         null_pct = (empty / total_cells * 100.0) if total_cells else 0.0
         self.card_nulls.SetValue(f"{null_pct:.1f}%")
 
         dq = max(0.0, 100.0 - null_pct)
         self.card_quality.SetValue(f"{dq:.1f}")
 
-        # NEW: Completeness KPI (non-null percentage)
         completeness = 100.0 - null_pct
         self.card_complete.SetValue(f"{completeness:.1f}")
 
