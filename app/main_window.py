@@ -243,7 +243,8 @@ class MainWindow(wx.Frame):
         title_panel.SetBackgroundColour(header_bg)
         title = wx.StaticText(title_panel, label="Data Buddy — Sidecar Application")
         title.SetForegroundColour(wx.Colour(230, 230, 230))
-        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
+        # FIX: use wx.FONTSTYLE_NORMAL / wx.FONTWEIGHT_BOLD
+        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         tp_sizer = wx.BoxSizer(wx.VERTICAL)
         tp_sizer.AddStretchSpacer()
         tp_sizer.Add(title, 0, wx.ALL, 4)
@@ -271,7 +272,7 @@ class MainWindow(wx.Frame):
         kpi_panel.SetSizer(kpi_row)
         main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
-        # Menu bar with separate "File" and "Settings" menus (fixes Settings not opening)
+        # Menu bar with separate "File" and "Settings" menus
         mb = wx.MenuBar()
 
         m_file = wx.Menu()
@@ -307,12 +308,12 @@ class MainWindow(wx.Frame):
         add_btn("Detect Anomalies", lambda e: self.do_analysis_process("Detect Anomalies"))
         add_btn("Catalog", lambda e: self.do_analysis_process("Catalog"))
         add_btn("Compliance", lambda e: self.do_analysis_process("Compliance"))
-        # NEW: Tasks button (sits between Compliance and Export CSV)
+        # Tasks button (between Compliance and Export CSV)
         add_btn("Tasks", self.on_run_tasks)
         add_btn("Export CSV", self.on_export_csv)
         add_btn("Export TXT", self.on_export_txt)
         add_btn("Upload to S3", self.on_upload_s3)
-        # Little Buddy button restored
+        # Little Buddy button
         add_btn("Little Buddy", self.on_little_buddy)
 
         toolbar_panel.SetSizer(toolbar)
@@ -451,7 +452,6 @@ class MainWindow(wx.Frame):
         elif proc_name == "Compliance":
             func = compliance_analysis
         elif proc_name == "Detect Anomalies":
-            # If you have a dedicated anomalies fn, wire it here.
             def func(d):
                 hdr = list(d.columns)
                 if "__anomaly__" in hdr:
