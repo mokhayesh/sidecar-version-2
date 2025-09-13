@@ -77,7 +77,7 @@ class RoundedShadowButton(wx.Control):
         self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
         self.Bind(wx.EVT_PAINT, self.on_paint)
         self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self._set_hover(True))
-        self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
+                self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
         self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
         self.Bind(wx.EVT_LEFT_UP, self.on_up)
         self._padx, self._pady = 16, 10
@@ -178,7 +178,7 @@ class LittleBuddyPill(wx.Control):
         self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
         self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
         self.Bind(wx.EVT_LEFT_UP, self.on_up)
-        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD)
+        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
         self.SetToolTip("Open Little Buddy")
 
     def _set_hover(self, v):
@@ -285,8 +285,8 @@ class KPIBadge(wx.Panel):
         self._colour = colour
         self._accent = wx.Colour(90, 180, 255)
         self._accent2 = wx.Colour(80, 210, 140)
-        self._font_title = wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL)
-        self._font_value = wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD)
+        self._font_title = wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+        self._font_value = wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
         self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
         self.Bind(wx.EVT_PAINT, self.on_paint)
 
@@ -491,7 +491,7 @@ class MainWindow(wx.Frame):
         title_panel.SetBackgroundColour(header_bg)
         title = wx.StaticText(title_panel, label="Data Buddy — Sidecar Application")
         title.SetForegroundColour(wx.Colour(230, 230, 230))
-        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         tp_sizer = wx.BoxSizer(wx.VERTICAL)
         tp_sizer.AddStretchSpacer()
         tp_sizer.Add(title, 0, wx.ALL, 4)
@@ -578,7 +578,7 @@ class MainWindow(wx.Frame):
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
         lab.SetForegroundColour(TXT)
-        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         self.knowledge_lbl = wx.StaticText(info_panel, label="(none)")
         self.knowledge_lbl.SetForegroundColour(wx.Colour(200, 200, 200))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
