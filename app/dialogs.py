@@ -79,7 +79,7 @@ class QualityRuleDialog(wx.Dialog):
         self.field_list = wx.ListBox(pnl, choices=list(fields), style=wx.LB_EXTENDED)
         self.field_list.SetBackgroundColour(INPUT_BG)
         self.field_list.SetForegroundColour(INPUT_TXT)
-        self.field_list.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.field_list.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         fsz.Add(self.field_list, 1, wx.EXPAND | wx.ALL, 5)
         main.Add(fsz, 1, wx.EXPAND | wx.ALL, 5)
 
@@ -93,7 +93,7 @@ class QualityRuleDialog(wx.Dialog):
         self.rule_choice = wx.ComboBox(pnl, style=wx.CB_READONLY)
         self.rule_choice.SetBackgroundColour(INPUT_BG)
         self.rule_choice.SetForegroundColour(INPUT_TXT)
-        self.rule_choice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.rule_choice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         self.rule_choice.Bind(wx.EVT_COMBOBOX, self.on_pick_rule)
         g.Add(self.rule_choice, 0, wx.EXPAND)
 
@@ -103,8 +103,9 @@ class QualityRuleDialog(wx.Dialog):
 
         self.pattern_txt = wx.TextCtrl(pnl)
         self.pattern_txt.SetBackgroundColour(INPUT_BG)
+        this_font = wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
         self.pattern_txt.SetForegroundColour(INPUT_TXT)
-        self.pattern_txt.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.pattern_txt.SetFont(this_font)
         g.Add(self.pattern_txt, 0, wx.EXPAND)
 
         main.Add(g, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
@@ -115,7 +116,7 @@ class QualityRuleDialog(wx.Dialog):
         self.preview = rt.RichTextCtrl(pnl, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
         self.preview.SetBackgroundColour(wx.Colour(35, 35, 35))
         self.preview.SetForegroundColour(wx.Colour(230, 230, 230))
-        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         pv.Add(self.preview, 1, wx.EXPAND | wx.ALL, 4)
         main.Add(pv, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
@@ -135,7 +136,7 @@ class QualityRuleDialog(wx.Dialog):
         for b in (load_btn, assign_btn, close_btn):
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         load_btn.Bind(wx.EVT_BUTTON, self.on_load_rules)
         assign_btn.Bind(wx.EVT_BUTTON, self.on_assign)
         close_btn.Bind(wx.EVT_BUTTON, lambda _: self.EndModal(wx.ID_OK))
@@ -197,34 +198,29 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy — provider-aware streaming, voice, images, STT
-# • Knowledge-first: the Knowledge files (including kernel.json) are injected
-#   at the top of the prompt and treated as the primary source of truth.
-# • Chat bubbles: messages render as styled “bubbles” in the RichText control.
+# Little Buddy — provider-aware streaming, voice, images, STT, chat bubbles
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None, knowledge=None):
         super().__init__(parent, title="Little Buddy", size=(920, 720),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
-        self.session = requests.Session()  # ← needed by streaming/image calls
+        self.session = requests.Session()
         self.data = data
         self.headers = headers
         self.knowledge = list(knowledge or [])
 
-        # Pull kernel path from environment (set by main)
         kpath = os.environ.get("SIDECAR_KERNEL_PATH", "")
         if kpath and kpath not in self.knowledge:
             self.knowledge.append(kpath)
 
-        self.kernel = None  # will be set by main via set_kernel(), if available
+        self.kernel = None
 
         self._tts_file = None
         self._tts_thread = None
         self._listening = False
         self._stop_listening = None
 
-        # Bubble state
         self._bubble_open = False
         self._bubble_sender = None
 
@@ -236,10 +232,9 @@ class DataBuddyDialog(wx.Dialog):
             "accent": wx.Colour(70, 130, 180),
             "input_bg": wx.Colour(50, 50, 50),
             "input_fg": wx.Colour(240, 240, 240),
-            # Bubble palette
-            "bubble_user_bg": wx.Colour(44, 62, 80),     # deep blue-gray
+            "bubble_user_bg": wx.Colour(44, 62, 80),
             "bubble_user_fg": wx.Colour(240, 240, 240),
-            "bubble_bot_bg": wx.Colour(56, 42, 120),     # violet
+            "bubble_bot_bg": wx.Colour(56, 42, 120),
             "bubble_bot_fg": wx.Colour(255, 255, 255),
             "reply_bg": wx.Colour(28, 28, 28),
             "reply_fg": wx.Colour(255, 255, 255),
@@ -252,7 +247,7 @@ class DataBuddyDialog(wx.Dialog):
 
         title = wx.StaticText(pnl, label="Little Buddy")
         title.SetForegroundColour(self.COLORS["text"])
-        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
         # Options row
@@ -262,7 +257,7 @@ class DataBuddyDialog(wx.Dialog):
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
         self.voice.SetForegroundColour(self.COLORS["input_fg"])
-        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         opts.Add(self.voice, 0, wx.RIGHT | wx.EXPAND, 6)
 
         self.tts_checkbox = wx.CheckBox(pnl, label="🔊 Speak Reply")
@@ -277,7 +272,7 @@ class DataBuddyDialog(wx.Dialog):
 
         self.tts_status = wx.StaticText(pnl, label="TTS: idle")
         self.tts_status.SetForegroundColour(self.COLORS["muted"])
-        self.tts_status.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.tts_status.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         opts.Add(self.tts_status, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 12)
 
         vbox.Add(opts, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
@@ -290,19 +285,19 @@ class DataBuddyDialog(wx.Dialog):
         self.persona.SetSelection(0)
         self.persona.SetBackgroundColour(self.COLORS["input_bg"])
         self.persona.SetForegroundColour(self.COLORS["input_fg"])
-        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         vbox.Add(self.persona, 0, wx.EXPAND | wx.ALL, 5)
 
         row = wx.BoxSizer(wx.HORIZONTAL)
         ask_lbl = wx.StaticText(pnl, label="Ask:")
         ask_lbl.SetForegroundColour(self.COLORS["muted"])
-        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         row.Add(ask_lbl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
         self.prompt = wx.TextCtrl(pnl, style=wx.TE_PROCESS_ENTER)
         self.prompt.SetBackgroundColour(self.COLORS["input_bg"])
         self.prompt.SetForegroundColour(self.COLORS["input_fg"])
-        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         self.prompt.SetHint("Type your question and press Enter…")
         self.prompt.Bind(wx.EVT_TEXT_ENTER, self.on_ask)
         row.Add(self.prompt, 1, wx.EXPAND | wx.RIGHT, 6)
@@ -346,7 +341,6 @@ class DataBuddyDialog(wx.Dialog):
         self._append_user_bubble("Hi!", fake=True)
         self._append_bot_bubble("Hi, I'm Little Buddy!")
 
-    # Allow main to pass the kernel instance so we can include it in knowledge.
     def set_kernel(self, kernel):
         self.kernel = kernel
         try:
@@ -366,11 +360,9 @@ class DataBuddyDialog(wx.Dialog):
         self.reply.SetBasicStyle(attr)
 
     def _start_bubble(self, sender: str):
-        """Begin a styled paragraph that looks like a chat bubble."""
         if self._bubble_open:
             self._end_bubble()
 
-        # spacing between bubbles
         if self.reply.GetLastPosition() > 0:
             self.reply.Newline()
 
@@ -382,8 +374,7 @@ class DataBuddyDialog(wx.Dialog):
             attr.SetBackgroundColour(self.COLORS["bubble_bot_bg"])
             attr.SetTextColour(self.COLORS["bubble_bot_fg"])
 
-        # “inset” the text so it looks pill-like
-        attr.SetLeftIndent(20, 40)   # (indent, subindent)
+        attr.SetLeftIndent(20, 40)
         attr.SetRightIndent(20)
         attr.SetParagraphSpacingAfter(6)
         attr.SetFontSize(11)
@@ -424,13 +415,8 @@ class DataBuddyDialog(wx.Dialog):
         except Exception:
             pass
 
-    # Build knowledge context: treat knowledge files as the primary source of truth.
+    # Build knowledge context (Knowledge files + kernel.json first)
     def _build_knowledge_context(self, max_chars=1600):
-        """
-        Accepts self.knowledge as a list of dicts OR file-path strings.
-        Dict form: {"name": "...", "content": "..."}.
-        String form: "C:\\path\\file.txt" (reads a small snippet for text-like files).
-        """
         if not self.knowledge:
             return ""
         chunks = []
@@ -438,7 +424,6 @@ class DataBuddyDialog(wx.Dialog):
         for item in self.knowledge:
             name = "file"
             content = None
-            # normalize
             if isinstance(item, dict):
                 name = item.get("name", "file")
                 content = item.get("content")
@@ -449,20 +434,15 @@ class DataBuddyDialog(wx.Dialog):
                 else:
                     chunks.append(f"File: {name} (image or binary)")
                     continue
-            # string path
             try:
                 path = str(item)
                 name = os.path.basename(path) or "file"
                 if os.path.exists(path):
                     ext = os.path.splitext(path)[1].lower()
                     if ext in (".txt", ".md", ".csv", ".json", ".log"):
-                        try:
-                            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-                            # NOTE: read a little more than per_file to avoid mid-character cut
-                                data = fh.read(per_file)
-                            chunks.append(f"File: {name}\n{data.strip()}")
-                        except Exception:
-                            chunks.append(f"File: {name} [read error]")
+                        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                            data = fh.read(per_file)
+                        chunks.append(f"File: {name}\n{data.strip()}")
                     else:
                         chunks.append(f"File: {name} (binary {ext})")
                 else:
@@ -475,16 +455,13 @@ class DataBuddyDialog(wx.Dialog):
             text = text[:max_chars] + "\n…(truncated)…"
         return text
 
-    # ---------- chat entrypoint (provider aware)
+    # ---------- chat entrypoint
     def on_ask(self, _):
         q = self.prompt.GetValue().strip()
         self.prompt.SetValue("")
         if not q:
             return
-
-        # Show the user's message as a bubble
         self._append_user_bubble(q)
-
         threading.Thread(target=self._answer_dispatch, args=(q,), daemon=True).start()
 
     def _answer_dispatch(self, q: str):
@@ -499,7 +476,6 @@ class DataBuddyDialog(wx.Dialog):
 
         prompt = f"{system_prefix}\n\nUser question (as a {persona}): {q}"
 
-        # A small data sample helps the model when the question is about the grid.
         if self.data:
             try:
                 sample = "; ".join(map(str, self.data[0]))
@@ -516,7 +492,6 @@ class DataBuddyDialog(wx.Dialog):
             self._chat_gemini_streaming(prompt)
             return
 
-        # default / openai / custom (OpenAI-compatible)
         ok = self._chat_openai_streaming(prompt)
         if not ok and provider == "auto" and defaults.get("gemini_api_key"):
             self._append_bot_bubble("(Falling back to Gemini…)")
@@ -545,7 +520,6 @@ class DataBuddyDialog(wx.Dialog):
             "stream": True,
         }
 
-        # Start the bot bubble immediately; stream deltas into it.
         wx.CallAfter(self._start_bubble, "bot")
 
         buf = []
@@ -625,7 +599,6 @@ class DataBuddyDialog(wx.Dialog):
                     except Exception:
                         continue
         except Exception:
-            # Fallback to non-streaming generateContent
             try:
                 url2 = f"{base}/{model}:generateContent?key={key}"
                 r2 = self.session.post(url2, headers={"Content-Type": "application/json"},
@@ -662,7 +635,7 @@ class DataBuddyDialog(wx.Dialog):
         except Exception:
             return None
 
-    # ---------- image generation with fallbacks (OpenAI → Gemini → Stability → offline)
+    # ---------- image generation with fallbacks
     def on_generate_image(self, _):
         prompt = self.prompt.GetValue().strip()
         if not prompt:
@@ -819,9 +792,9 @@ class DataBuddyDialog(wx.Dialog):
             dc.SetBackground(wx.Brush(wx.Colour(32, 36, 44)))
             dc.Clear()
             dc.SetTextForeground(wx.Colour(220, 230, 255))
-            dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
+            dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
             dc.DrawText("[Offline Placeholder]", 40, 40)
-            dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+            dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
             dc.DrawText(prompt, 40, 80)
             dc.SelectObject(wx.NullBitmap)
             bmp.SaveFile(tmp.name, wx.BITMAP_TYPE_PNG)
@@ -1057,7 +1030,7 @@ class SyntheticDataDialog(wx.Dialog):
         self.count = wx.SpinCtrl(pnl, min=1, max=1_000_000, initial=100)
         self.count.SetBackgroundColour(INPUT_BG)
         self.count.SetForegroundColour(INPUT_TXT)
-        self.count.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.count.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         s1.Add(self.count, 1, wx.ALL | wx.EXPAND, 6)
         s.Add(s1, 0, wx.EXPAND | wx.ALL, 8)
 
@@ -1067,7 +1040,7 @@ class SyntheticDataDialog(wx.Dialog):
         self.chk = wx.CheckListBox(pnl, choices=list(fields))
         self.chk.SetBackgroundColour(INPUT_BG)
         self.chk.SetForegroundColour(INPUT_TXT)
-        self.chk.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.chk.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         for i in range(len(fields)):
             self.chk.Check(i, True)
         s2.Add(self.chk, 1, wx.ALL | wx.EXPAND, 6)
@@ -1092,7 +1065,7 @@ class SyntheticDataDialog(wx.Dialog):
         for b in (ok_btn, cancel_btn):
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         btns.AddButton(ok_btn)
         btns.AddButton(cancel_btn)
         btns.Realize()
@@ -1105,15 +1078,12 @@ class SyntheticDataDialog(wx.Dialog):
         selected = [self.chk.GetString(i) for i in range(self.chk.GetCount()) if self.chk.IsChecked(i)]
         return n, selected
 
-    # New: provide a DataFrame for callers expecting dlg.get_dataframe()
     def get_dataframe(self) -> pd.DataFrame:
         n, cols = self.get_values()
         if not cols:
-            # If user cleared all, default to all visible fields
             cols = [self.chk.GetString(i) for i in range(self.chk.GetCount())]
         return self._generate_df(n, cols)
 
-    # -------- synthetic data helpers --------
     def _kind(self, col: str) -> str:
         c = col.lower()
         if "email" in c: return "email"
