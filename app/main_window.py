@@ -582,6 +582,10 @@ class MainWindow(wx.Frame):
         }
 
         self._build_ui()
+
+        # Ensure kernel is shown/available as a knowledge file immediately
+        self._ensure_kernel_in_knowledge()
+
         self.CenterOnScreen()
         self.Show()
 
@@ -724,6 +728,26 @@ class MainWindow(wx.Frame):
         main.Add(grid_panel, 1, wx.EXPAND | wx.ALL, 4)
 
         self.SetSizer(main)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Knowledge files helpers (keep label + env var in sync)
+    # ──────────────────────────────────────────────────────────────────────
+    def _update_knowledge_label_and_env(self):
+        names = ", ".join(os.path.basename(p) for p in self.knowledge_files) if self.knowledge_files else "(none)"
+        self.knowledge_lbl.SetLabel(names)
+        os.environ["SIDECAR_KNOWLEDGE_FILES"] = os.pathsep.join(self.knowledge_files)
+
+    def _ensure_kernel_in_knowledge(self):
+        """Ensure the kernel JSON is always present as a knowledge file on startup."""
+        try:
+            if self.kernel and os.path.exists(self.kernel.path):
+                if self.kernel.path not in self.knowledge_files:
+                    self.knowledge_files.append(self.kernel.path)
+                self._update_knowledge_label_and_env()
+                self.kernel.log("kernel_loaded_as_knowledge", path=self.kernel.path)
+        except Exception:
+            # non-fatal
+            pass
 
     # ──────────────────────────────────────────────────────────────────────
     # KPI helpers
@@ -873,6 +897,9 @@ class MainWindow(wx.Frame):
                 setattr(dlg, "kernel", self.kernel)
             elif hasattr(dlg, "kernel_path"):
                 setattr(dlg, "kernel_path", self.kernel.path)
+            # also pass knowledge file list if dialog supports it
+            if hasattr(dlg, "set_knowledge_files"):
+                dlg.set_knowledge_files(list(self.knowledge_files))
             self.kernel.log("little_buddy_opened", kernel_path=self.kernel.path)
             if hasattr(dlg, "ShowModal"):
                 dlg.ShowModal()
@@ -893,9 +920,17 @@ class MainWindow(wx.Frame):
             return
         files = dlg.GetPaths()
         dlg.Destroy()
-        self.knowledge_files = files
-        self.knowledge_lbl.SetLabel(", ".join(os.path.basename(p) for p in files) if files else "(none)")
-        self.kernel.log("load_knowledge_files", count=len(files), files=[os.path.basename(p) for p in files])
+        # Always include kernel first
+        new_list = []
+        if self.kernel and os.path.exists(self.kernel.path):
+            new_list.append(self.kernel.path)
+        new_list.extend(files)
+        # de-dup while preserving order
+        seen = set()
+        self.knowledge_files = [x for x in new_list if not (x in seen or seen.add(x))]
+        self._update_knowledge_label_and_env()
+        self.kernel.log("load_knowledge_files", count=len(self.knowledge_files),
+                        files=[os.path.basename(p) for p in self.knowledge_files])
 
     def _load_text_file(self, path):
         return open(path, "r", encoding="utf-8", errors="ignore").read()
