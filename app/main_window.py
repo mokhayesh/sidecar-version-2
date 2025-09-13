@@ -159,7 +159,7 @@ class RoundedShadowButton(wx.Control):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Special "Little Buddy" pill with icon (GraphicsContext; no path clip)
+# Special "Little Buddy" pill with icon (GraphicsContext)
 # ──────────────────────────────────────────────────────────────────────────────
 class LittleBuddyPill(wx.Control):
     """A distinctive glossy pill with a speech-bubble icon, rendered via wx.GraphicsContext."""
@@ -273,11 +273,13 @@ class LittleBuddyPill(wx.Control):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# KPI badge
+# KPI badge (now flexible width so all KPIs fit one row)
 # ──────────────────────────────────────────────────────────────────────────────
 class KPIBadge(wx.Panel):
     def __init__(self, parent, title, init_value="—", colour=wx.Colour(32, 35, 41)):
-        super().__init__(parent, size=(230, 92))
+        super().__init__(parent)
+        # Flexible width: keep a modest minimum width; fixed height for look
+        self.SetMinSize((120, 92))
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
         self._title = title
         self._value = init_value
@@ -288,6 +290,7 @@ class KPIBadge(wx.Panel):
         self._font_value = wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
         self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
         self.Bind(wx.EVT_PAINT, self.on_paint)
+        self.Bind(wx.EVT_SIZE, lambda e: self.Refresh())
 
     def SetValue(self, v):
         self._value = v
@@ -500,15 +503,13 @@ class MainWindow(wx.Frame):
 
         main.Add(header_row, 0, wx.EXPAND)
 
-        # KPI band (anomalies pinned to the far right) and Little Buddy centered underneath
+        # KPI band: all eight KPIs share a single horizontal sizer with equal width
         kpi_panel = wx.Panel(self)
         kpi_panel.SetBackgroundColour(BG)
         kpi_v = wx.BoxSizer(wx.VERTICAL)
 
-        # Top row: KPIs on the left, anomalies on the right
-        top_row = wx.BoxSizer(wx.HORIZONTAL)
+        kpi_row = wx.BoxSizer(wx.HORIZONTAL)
 
-        left_flow = wx.WrapSizer(wx.HORIZONTAL)
         self.card_rows     = KPIBadge(kpi_panel, "Rows")
         self.card_cols     = KPIBadge(kpi_panel, "Columns")
         self.card_nulls    = KPIBadge(kpi_panel, "Null %")
@@ -518,18 +519,13 @@ class MainWindow(wx.Frame):
         self.card_complete = KPIBadge(kpi_panel, "Completeness")
         self.card_anoms    = KPIBadge(kpi_panel, "Anomalies")
 
-        # Add all EXCEPT anomalies to the left flow
         for c in (self.card_rows, self.card_cols, self.card_nulls, self.card_unique,
-                  self.card_quality, self.card_validity, self.card_complete):
-            left_flow.Add(c, 0, wx.ALL, 6)
+                  self.card_quality, self.card_validity, self.card_complete, self.card_anoms):
+            kpi_row.Add(c, 1, wx.ALL | wx.EXPAND, 6)
 
-        top_row.Add(left_flow, 1, wx.EXPAND | wx.RIGHT, 6)
-        # anomalies anchored visually to the right by stretch on the left side
-        top_row.Add(self.card_anoms, 0, wx.ALL | wx.ALIGN_TOP, 6)
+        kpi_v.Add(kpi_row, 0, wx.EXPAND)
 
-        kpi_v.Add(top_row, 0, wx.EXPAND)
-
-        # Second row: Little Buddy centered below the KPI strip
+        # Little Buddy centered under the KPI strip
         self.little_pill = LittleBuddyPill(kpi_panel, handler=self.on_little_buddy)
         kpi_v.Add(self.little_pill, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.TOP | wx.BOTTOM, 10)
 
@@ -550,7 +546,7 @@ class MainWindow(wx.Frame):
         self.Bind(wx.EVT_MENU, self.open_settings, id=OPEN_SETTINGS_ID)
         self.SetMenuBar(mb)
 
-        # Toolbar (Little Buddy NOT here anymore)
+        # Toolbar
         toolbar_panel = wx.Panel(self)
         toolbar_panel.SetBackgroundColour(PANEL)
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
@@ -1535,7 +1531,6 @@ class MainWindow(wx.Frame):
     def on_grid_resize(self, event):
         event.Skip()
         wx.CallAfter(self.adjust_grid)
-
 
 
 if __name__ == "__main__":
