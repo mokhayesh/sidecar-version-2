@@ -262,7 +262,7 @@ class DataBuddyDialog(wx.Dialog):
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
         self.voice.SetForegroundColour(self.COLORS["input_fg"])
-        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         opts.Add(self.voice, 0, wx.RIGHT | wx.EXPAND, 6)
 
         self.tts_checkbox = wx.CheckBox(pnl, label="🔊 Speak Reply")
@@ -402,7 +402,7 @@ class DataBuddyDialog(wx.Dialog):
         if self._bubble_open:
             self.reply.EndStyle()
         self._bubble_open = False
-               self._bubble_sender = None
+        self._bubble_sender = None
 
     def _append_user_bubble(self, text: str, fake: bool = False):
         self._start_bubble("user")
@@ -458,6 +458,7 @@ class DataBuddyDialog(wx.Dialog):
                     if ext in (".txt", ".md", ".csv", ".json", ".log"):
                         try:
                             with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                            # NOTE: read a little more than per_file to avoid mid-character cut
                                 data = fh.read(per_file)
                             chunks.append(f"File: {name}\n{data.strip()}")
                         except Exception:
