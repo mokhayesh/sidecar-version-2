@@ -61,10 +61,10 @@ class KernelManager:
             },
             "stats": {"launch_count": 0},
             "state": {
-                "last_dataset": None,   # {"rows": int, "cols": int, "columns": [..]}
-                "kpis": {}              # {"rows":..,"cols":..,"null_pct":.., ...}
+                "last_dataset": None,
+                "kpis": {}
             },
-            "events": []               # appended over time (capped)
+            "events": []
         }
 
         self._load_or_init()
@@ -75,7 +75,6 @@ class KernelManager:
             if os.path.exists(self.path):
                 with open(self.path, "r", encoding="utf-8") as f:
                     existing = json.load(f)
-                # merge a little bit, keep our metadata authoritative
                 existing.setdefault("kernel_version", "1.0")
                 existing.setdefault("creator", "Salah Mokhayesh")
                 existing.setdefault("app", self.data["app"])
@@ -86,13 +85,11 @@ class KernelManager:
             else:
                 self._save()
         except Exception:
-            # If anything goes wrong, start fresh
             self._save()
 
     def _save(self):
         with self.lock:
             try:
-                # cap events to last 5000
                 ev = self.data.get("events", [])
                 if len(ev) > 5000:
                     self.data["events"] = ev[-5000:]
@@ -642,9 +639,12 @@ class MainWindow(wx.Frame):
 
         kpi_v.Add(kpi_row, 0, wx.EXPAND)
 
-        # Little Buddy centered
+        # Little Buddy aligned to the RIGHT (under KPI strip)
         self.little_pill = LittleBuddyPill(kpi_panel, handler=self.on_little_buddy)
-        kpi_v.Add(self.little_pill, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.TOP | wx.BOTTOM, 10)
+        lb_row = wx.BoxSizer(wx.HORIZONTAL)
+        lb_row.AddStretchSpacer(1)
+        lb_row.Add(self.little_pill, 0, wx.RIGHT | wx.TOP | wx.BOTTOM, 10)
+        kpi_v.Add(lb_row, 0, wx.EXPAND)
 
         kpi_panel.SetSizer(kpi_v)
         main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
@@ -730,15 +730,27 @@ class MainWindow(wx.Frame):
         self.SetSizer(main)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Knowledge files helpers (keep label + env var in sync)
+    # Knowledge files helpers (keep label + env var in sync; kernel first)
     # ──────────────────────────────────────────────────────────────────────
+    def _get_prioritized_knowledge(self):
+        paths = []
+        if self.kernel and os.path.exists(self.kernel.path):
+            paths.append(self.kernel.path)
+        for p in self.knowledge_files:
+            if p != self.kernel.path:
+                paths.append(p)
+        return paths
+
     def _update_knowledge_label_and_env(self):
-        names = ", ".join(os.path.basename(p) for p in self.knowledge_files) if self.knowledge_files else "(none)"
+        # Label shows all; env var stores prioritized (kernel first)
+        names = ", ".join(os.path.basename(p) for p in self._get_prioritized_knowledge()) or "(none)"
         self.knowledge_lbl.SetLabel(names)
-        os.environ["SIDECAR_KNOWLEDGE_FILES"] = os.pathsep.join(self.knowledge_files)
+        prio = self._get_prioritized_knowledge()
+        os.environ["SIDECAR_KNOWLEDGE_FILES"] = os.pathsep.join(prio)
+        os.environ["SIDECAR_KNOWLEDGE_FIRST"] = "1"
+        os.environ["SIDECAR_KERNEL_FIRST"] = "1"
 
     def _ensure_kernel_in_knowledge(self):
-        """Ensure the kernel JSON is always present as a knowledge file on startup."""
         try:
             if self.kernel and os.path.exists(self.kernel.path):
                 if self.kernel.path not in self.knowledge_files:
@@ -746,7 +758,6 @@ class MainWindow(wx.Frame):
                 self._update_knowledge_label_and_env()
                 self.kernel.log("kernel_loaded_as_knowledge", path=self.kernel.path)
         except Exception:
-            # non-fatal
             pass
 
     # ──────────────────────────────────────────────────────────────────────
@@ -764,7 +775,6 @@ class MainWindow(wx.Frame):
             "anomalies": None,
         })
         self._render_kpis()
-        # kernel state
         self.kernel.set_last_dataset(columns=hdr, rows_count=len(data))
         self.kernel.log("dataset_loaded", rows=len(data), cols=len(hdr))
 
@@ -777,7 +787,6 @@ class MainWindow(wx.Frame):
         self.card_validity.SetValue(f"{self.metrics['validity']:.1f}%" if self.metrics["validity"] is not None else "—")
         self.card_complete.SetValue(f"{self.metrics['completeness']:.1f}%" if self.metrics["completeness"] is not None else "—")
         self.card_anoms.SetValue(str(self.metrics["anomalies"]) if self.metrics["anomalies"] is not None else "—")
-        # mirror in kernel
         self.kernel.set_kpis(self.metrics)
 
     @staticmethod
@@ -888,19 +897,36 @@ class MainWindow(wx.Frame):
             wx.MessageBox(f"Could not open Settings:\n{e}", "Settings", wx.OK | wx.ICON_ERROR)
 
     def on_little_buddy(self, _evt=None):
+        """Open chat and make Knowledge Files (kernel first) the primary context."""
         try:
             dlg = DataBuddyDialog(self)
-            # Pass kernel if dialog supports it; otherwise it can read env var
+
+            # Build prioritized list (kernel first), keep env vars in sync
+            prio = self._get_prioritized_knowledge()
+            os.environ["SIDECAR_KNOWLEDGE_FILES"] = os.pathsep.join(prio)
+            os.environ["SIDECAR_KNOWLEDGE_FIRST"] = "1"
+            os.environ["SIDECAR_KERNEL_FIRST"] = "1"
+
+            # Pass kernel + knowledge files to the dialog in a few compatible ways
             if hasattr(dlg, "set_kernel"):
                 dlg.set_kernel(self.kernel)
             elif hasattr(dlg, "kernel"):
                 setattr(dlg, "kernel", self.kernel)
             elif hasattr(dlg, "kernel_path"):
                 setattr(dlg, "kernel_path", self.kernel.path)
-            # also pass knowledge file list if dialog supports it
+
             if hasattr(dlg, "set_knowledge_files"):
-                dlg.set_knowledge_files(list(self.knowledge_files))
-            self.kernel.log("little_buddy_opened", kernel_path=self.kernel.path)
+                dlg.set_knowledge_files(list(prio))
+            else:
+                # common fallbacks some dialogs look for
+                setattr(dlg, "knowledge_files", list(prio))
+                setattr(dlg, "priority_sources", list(prio))
+                setattr(dlg, "knowledge_first", True)
+
+            self.kernel.log("little_buddy_opened",
+                            kernel_path=self.kernel.path,
+                            knowledge_files=[os.path.basename(p) for p in prio])
+
             if hasattr(dlg, "ShowModal"):
                 dlg.ShowModal()
                 if hasattr(dlg, "Destroy"):
@@ -920,17 +946,21 @@ class MainWindow(wx.Frame):
             return
         files = dlg.GetPaths()
         dlg.Destroy()
-        # Always include kernel first
+
+        # Make sure kernel is always included and first; then add selected files
         new_list = []
         if self.kernel and os.path.exists(self.kernel.path):
             new_list.append(self.kernel.path)
         new_list.extend(files)
+
         # de-dup while preserving order
         seen = set()
         self.knowledge_files = [x for x in new_list if not (x in seen or seen.add(x))]
+
         self._update_knowledge_label_and_env()
-        self.kernel.log("load_knowledge_files", count=len(self.knowledge_files),
-                        files=[os.path.basename(p) for p in self.knowledge_files])
+        self.kernel.log("load_knowledge_files",
+                        count=len(self._get_prioritized_knowledge()),
+                        files=[os.path.basename(p) for p in self._get_prioritized_knowledge()])
 
     def _load_text_file(self, path):
         return open(path, "r", encoding="utf-8", errors="ignore").read()
@@ -1147,13 +1177,10 @@ class MainWindow(wx.Frame):
         params = dlg.get_params()
         dlg.Destroy()
 
-        # Collect dataframes
         dataframes = []
-
         if params["include_current"]:
             dataframes.append(pd.DataFrame(self.raw_data, columns=self.headers))
 
-        # Add extra sources
         try:
             for src in params["sources"]:
                 if src["type"] == "file":
@@ -1327,7 +1354,6 @@ class MainWindow(wx.Frame):
             union_cols.update(cols)
             datasets.append((df.reset_index(drop=True), colmap))
 
-        # Prepare records with blocking
         records = []
         offset = 0
         for df, colmap in datasets:
@@ -1336,13 +1362,11 @@ class MainWindow(wx.Frame):
                 records.append((offset + i, row, colmap))
             offset += len(df)
 
-        # Build blocks
         blocks = defaultdict(list)
         for rec_id, row, cmap in records:
             key = self._block_key(row, cmap)
             blocks[(key, tuple(sorted(cmap.items())) )].append((rec_id, row, cmap))
 
-        # DSU for clustering
         parent = {}
         def find(x):
             parent.setdefault(x, x)
@@ -1354,7 +1378,6 @@ class MainWindow(wx.Frame):
             if ra != rb:
                 parent[rb] = ra
 
-        # Pairwise within blocks
         for _, members in blocks.items():
             n = len(members)
             if n <= 1:
@@ -1370,17 +1393,14 @@ class MainWindow(wx.Frame):
                     if score >= threshold:
                         union(id_a, id_b)
 
-        # Collect clusters
         clusters = defaultdict(list)
         for rec_id, row, cmap in records:
             clusters[find(rec_id)].append((row, cmap))
 
         def best_value(values):
-            """Majority vote; numeric -> median; date -> most recent; tie -> longest string."""
             vals = [v for v in values if (v is not None and str(v).strip() != "")]
             if not vals:
                 return ""
-            # Date-like?
             parsed = []
             for v in vals:
                 s = str(v)
@@ -1392,12 +1412,10 @@ class MainWindow(wx.Frame):
                         continue
             if parsed and len(parsed) >= len(vals) * 0.6:
                 return max(parsed).strftime("%Y-%m-%d")
-            # Numeric?
             nums = pd.to_numeric(pd.Series(vals).astype(str).str.replace(",", ""), errors="coerce").dropna()
             if len(nums) >= len(vals) * 0.6:
                 med = float(nums.median())
                 return str(int(med)) if med.is_integer() else f"{med:.2f}"
-            # Majority / longest
             counts = Counter([str(v).strip() for v in vals])
             top, freq = counts.most_common(1)[0]
             ties = [k for k, c in counts.items() if c == freq]
@@ -1583,8 +1601,7 @@ class MainWindow(wx.Frame):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            parts = line.split(maxsplit(1)
-            )
+            parts = line.split(maxsplit(1))
             action = parts[0]
             arg = parts[1] if len(parts) == 2 else None
             t = {"action": action}
