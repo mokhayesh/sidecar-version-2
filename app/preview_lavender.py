@@ -1,7 +1,22 @@
-# preview_lavender.py
+# app/preview_lavender.py
+import os
+import sys
 import wx
 import wx.grid as gridlib
-from app.theme_lavender import LavTheme, CardButton, KPIChipLight, ChipTag, LittleBuddyDock
+
+# --- Robust imports so it works whether you run from repo root or from app/ ---
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+PARENT_DIR = os.path.dirname(THIS_DIR)
+if PARENT_DIR not in sys.path:
+    sys.path.insert(0, PARENT_DIR)
+
+try:
+    # Works when you run from the repo root:  python -m app.preview_lavender
+    from app.theme_lavender import LavTheme, CardButton, KPIChipLight, ChipTag, LittleBuddyDock
+except ModuleNotFoundError:
+    # Works when you run from inside app/:  python preview_lavender.py
+    from theme_lavender import LavTheme, CardButton, KPIChipLight, ChipTag, LittleBuddyDock
+
 
 class LavenderPreviewFrame(wx.Frame):
     def __init__(self):
@@ -10,15 +25,20 @@ class LavenderPreviewFrame(wx.Frame):
         v = wx.BoxSizer(wx.VERTICAL)
 
         # Header band
-        header = wx.Panel(self); header.SetBackgroundColour(LavTheme.panel)
+        header = wx.Panel(self)
+        header.SetBackgroundColour(LavTheme.panel)
         hbox = wx.BoxSizer(wx.HORIZONTAL)
+
         title = wx.StaticText(header, label="Data Buddy")
-        title.SetFont(wx.Font(18, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(18, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         title.SetForegroundColour(LavTheme.purple)
+
         hbox.Add(title, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 12)
         hbox.AddStretchSpacer()
+
         self.help_btn = CardButton(header, "Little Buddy", handler=self._toggle_buddy, width=140)
         hbox.Add(self.help_btn, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 8)
+
         header.SetSizer(hbox)
         v.Add(header, 0, wx.EXPAND)
 
@@ -32,13 +52,17 @@ class LavenderPreviewFrame(wx.Frame):
         self.k_val  = KPIChipLight(self, "Validity", "88.0%")
         self.k_cmp  = KPIChipLight(self, "Completeness", "96.2%")
         self.k_anom = KPIChipLight(self, "Anomalies", "12")
-        for c in (self.k_rows,self.k_cols,self.k_null,self.k_uniq,self.k_dq,self.k_val,self.k_cmp,self.k_anom):
+        for c in (self.k_rows, self.k_cols, self.k_null, self.k_uniq,
+                  self.k_dq, self.k_val, self.k_cmp, self.k_anom):
             kpis.Add(c, 0, wx.ALL, LavTheme.gap)
         v.Add(kpis, 0, wx.LEFT | wx.RIGHT | wx.TOP, LavTheme.gap)
 
         # App buttons row (white cards)
         tools = wx.WrapSizer(wx.HORIZONTAL)
-        def noop(_): wx.MessageBox("Preview only — your real handlers stay untouched.", "Preview")
+
+        def noop(_):
+            wx.MessageBox("Preview only — your real handlers stay untouched.", "Preview")
+
         for label in ("Upload", "Profile", "Quality", "Catalog", "Anomalies", "Optimizer", "To Do"):
             tools.Add(CardButton(self, label, handler=noop, width=120), 0, wx.ALL, LavTheme.gap)
         v.Add(tools, 0, wx.LEFT | wx.RIGHT | wx.TOP, LavTheme.gap)
@@ -47,31 +71,38 @@ class LavenderPreviewFrame(wx.Frame):
         body = wx.BoxSizer(wx.VERTICAL)
         done = wx.StaticText(self, label="Cataloging complete.")
         done.SetForegroundColour(LavTheme.text)
-        done.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        done.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         body.Add(done, 0, wx.LEFT | wx.TOP, 14)
 
-        grid = gridlib.Grid(self); grid.CreateGrid(0,0)
-        grid.AppendCols(3); [grid.SetColLabelValue(i, l) for i,l in enumerate(["Title","Rows","Description"])]
+        grid = gridlib.Grid(self)
+        grid.CreateGrid(0, 0)
+        grid.AppendCols(3)
+        for i, l in enumerate(["Title", "Rows", "Description"]):
+            grid.SetColLabelValue(i, l)
         rows = [
-            ["Knowledge Base","2734","Knowledge docs and policies"],
-            ["Employees.csv","418","HR employee roster"],
+            ["Knowledge Base", "2734", "Knowledge docs and policies"],
+            ["Employees.csv",  "418",  "HR employee roster"],
         ]
         grid.AppendRows(len(rows))
-        for r,row in enumerate(rows):
-            for c,val in enumerate(row):
-                grid.SetCellValue(r,c,str(val))
-        grid.SetLabelBackgroundColour(wx.Colour(245,245,252))
+        for r, row in enumerate(rows):
+            for c, val in enumerate(row):
+                grid.SetCellValue(r, c, str(val))
+        grid.SetLabelBackgroundColour(wx.Colour(245, 245, 252))
         grid.SetLabelTextColour(LavTheme.muted)
-        grid.SetDefaultCellBackgroundColour(wx.Colour(255,255,255))
+        grid.SetDefaultCellBackgroundColour(wx.Colour(255, 255, 255))
         grid.SetDefaultCellTextColour(LavTheme.text)
-        grid.EnableEditing(False); grid.SetRowLabelSize(0)
+        grid.EnableEditing(False)
+        grid.SetRowLabelSize(0)
         grid.AutoSizeColumns(False)
-        grid.SetColSize(0, 260); grid.SetColSize(1, 80); grid.SetColSize(2, 400)
+        grid.SetColSize(0, 260)
+        grid.SetColSize(1, 80)
+        grid.SetColSize(2, 400)
         body.Add(grid, 1, wx.EXPAND | wx.ALL, 12)
         v.Add(body, 1, wx.EXPAND)
 
         # Knowledge Files chips
-        chips_panel = wx.Panel(self); chips_panel.SetBackgroundColour(LavTheme.bg)
+        chips_panel = wx.Panel(self)
+        chips_panel.SetBackgroundColour(LavTheme.bg)
         chips = wx.WrapSizer(wx.HORIZONTAL)
         chips.Add(ChipTag(chips_panel, "Kernel.json"), 0, wx.ALL, 4)
         chips.Add(ChipTag(chips_panel, "vacation-policy.pdf"), 0, wx.ALL, 4)
@@ -95,8 +126,10 @@ class LavenderPreviewFrame(wx.Frame):
         self._dock.Show()
 
     def _on_buddy_search(self, query):
-        wx.MessageBox(f"Preview would open your real Little Buddy with query:\n\n{query}",
-                      "Little Buddy (Preview)")
+        wx.MessageBox(
+            f"Preview would open your real Little Buddy with query:\n\n{query}",
+            "Little Buddy (Preview)"
+        )
 
 if __name__ == "__main__":
     app = wx.App(False)
