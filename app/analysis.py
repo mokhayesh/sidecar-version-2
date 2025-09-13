@@ -39,8 +39,11 @@ def profile_analysis(df: pd.DataFrame):
         blanks = int((s.astype(str).str.strip() == "").sum())
         uniq = int(s.nunique(dropna=True))
         comp = round(100 * (total - nulls - blanks) / total, 2) if total else 0
-        if pd.api.types.is_numeric_dtype(s):
-            vals = pd.to_numeric(s, errors="coerce").dropna()
+
+        # Treat numeric-looking strings as numeric (strip thousands separators)
+        s_num = pd.to_numeric(s.astype(str).str.replace(",", ""), errors="coerce")
+        if s_num.notna().sum() > 0:
+            vals = s_num.dropna()
             stats = (vals.min(), vals.max(), vals.median(), vals.std()) if not vals.empty else ("N/A",) * 4
         else:
             lengths = s.dropna().astype(str).str.strip().replace("", pd.NA).dropna().str.len()
@@ -51,6 +54,7 @@ def profile_analysis(df: pd.DataFrame):
                 "N/A"
             )
         rows.append([col, total, uniq, comp, nulls, blanks, *stats, now])
+
     hdr = ["Field", "Total", "Unique", "Completeness (%)",
            "Nulls", "Blanks", "Min", "Max", "Median", "Std", "Analysis Date"]
     return hdr, rows
@@ -60,12 +64,17 @@ _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 _DATE_PARSE = lambda x: pd.to_datetime(x, errors="coerce")
 
 def _default_valid_count(s: pd.Series) -> int:
-    if pd.api.types.is_numeric_dtype(s):
-        return pd.to_numeric(s, errors="coerce").notna().sum()
-    if "date" in s.name.lower() or pd.api.types.is_datetime64_any_dtype(s):
-        return _DATE_PARSE(s).notna().sum()
-    if "email" in s.name.lower():
+    name = (s.name or "").lower()
+    # Semantic checks first
+    if "email" in name:
         return s.astype(str).str.match(_EMAIL_RE).sum()
+    if "date" in name or pd.api.types.is_datetime64_any_dtype(s):
+        return _DATE_PARSE(s).notna().sum()
+    # Numeric-looking strings (strip commas)
+    nums = pd.to_numeric(s.astype(str).str.replace(",", ""), errors="coerce")
+    if nums.notna().sum() >= max(1, int(0.5 * len(s))):
+        return int(nums.notna().sum())
+    # Fallback: non-empty strings
     return s.astype(str).str.strip().ne("").sum()
 
 def quality_analysis(df: pd.DataFrame, rules: dict[str, re.Pattern] | None = None):
@@ -161,17 +170,20 @@ def _rule_based_anomalies(df: pd.DataFrame):
         s = df[col].astype(str).str.strip()
         blanks = int((s == "").sum())
         nulls = int((s.str.lower() == "nan").sum())
-        numeric = pd.to_numeric(df[col], errors="coerce")
+
+        # Numeric with commas supported
+        numeric = pd.to_numeric(df[col].astype(str).str.replace(",", ""), errors="coerce")
         if numeric.notna().any():
             neg = int((numeric < 0).sum())
-            std = numeric.std(skipna=True) or 0
-            huge = int((numeric > numeric.mean(skipna=True) + 6*std).sum())
+            std = float(numeric.std(skipna=True) or 0)
+            huge = int((numeric > numeric.mean(skipna=True) + 6 * std).sum()) if std else 0
         else:
             neg = huge = 0
 
         bad_email = 0
         if "email" in col.lower():
-            bad_email = int(~s.str.contains(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", regex=True, na=True).sum())
+            mask_valid = s.str.contains(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", regex=True, na=False)
+            bad_email = int((~mask_valid).sum())
 
         if blanks or nulls or neg or huge or bad_email:
             reason = []
@@ -211,7 +223,7 @@ def anomalies_analysis(df: pd.DataFrame):
     for idx in dups[dups].index.tolist():
         findings.append(["(row)", "Duplicate row", "Deduplicate or add a key", now])
 
-    # 1) Missing / blank cells
+    # 1) Missing / blank
     for col in df.columns:
         s = df[col]
         blanks_mask = s.astype(str).str.strip().eq("") | s.isna()
@@ -219,9 +231,9 @@ def anomalies_analysis(df: pd.DataFrame):
         if n_blanks:
             findings.append([col, f"{n_blanks} missing/blank", "Impute, drop or enforce NOT NULL", now])
 
-    # 2) Numeric outliers via z-score > 3
+    # 2) Numeric outliers via z-score > 3 (handles commas)
     for col in df.columns:
-        s_num = pd.to_numeric(df[col], errors="coerce")
+        s_num = pd.to_numeric(df[col].astype(str).str.replace(",", ""), errors="coerce")
         if s_num.notna().sum() == 0:
             continue
         mu = s_num.mean()
@@ -230,7 +242,7 @@ def anomalies_analysis(df: pd.DataFrame):
             z = (s_num - mu).abs() / sigma
             out_idx = z[z > 3].index.tolist()
             if out_idx:
-                findings.append([col, f"{len(out_idx)} numeric outlier(s) |z|>3", "Investigate/clip/winsorize", now])
+                findings.append([col, f"{len(out_idx)} outlier(s) (|z|>3)", "Winsorize, robust scale, or verify source", now])
 
     # 3) Email format check
     email_cols = [c for c in df.columns if "email" in c.lower()]
@@ -264,15 +276,21 @@ def detect_anomalies(df: pd.DataFrame):
 
 def _provider_from_defaults(defaults: dict) -> str:
     # Expected: "openai" or "gemini" (case-insensitive). Anything else -> no-op.
-    return (defaults.get("provider") or defaults.get("ai_provider") or "").strip().lower()
+    prov = (defaults.get("provider") or "").strip().lower()
+    if "gemini" in prov:
+        return "gemini"
+    if "openai" in prov:
+        return "openai"
+    return ""
 
-def _openai_chat_json(defaults: dict, prompt: str, model: str | None = None, timeout=60):
-    api_key = (defaults.get("openai_api_key") or defaults.get("api_key") or "").strip()
-    url = (defaults.get("chat_url") or "https://api.openai.com/v1/chat/completions").strip()
+def _openai_json(defaults: dict, prompt: str, model: str | None = None, timeout=60):
+    api_key = (defaults.get("openai_api_key") or "").strip()
+    base = (defaults.get("openai_base_url") or "https://api.openai.com").rstrip("/")
     mdl = model or defaults.get("default_model") or "gpt-4o-mini"
     if not api_key:
         raise RuntimeError("OpenAI API key not configured")
 
+    url = f"{base}/v1/chat/completions"
     resp = requests.post(
         url,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -306,64 +324,47 @@ def _gemini_json(defaults: dict, prompt: str, model: str | None = None, timeout=
     }
     resp = requests.post(url, json=body, timeout=timeout)
     resp.raise_for_status()
-    text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-    # try to isolate a JSON block if the model wrapped it in prose
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        text = text[start:end+1]
-    return json.loads(text)
+    data = resp.json()
+    # best effort to parse JSON content from Gemini response
+    txt = data["candidates"][0]["content"]["parts"][0]["text"]
+    return json.loads(txt)
 
-def _llm_json(defaults: dict, prompt: str, model: str | None = None, timeout=60):
-    prov = _provider_from_defaults(defaults)
-    if prov == "openai":
-        return _openai_chat_json(defaults, prompt, model, timeout)
-    if prov == "gemini":
-        return _gemini_json(defaults, prompt, model, timeout)
-    raise RuntimeError("No AI provider configured")
+def run_llm_json(defaults: dict, prompt: str, *, model: str | None = None, provider: str | None = None) -> dict:
+    provider = (provider or _provider_from_defaults(defaults) or "openai").lower()
+    if provider == "gemini":
+        return _gemini_json(defaults, prompt, model=model)
+    return _openai_json(defaults, prompt, model=model)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# AI Catalog & AI Anomalies (with fallbacks)
+# AI-assisted catalog/anomaly (optional)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def ai_catalog_analysis(df: pd.DataFrame, defaults: dict):
-    """LLM-backed catalog; falls back to heuristic if the call fails."""
+def ai_catalog(df: pd.DataFrame, defaults: dict):
+    """LLM-backed catalog; falls back to simple catalog on error."""
     try:
-        preview_rows = min(12, len(df))
+        preview_rows = min(30, len(df))
         sample = df.head(preview_rows).astype(str).to_dict(orient="records")
-        schema = []
-        for c in df.columns:
-            dtype = str(df[c].dtype)
-            nulls = int(df[c].isna().sum())
-            uniq = int(df[c].nunique(dropna=True))
-            schema.append({"name": c, "dtype": dtype, "nulls": nulls, "unique": uniq})
+        cols = list(df.columns)
 
         prompt = (
-            "You are generating a data catalog for a tabular dataset.\n"
-            "Return STRICT JSON with this structure:\n"
-            "{ \"items\": [\n"
-            "  {\"field\": str, \"friendly_name\": str, \"description\": str,\n"
-            "   \"data_type\": one_of[\"Text\",\"Numeric\",\"Date\",\"Boolean\",\"Categorical\"],\n"
-            "   \"nullable\": one_of[\"Yes\",\"No\"], \"example\": str }\n"
-            "]}\n\n"
-            f"Columns & quick stats:\n{json.dumps(schema, ensure_ascii=False)}\n\n"
-            f"Sample rows (strings):\n{json.dumps(sample, ensure_ascii=False)}\n\n"
-            "Be concise and business-friendly in descriptions. Do NOT include any text outside the JSON."
+            "Create a column catalog for the dataset. Return STRICT JSON ONLY:\n"
+            "{ \"rows\": [ {\"field\": str, \"friendly\": str, \"description\": str, \"dtype\": str, \"nullable\": bool, \"example\": str} ] }\n"
+            "Use friendly names (Title Case), concise descriptions (<= 12 words), and infer dtype from values.\n\n"
+            f"Columns: {json.dumps(cols, ensure_ascii=False)}\n"
+            f"Preview: {json.dumps(sample, ensure_ascii=False)}"
         )
-
-        obj = _llm_json(defaults, prompt)
-        items = obj.get("items") or []
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        out = run_llm_json(defaults, prompt)
         rows = []
-        for it in items:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for r in out.get("rows", []):
             rows.append([
-                it.get("field",""),
-                it.get("friendly_name",""),
-                it.get("description",""),
-                it.get("data_type",""),
-                it.get("nullable",""),
-                it.get("example",""),
+                r.get("field",""),
+                r.get("friendly",""),
+                r.get("description",""),
+                r.get("dtype",""),
+                "Yes" if r.get("nullable", True) else "No",
+                r.get("example",""),
                 now
             ])
         if not rows:
@@ -397,14 +398,13 @@ def ai_detect_anomalies(df: pd.DataFrame, defaults: dict):
             "Reasons should be specific (e.g., 'outliers > 6 sigma', 'invalid email format', 'suspicious zero balance').\n"
             "Recommendations should be actionable (e.g., 'validate format with regex', 'clip to 3σ', 'backfill from source').\n\n"
             f"Quick stats per column: {json.dumps(quick, ensure_ascii=False)}\n\n"
-            f"Sample rows (strings): {json.dumps(sample, ensure_ascii=False)}\n\n"
-            "Output ONLY valid JSON."
+            f"Sample rows: {json.dumps(sample, ensure_ascii=False)}"
         )
 
-        obj = _llm_json(defaults, prompt)
-        items = obj.get("items") or []
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        out = run_llm_json(defaults, prompt)
+        items = out.get("items", [])
         rows = []
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for it in items:
             rows.append([
                 it.get("field",""),

@@ -1123,7 +1123,8 @@ class SyntheticDataDialog(wx.Dialog):
             state = random.choice(self._STATES); zipc = random.randint(10000, 99999)
             return f"{num} {street}, {city}, {state} {zipc}"
         if kind == "money":
-            return f"{random.uniform(10, 100000):,.2f}"
+            # Return a float to keep it numeric for analysis; format only on export/display
+            return round(random.uniform(10, 100000), 2)
         if kind == "date":
             base = datetime.now() - timedelta(days=365*5)
             d = base + timedelta(days=random.randint(0, 365*5))
