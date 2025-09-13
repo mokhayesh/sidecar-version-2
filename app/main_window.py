@@ -24,6 +24,123 @@ from app.analysis import (
     compliance_analysis,
 )
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Kernel: persistent app “memory”
+# ──────────────────────────────────────────────────────────────────────────────
+class KernelManager:
+    """
+    Lightweight JSON kernel that:
+      • stores metadata (version, creator, features)
+      • logs interactions/events with timestamps
+      • persists simple state (last dataset + KPIs)
+    """
+
+    def __init__(self, app_name="Data Buddy — Sidecar Application"):
+        self.lock = threading.Lock()
+        self.dir = os.path.join(os.path.expanduser("~"), ".sidecar")
+        os.makedirs(self.dir, exist_ok=True)
+        self.path = os.path.join(self.dir, "kernel.json")
+
+        # advertise to any dialogs/child processes
+        os.environ["SIDECAR_KERNEL_PATH"] = self.path
+
+        # default structure
+        self.data = {
+            "kernel_version": "1.0",
+            "creator": "Salah Mokhayesh",
+            "app": {
+                "name": app_name,
+                "modules": [
+                    "Knowledge Files", "Load File", "Load from URI/S3",
+                    "MDM", "Synthetic Data", "Rule Assignment",
+                    "Profile", "Quality", "Detect Anomalies",
+                    "Catalog", "Compliance", "Tasks",
+                    "Export CSV", "Export TXT", "Upload to S3"
+                ]
+            },
+            "stats": {"launch_count": 0},
+            "state": {
+                "last_dataset": None,   # {"rows": int, "cols": int, "columns": [..]}
+                "kpis": {}              # {"rows":..,"cols":..,"null_pct":.., ...}
+            },
+            "events": []               # appended over time (capped)
+        }
+
+        self._load_or_init()
+        self.increment_launch()
+
+    def _load_or_init(self):
+        try:
+            if os.path.exists(self.path):
+                with open(self.path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                # merge a little bit, keep our metadata authoritative
+                existing.setdefault("kernel_version", "1.0")
+                existing.setdefault("creator", "Salah Mokhayesh")
+                existing.setdefault("app", self.data["app"])
+                existing.setdefault("stats", {"launch_count": 0})
+                existing.setdefault("state", {"last_dataset": None, "kpis": {}})
+                existing.setdefault("events", [])
+                self.data = existing
+            else:
+                self._save()
+        except Exception:
+            # If anything goes wrong, start fresh
+            self._save()
+
+    def _save(self):
+        with self.lock:
+            try:
+                # cap events to last 5000
+                ev = self.data.get("events", [])
+                if len(ev) > 5000:
+                    self.data["events"] = ev[-5000:]
+                with open(self.path, "w", encoding="utf-8") as f:
+                    json.dump(self.data, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
+    def increment_launch(self):
+        with self.lock:
+            self.data["stats"]["launch_count"] = int(self.data["stats"].get("launch_count", 0)) + 1
+        self._save()
+
+    def log(self, event_type, **payload):
+        evt = {
+            "ts": datetime.utcnow().isoformat() + "Z",
+            "type": event_type,
+            "payload": payload
+        }
+        with self.lock:
+            self.data.setdefault("events", []).append(evt)
+        self._save()
+
+    def set_last_dataset(self, columns, rows_count):
+        with self.lock:
+            self.data["state"]["last_dataset"] = {
+                "rows": int(rows_count),
+                "cols": int(len(columns or [])),
+                "columns": list(columns or [])
+            }
+        self._save()
+
+    def set_kpis(self, kpi_dict):
+        with self.lock:
+            self.data["state"]["kpis"] = dict(kpi_dict or {})
+        self._save()
+
+    def summary(self):
+        with self.lock:
+            ev = self.data.get("events", [])
+            return {
+                "events_total": len(ev),
+                "last_event": ev[-1] if ev else None,
+                "kpis": self.data.get("state", {}).get("kpis", {}),
+                "last_dataset": self.data.get("state", {}).get("last_dataset", None),
+            }
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Header banner (double-buffered, no flicker)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -151,7 +268,6 @@ class RoundedShadowButton(wx.Control):
         dc.SetPen(wx.Pen(base))
         dc.DrawRoundedRectangle(0, 0, w - 2, h - 2, self._radius)
 
-        # label
         dc.SetTextForeground(self._text_colour)
         dc.SetFont(self._font)
         tw, th = dc.GetTextExtent(self._label)
@@ -273,12 +389,11 @@ class LittleBuddyPill(wx.Control):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# KPI badge (now flexible width so all KPIs fit one row)
+# KPI badge (flex width so 8 KPIs fit one row)
 # ──────────────────────────────────────────────────────────────────────────────
 class KPIBadge(wx.Panel):
     def __init__(self, parent, title, init_value="—", colour=wx.Colour(32, 35, 41)):
         super().__init__(parent)
-        # Flexible width: keep a modest minimum width; fixed height for look
         self.SetMinSize((120, 92))
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
         self._title = title
@@ -286,8 +401,8 @@ class KPIBadge(wx.Panel):
         self._colour = colour
         self._accent = wx.Colour(90, 180, 255)
         self._accent2 = wx.Colour(80, 210, 140)
-        self._font_title = wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
-        self._font_value = wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        self._font_title = wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL)
+        self._font_value = wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD)
         self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
         self.Bind(wx.EVT_PAINT, self.on_paint)
         self.Bind(wx.EVT_SIZE, lambda e: self.Refresh())
@@ -299,30 +414,24 @@ class KPIBadge(wx.Panel):
     def on_paint(self, _):
         dc = wx.AutoBufferedPaintDC(self)
         w, h = self.GetClientSize()
-
-        # background card
         bg = wx.Colour(28, 28, 28)
         dc.SetBrush(wx.Brush(bg))
         dc.SetPen(wx.Pen(bg))
         dc.DrawRoundedRectangle(0, 0, w, h, 10)
 
-        # inner
         dc.SetBrush(wx.Brush(self._colour))
         dc.SetPen(wx.Pen(self._colour))
         dc.DrawRoundedRectangle(6, 6, w - 12, h - 12, 8)
 
-        # title
         dc.SetTextForeground(wx.Colour(180, 180, 180))
         dc.SetFont(self._font_title)
         dc.DrawText(self._title.upper(), 18, 12)
 
-        # decorative bars
         dc.SetPen(wx.Pen(self._accent, 3))
         dc.DrawLine(16, h - 22, w - 24, h - 22)
         dc.SetPen(wx.Pen(self._accent2, 3))
         dc.DrawLine(16, h - 16, w - 24, h - 16)
 
-        # value
         dc.SetTextForeground(wx.Colour(240, 240, 240))
         dc.SetFont(self._font_value)
         dc.DrawText(str(self._value), 18, 34)
@@ -450,6 +559,10 @@ class MainWindow(wx.Frame):
                 except Exception:
                     pass
 
+        # ── Kernel (created on startup; logs begin immediately)
+        self.kernel = KernelManager(app_name="Data Buddy — Sidecar Application")
+        self.kernel.log("app_started", version=self.kernel.data["kernel_version"])
+
         self.headers = []
         self.raw_data = []
         self.knowledge_files = []
@@ -493,7 +606,7 @@ class MainWindow(wx.Frame):
         title_panel.SetBackgroundColour(header_bg)
         title = wx.StaticText(title_panel, label="Data Buddy — Sidecar Application")
         title.SetForegroundColour(wx.Colour(230, 230, 230))
-        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
         tp_sizer = wx.BoxSizer(wx.VERTICAL)
         tp_sizer.AddStretchSpacer()
         tp_sizer.Add(title, 0, wx.ALL, 4)
@@ -503,7 +616,7 @@ class MainWindow(wx.Frame):
 
         main.Add(header_row, 0, wx.EXPAND)
 
-        # KPI band: all eight KPIs share a single horizontal sizer with equal width
+        # KPI strip
         kpi_panel = wx.Panel(self)
         kpi_panel.SetBackgroundColour(BG)
         kpi_v = wx.BoxSizer(wx.VERTICAL)
@@ -525,7 +638,7 @@ class MainWindow(wx.Frame):
 
         kpi_v.Add(kpi_row, 0, wx.EXPAND)
 
-        # Little Buddy centered under the KPI strip
+        # Little Buddy centered
         self.little_pill = LittleBuddyPill(kpi_panel, handler=self.on_little_buddy)
         kpi_v.Add(self.little_pill, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.TOP | wx.BOTTOM, 10)
 
@@ -581,7 +694,7 @@ class MainWindow(wx.Frame):
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
         lab.SetForegroundColour(TXT)
-        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
         self.knowledge_lbl = wx.StaticText(info_panel, label="(none)")
         self.knowledge_lbl.SetForegroundColour(wx.Colour(200, 200, 200))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
@@ -627,6 +740,9 @@ class MainWindow(wx.Frame):
             "anomalies": None,
         })
         self._render_kpis()
+        # kernel state
+        self.kernel.set_last_dataset(columns=hdr, rows_count=len(data))
+        self.kernel.log("dataset_loaded", rows=len(data), cols=len(hdr))
 
     def _render_kpis(self):
         self.card_rows.SetValue(self.metrics["rows"] if self.metrics["rows"] is not None else "—")
@@ -637,6 +753,8 @@ class MainWindow(wx.Frame):
         self.card_validity.SetValue(f"{self.metrics['validity']:.1f}%" if self.metrics["validity"] is not None else "—")
         self.card_complete.SetValue(f"{self.metrics['completeness']:.1f}%" if self.metrics["completeness"] is not None else "—")
         self.card_anoms.SetValue(str(self.metrics["anomalies"]) if self.metrics["anomalies"] is not None else "—")
+        # mirror in kernel
+        self.kernel.set_kpis(self.metrics)
 
     @staticmethod
     def _as_df(rows, cols):
@@ -735,6 +853,7 @@ class MainWindow(wx.Frame):
     def open_settings(self, _evt=None):
         try:
             dlg = SettingsWindow(self)
+            self.kernel.log("open_settings")
             if hasattr(dlg, "ShowModal"):
                 dlg.ShowModal()
                 if hasattr(dlg, "Destroy"):
@@ -747,6 +866,14 @@ class MainWindow(wx.Frame):
     def on_little_buddy(self, _evt=None):
         try:
             dlg = DataBuddyDialog(self)
+            # Pass kernel if dialog supports it; otherwise it can read env var
+            if hasattr(dlg, "set_kernel"):
+                dlg.set_kernel(self.kernel)
+            elif hasattr(dlg, "kernel"):
+                setattr(dlg, "kernel", self.kernel)
+            elif hasattr(dlg, "kernel_path"):
+                setattr(dlg, "kernel_path", self.kernel.path)
+            self.kernel.log("little_buddy_opened", kernel_path=self.kernel.path)
             if hasattr(dlg, "ShowModal"):
                 dlg.ShowModal()
                 if hasattr(dlg, "Destroy"):
@@ -768,6 +895,7 @@ class MainWindow(wx.Frame):
         dlg.Destroy()
         self.knowledge_files = files
         self.knowledge_lbl.SetLabel(", ".join(os.path.basename(p) for p in files) if files else "(none)")
+        self.kernel.log("load_knowledge_files", count=len(files), files=[os.path.basename(p) for p in files])
 
     def _load_text_file(self, path):
         return open(path, "r", encoding="utf-8", errors="ignore").read()
@@ -789,6 +917,7 @@ class MainWindow(wx.Frame):
         self.raw_data = data
         self._display(hdr, data)
         self._reset_kpis_for_new_dataset(hdr, data)
+        self.kernel.log("load_file", path=path, rows=len(data), cols=len(hdr))
 
     def on_load_s3(self, _evt=None):
         with wx.TextEntryDialog(self, "Enter URI (S3 presigned or HTTP/HTTPS):", "Load from URI/S3") as dlg:
@@ -805,6 +934,7 @@ class MainWindow(wx.Frame):
         self.raw_data = data
         self._display(hdr, data)
         self._reset_kpis_for_new_dataset(hdr, data)
+        self.kernel.log("load_uri", uri=uri, rows=len(data), cols=len(hdr))
 
     def on_rules(self, _evt=None):
         if not self.headers:
@@ -824,6 +954,7 @@ class MainWindow(wx.Frame):
                 res = dlg.ShowModal()
                 if res == wx.ID_OK:
                     self.quality_rules = getattr(dlg, "current_rules", current_rules)
+                    self.kernel.log("rules_updated", rules=self.quality_rules)
                 if hasattr(dlg, "Destroy"):
                     dlg.Destroy()
             else:
@@ -964,6 +1095,7 @@ class MainWindow(wx.Frame):
         self.raw_data = data
         self._display(hdr, data)
         self._reset_kpis_for_new_dataset(hdr, data)
+        self.kernel.log("synthetic_generated", rows=len(data), cols=len(hdr), fields=hdr)
 
     # ──────────────────────────────────────────────────────────────────────
     # MDM — match & merge to golden records
@@ -1026,6 +1158,7 @@ class MainWindow(wx.Frame):
         self._display(hdr, data)
         self._reset_kpis_for_new_dataset(hdr, data)
         self.current_process = "MDM"
+        self.kernel.log("mdm_completed", golden_rows=len(data), golden_cols=len(hdr), params=params)
 
     # Field name helpers
     @staticmethod
@@ -1069,7 +1202,6 @@ class MainWindow(wx.Frame):
         return SequenceMatcher(None, a, b).ratio()
 
     def _block_key(self, row, cols):
-        """Simple blocking: prefer email/phone; else name initials + zip/city."""
         e = row.get(cols.get("email"))
         if e:
             return f"e:{self._norm_email(e)}"
@@ -1143,7 +1275,6 @@ class MainWindow(wx.Frame):
 
     def _run_mdm(self, dataframes, use_email=True, use_phone=True, use_name=True, use_addr=True, threshold=0.85):
         """Return golden-record DataFrame from a list of DataFrames."""
-        # Normalize column names & pick likely identity columns
         datasets = []
         union_cols = set()
         for df in dataframes:
@@ -1209,7 +1340,6 @@ class MainWindow(wx.Frame):
         for rec_id, row, cmap in records:
             clusters[find(rec_id)].append((row, cmap))
 
-        # Merge strategy per column
         def best_value(values):
             """Majority vote; numeric -> median; date -> most recent; tie -> longest string."""
             vals = [v for v in values if (v is not None and str(v).strip() != "")]
@@ -1240,7 +1370,6 @@ class MainWindow(wx.Frame):
                 return ties[0]
             return max(ties, key=len)
 
-        # Create golden rows
         all_cols = list(sorted(union_cols, key=lambda x: x.lower()))
         golden_rows = []
         for cluster_rows in clusters.values():
@@ -1276,6 +1405,7 @@ class MainWindow(wx.Frame):
             self.metrics["null_pct"] = null_pct
             self.metrics["uniqueness"] = uniq_pct
             self._render_kpis()
+            self.kernel.log("run_profile", null_pct=null_pct, uniqueness=uniq_pct)
 
         elif proc_name == "Quality":
             try:
@@ -1287,6 +1417,7 @@ class MainWindow(wx.Frame):
             self.metrics["validity"] = validity
             self.metrics["dq_score"] = dq
             self._render_kpis()
+            self.kernel.log("run_quality", completeness=completeness, validity=validity, dq_score=dq)
 
         elif proc_name == "Detect Anomalies":
             try:
@@ -1297,6 +1428,7 @@ class MainWindow(wx.Frame):
                 count = 0
             self.metrics["anomalies"] = count
             self._render_kpis()
+            self.kernel.log("run_detect_anomalies", anomalies=count)
 
         elif proc_name == "Catalog":
             try:
@@ -1311,12 +1443,14 @@ class MainWindow(wx.Frame):
                                  "No" if df[c].isna().mean() < 0.5 else "Yes", ex, now])
                 hdr = ["Field","Friendly Name","Description","Data Type","Nullable","Example","Analysis Date"]
                 data = rows
+            self.kernel.log("run_catalog", columns=len(hdr))
 
         elif proc_name == "Compliance":
             try:
                 hdr, data = compliance_analysis(df)
             except Exception:
                 hdr, data = list(df.columns), df.values.tolist()
+            self.kernel.log("run_compliance")
 
         else:
             hdr, data = ["Message"], [[f"Unknown process: {proc_name}"]]
@@ -1338,6 +1472,7 @@ class MainWindow(wx.Frame):
             data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))] for r in range(self.grid.GetNumberRows())]
             pd.DataFrame(data, columns=hdr).to_csv(path, index=False, sep=",")
             wx.MessageBox("CSV exported.", "Export", wx.OK | wx.ICON_INFORMATION)
+            self.kernel.log("export_csv", path=path, rows=len(data), cols=len(hdr))
         except Exception as e:
             wx.MessageBox(f"Export failed: {e}", "Export", wx.OK | wx.ICON_ERROR)
 
@@ -1353,6 +1488,7 @@ class MainWindow(wx.Frame):
             data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))] for r in range(self.grid.GetNumberRows())]
             pd.DataFrame(data, columns=hdr).to_csv(path, index=False, sep="\t")
             wx.MessageBox("TXT exported.", "Export", wx.OK | wx.ICON_INFORMATION)
+            self.kernel.log("export_txt", path=path, rows=len(data), cols=len(hdr))
         except Exception as e:
             wx.MessageBox(f"Export failed: {e}", "Export", wx.OK | wx.ICON_ERROR)
 
@@ -1362,6 +1498,7 @@ class MainWindow(wx.Frame):
         try:
             msg = upload_to_s3(self.current_process or "Unknown", hdr, data)
             wx.MessageBox(msg, "Upload", wx.OK | wx.ICON_INFORMATION)
+            self.kernel.log("upload_s3", rows=len(data), cols=len(hdr), process=self.current_process or "Unknown")
         except Exception as e:
             wx.MessageBox(f"Upload failed: {e}", "Upload", wx.OK | wx.ICON_ERROR)
 
@@ -1382,6 +1519,7 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Could not read tasks file:\n{e}", "Tasks", wx.OK | wx.ICON_ERROR)
             return
+        self.kernel.log("tasks_started", path=path, steps=len(tasks))
         threading.Thread(target=self._run_tasks_worker, args=(tasks,), daemon=True).start()
 
     def _load_tasks_from_file(self, path: str):
@@ -1478,8 +1616,10 @@ class MainWindow(wx.Frame):
 
             except Exception as e:
                 wx.CallAfter(wx.MessageBox, f"Tasks stopped at step {i}:\n{t}\n\n{e}", "Tasks", wx.OK | wx.ICON_ERROR)
+                self.kernel.log("tasks_failed", step=i, action=t.get("action"), error=str(e))
                 return
 
+        self.kernel.log("tasks_completed", steps=ran)
         wx.CallAfter(wx.MessageBox, f"Tasks completed. {ran} step(s) executed.", "Tasks", wx.OK | wx.ICON_INFORMATION)
 
     def _export_to_path(self, path: str, sep: str):
@@ -1488,6 +1628,7 @@ class MainWindow(wx.Frame):
             data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))]
                     for r in range(self.grid.GetNumberRows())]
             pd.DataFrame(data, columns=hdr).to_csv(path, index=False, sep=sep)
+            self.kernel.log("export_to_path", path=path, sep=sep, rows=len(data), cols=len(hdr))
         except Exception as e:
             wx.MessageBox(f"Export failed: {e}", "Export", wx.OK | wx.ICON_ERROR)
 
@@ -1531,6 +1672,7 @@ class MainWindow(wx.Frame):
     def on_grid_resize(self, event):
         event.Skip()
         wx.CallAfter(self.adjust_grid)
+
 
 
 if __name__ == "__main__":
