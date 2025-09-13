@@ -79,7 +79,7 @@ class QualityRuleDialog(wx.Dialog):
         self.field_list = wx.ListBox(pnl, choices=list(fields), style=wx.LB_EXTENDED)
         self.field_list.SetBackgroundColour(INPUT_BG)
         self.field_list.SetForegroundColour(INPUT_TXT)
-        self.field_list.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.field_list.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         fsz.Add(self.field_list, 1, wx.EXPAND | wx.ALL, 5)
         main.Add(fsz, 1, wx.EXPAND | wx.ALL, 5)
 
@@ -212,8 +212,7 @@ class DataBuddyDialog(wx.Dialog):
         self.headers = headers
         self.knowledge = list(knowledge or [])
 
-        # If main passes a kernel later via set_kernel we’ll add it again
-        # (this ensures kernel is present even if not explicitly passed).
+        # Pull kernel path from environment (set by main)
         kpath = os.environ.get("SIDECAR_KERNEL_PATH", "")
         if kpath and kpath not in self.knowledge:
             self.knowledge.append(kpath)
@@ -253,7 +252,7 @@ class DataBuddyDialog(wx.Dialog):
 
         title = wx.StaticText(pnl, label="Little Buddy")
         title.SetForegroundColour(self.COLORS["text"])
-        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
         # Options row
@@ -291,7 +290,7 @@ class DataBuddyDialog(wx.Dialog):
         self.persona.SetSelection(0)
         self.persona.SetBackgroundColour(self.COLORS["input_bg"])
         self.persona.SetForegroundColour(self.COLORS["input_fg"])
-        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         vbox.Add(self.persona, 0, wx.EXPAND | wx.ALL, 5)
 
         row = wx.BoxSizer(wx.HORIZONTAL)
@@ -403,7 +402,7 @@ class DataBuddyDialog(wx.Dialog):
         if self._bubble_open:
             self.reply.EndStyle()
         self._bubble_open = False
-        self._bubble_sender = None
+               self._bubble_sender = None
 
     def _append_user_bubble(self, text: str, fake: bool = False):
         self._start_bubble("user")
@@ -778,7 +777,7 @@ class DataBuddyDialog(wx.Dialog):
             "Content-Type": "application/json",
         }
         body = {
-            "text_prompts": [{"text": prompt}]],
+            "text_prompts": [{"text": prompt}],
             "cfg_scale": 7,
             "height": 1024,
             "width": 1024,
@@ -819,9 +818,9 @@ class DataBuddyDialog(wx.Dialog):
             dc.SetBackground(wx.Brush(wx.Colour(32, 36, 44)))
             dc.Clear()
             dc.SetTextForeground(wx.Colour(220, 230, 255))
-            dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+            dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
             dc.DrawText("[Offline Placeholder]", 40, 40)
-            dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+            dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
             dc.DrawText(prompt, 40, 80)
             dc.SelectObject(wx.NullBitmap)
             bmp.SaveFile(tmp.name, wx.BITMAP_TYPE_PNG)
