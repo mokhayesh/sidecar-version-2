@@ -240,7 +240,7 @@ class LittleBuddyPill(wx.Control):
         gc.SetBrush(gc.CreateLinearGradientBrush(x, y, x, y + pill_h, base1, base2))
         gc.FillPath(path)
 
-        # Gloss highlight: draw a smaller rounded rect (top half), no clipping needed
+        # Gloss highlight (top half)
         gloss = gc.CreateLinearGradientBrush(x, y, x, y + pill_h // 2,
                                              wx.Colour(255, 255, 255, 90),
                                              wx.Colour(255, 255, 255, 0))
@@ -256,7 +256,6 @@ class LittleBuddyPill(wx.Control):
         white = wx.Colour(255, 255, 255)
         ic = gc.CreatePath()
         ic.AddRoundedRectangle(icon_x, icon_y, ic_w, ic_h, 6)
-        # tail
         tail = gc.CreatePath()
         tail.MoveToPoint(icon_x + 9, icon_y + ic_h)
         tail.AddLineToPoint(icon_x + 15, icon_y + ic_h)
@@ -501,12 +500,15 @@ class MainWindow(wx.Frame):
 
         main.Add(header_row, 0, wx.EXPAND)
 
-        # KPI band with Little Buddy pill aligned to the right
+        # KPI band (anomalies pinned to the far right) and Little Buddy centered underneath
         kpi_panel = wx.Panel(self)
         kpi_panel.SetBackgroundColour(BG)
-        row = wx.BoxSizer(wx.HORIZONTAL)
+        kpi_v = wx.BoxSizer(wx.VERTICAL)
 
-        flow = wx.WrapSizer(wx.HORIZONTAL)
+        # Top row: KPIs on the left, anomalies on the right
+        top_row = wx.BoxSizer(wx.HORIZONTAL)
+
+        left_flow = wx.WrapSizer(wx.HORIZONTAL)
         self.card_rows     = KPIBadge(kpi_panel, "Rows")
         self.card_cols     = KPIBadge(kpi_panel, "Columns")
         self.card_nulls    = KPIBadge(kpi_panel, "Null %")
@@ -516,17 +518,22 @@ class MainWindow(wx.Frame):
         self.card_complete = KPIBadge(kpi_panel, "Completeness")
         self.card_anoms    = KPIBadge(kpi_panel, "Anomalies")
 
+        # Add all EXCEPT anomalies to the left flow
         for c in (self.card_rows, self.card_cols, self.card_nulls, self.card_unique,
-                  self.card_quality, self.card_validity, self.card_complete, self.card_anoms):
-            flow.Add(c, 0, wx.ALL, 6)
+                  self.card_quality, self.card_validity, self.card_complete):
+            left_flow.Add(c, 0, wx.ALL, 6)
 
-        row.Add(flow, 1, wx.EXPAND | wx.RIGHT, 6)
+        top_row.Add(left_flow, 1, wx.EXPAND | wx.RIGHT, 6)
+        # anomalies anchored right
+        top_row.Add(self.card_anoms, 0, wx.ALL | wx.ALIGN_TOP | wx.ALIGN_RIGHT, 6)
 
-        # The special pill button lives to the right of KPIs
+        kpi_v.Add(top_row, 0, wx.EXPAND)
+
+        # Second row: Little Buddy centered below the KPI strip
         self.little_pill = LittleBuddyPill(kpi_panel, handler=self.on_little_buddy)
-        row.Add(self.little_pill, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 8)
+        kpi_v.Add(self.little_pill, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.TOP | wx.BOTTOM, 10)
 
-        kpi_panel.SetSizer(row)
+        kpi_panel.SetSizer(kpi_v)
         main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
         # Menus
@@ -543,7 +550,7 @@ class MainWindow(wx.Frame):
         self.Bind(wx.EVT_MENU, self.open_settings, id=OPEN_SETTINGS_ID)
         self.SetMenuBar(mb)
 
-        # Toolbar (Little Buddy removed here)
+        # Toolbar (Little Buddy NOT here anymore)
         toolbar_panel = wx.Panel(self)
         toolbar_panel.SetBackgroundColour(PANEL)
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
@@ -1194,7 +1201,6 @@ class MainWindow(wx.Frame):
                 for j in range(i + 1, n):
                     (id_a, row_a, cmap_a) = members[i]
                     (id_b, row_b, cmap_b) = members[j]
-                    # use the intersection of available columns in either map
                     cols = {}
                     for k in ("email","phone","first","last","addr","city","state","zip"):
                         cols[k] = cmap_a.get(k) or cmap_b.get(k)
