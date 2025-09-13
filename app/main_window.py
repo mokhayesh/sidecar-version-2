@@ -77,7 +77,7 @@ class RoundedShadowButton(wx.Control):
         self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
         self.Bind(wx.EVT_PAINT, self.on_paint)
         self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self._set_hover(True))
-                self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
+        self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
         self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
         self.Bind(wx.EVT_LEFT_UP, self.on_up)
         self._padx, self._pady = 16, 10
