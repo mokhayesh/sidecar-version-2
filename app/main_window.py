@@ -62,7 +62,7 @@ class HeaderBanner(wx.Panel):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Rounded button widget (safer handler invocation & useful error box)
+# Rounded button widget
 # ──────────────────────────────────────────────────────────────────────────────
 class RoundedShadowButton(wx.Control):
     def __init__(self, parent, label, handler, colour=wx.Colour(66, 133, 244), radius=12):
@@ -158,6 +158,102 @@ class RoundedShadowButton(wx.Control):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Special "Little Buddy" pill button with icon (top-right)
+# ──────────────────────────────────────────────────────────────────────────────
+class LittleBuddyPill(wx.Control):
+    """A distinctive glossy pill with a speech-bubble icon."""
+    def __init__(self, parent, label="Little Buddy", handler=None):
+        super().__init__(parent, style=wx.BORDER_NONE)
+        self._label = label
+        self._handler = handler
+        self._hover = False
+        self._down = False
+        self._h = 44
+        self.SetMinSize((160, self._h))
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.Bind(wx.EVT_PAINT, self.on_paint)
+        self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self._set_hover(True))
+        self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
+        self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
+        self.Bind(wx.EVT_LEFT_UP, self.on_up)
+        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        self.SetToolTip("Open Little Buddy")
+
+    def _set_hover(self, v):
+        self._hover = v
+        self.Refresh()
+
+    def on_down(self, _):
+        self._down = True
+        self.CaptureMouse()
+        self.Refresh()
+
+    def on_up(self, evt):
+        if self.HasCapture():
+            self.ReleaseMouse()
+        was_down = self._down
+        self._down = False
+        self.Refresh()
+        if was_down and self.GetClientRect().Contains(evt.GetPosition()) and callable(self._handler):
+            try:
+                self._handler(evt)
+            except Exception as e:
+                wx.MessageBox(str(e), "Little Buddy", wx.OK | wx.ICON_ERROR)
+
+    def on_paint(self, _):
+        dc = wx.AutoBufferedPaintDC(self)
+        w, h = self.GetClientSize()
+        dc.Clear()
+
+        # Background transparent to parent
+        bg = self.GetParent().GetBackgroundColour()
+        dc.SetBrush(wx.Brush(bg))
+        dc.SetPen(wx.Pen(bg))
+        dc.DrawRectangle(0, 0, w, h)
+
+        # Pill body
+        base = wx.Colour(122, 72, 255)  # purple
+        if self._hover:
+            base = wx.Colour(142, 92, 255)
+        if self._down:
+            base = wx.Colour(102, 62, 235)
+
+        shadow = wx.Colour(0, 0, 0, 80)
+        dc.SetPen(wx.Pen(shadow))
+        dc.SetBrush(wx.Brush(shadow))
+        dc.DrawRoundedRectangle(3, 4, w - 6, h - 4, h // 2)
+
+        dc.SetPen(wx.Pen(base))
+        dc.SetBrush(wx.Brush(base))
+        dc.DrawRoundedRectangle(0, 0, w - 6, h - 6, (h - 6) // 2)
+
+        # Gloss highlight
+        gloss = wx.Colour(255, 255, 255, 40)
+        dc.SetPen(wx.Pen(gloss))
+        dc.SetBrush(wx.Brush(gloss))
+        dc.DrawRoundedRectangle(0, 0, w - 6, (h - 6) // 2, (h - 6) // 2)
+
+        # Icon (speech bubble)
+        icon_x = 12
+        icon_y = 10
+        ic_w = 22
+        ic_h = 16
+        white = wx.Colour(255, 255, 255)
+        dc.SetPen(wx.Pen(white, 2))
+        dc.SetBrush(wx.Brush(white))
+        dc.DrawRoundedRectangle(icon_x, icon_y, ic_w, ic_h, 6)
+        # tail
+        pts = [(icon_x + 8, icon_y + ic_h), (icon_x + 14, icon_y + ic_h), (icon_x + 10, icon_y + ic_h + 6)]
+        dc.DrawPolygon([wx.Point(p[0], p[1]) for p in pts])
+
+        # Text
+        dc.SetTextForeground(wx.Colour(255, 255, 255))
+        dc.SetFont(self._font)
+        tw, th = dc.GetTextExtent(self._label)
+        dc.DrawText(self._label, icon_x + ic_w + 10, (h - th) // 2)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # KPI badge
 # ──────────────────────────────────────────────────────────────────────────────
 class KPIBadge(wx.Panel):
@@ -180,37 +276,23 @@ class KPIBadge(wx.Panel):
     def on_paint(self, _):
         dc = wx.AutoBufferedPaintDC(self)
         w, h = self.GetClientSize()
-
-        # background card
         bg = wx.Colour(28, 28, 28)
-        dc.SetBrush(wx.Brush(bg))
-        dc.SetPen(wx.Pen(bg))
+        dc.SetBrush(wx.Brush(bg)); dc.SetPen(wx.Pen(bg))
         dc.DrawRoundedRectangle(0, 0, w, h, 10)
-
-        # inner
-        dc.SetBrush(wx.Brush(self._colour))
-        dc.SetPen(wx.Pen(self._colour))
+        dc.SetBrush(wx.Brush(self._colour)); dc.SetPen(wx.Pen(self._colour))
         dc.DrawRoundedRectangle(6, 6, w - 12, h - 12, 8)
-
-        # title
         dc.SetTextForeground(wx.Colour(180, 180, 180))
         dc.SetFont(self._font_title)
         dc.DrawText(self._title.upper(), 18, 12)
-
-        # decorative bars
-        dc.SetPen(wx.Pen(self._accent, 3))
-        dc.DrawLine(16, h - 22, w - 24, h - 22)
-        dc.SetPen(wx.Pen(self._accent2, 3))
-        dc.DrawLine(16, h - 16, w - 24, h - 16)
-
-        # value
+        dc.SetPen(wx.Pen(self._accent, 3)); dc.DrawLine(16, h - 22, w - 24, h - 22)
+        dc.SetPen(wx.Pen(self._accent2, 3)); dc.DrawLine(16, h - 16, w - 24, h - 16)
         dc.SetTextForeground(wx.Colour(240, 240, 240))
         dc.SetFont(self._font_value)
         dc.DrawText(str(self._value), 18, 34)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# MDM Dialog (add sources + threshold + fields)
+# MDM Dialog (unchanged from previous addition)
 # ──────────────────────────────────────────────────────────────────────────────
 class MDMDialog(wx.Dialog):
     def __init__(self, parent):
@@ -254,22 +336,17 @@ class MDMDialog(wx.Dialog):
         grid.Add(h, 0, wx.EXPAND)
 
         v.Add(grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
-        line = wx.StaticLine(panel)
-        v.Add(line, 0, wx.EXPAND | wx.ALL, 6)
+        v.Add(wx.StaticLine(panel), 0, wx.EXPAND | wx.ALL, 6)
 
         ok_cancel = wx.StdDialogButtonSizer()
         ok = wx.Button(panel, wx.ID_OK)
         cancel = wx.Button(panel, wx.ID_CANCEL)
-        ok_cancel.AddButton(ok)
-        ok_cancel.AddButton(cancel)
-        ok_cancel.Realize()
+        ok_cancel.AddButton(ok); ok_cancel.AddButton(cancel); ok_cancel.Realize()
         v.Add(ok_cancel, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
 
         panel.SetSizer(v)
 
-        self.sources = []  # list of dicts: {"type": "file"/"uri", "value": str}
-
+        self.sources = []
         btn_add.Bind(wx.EVT_BUTTON, self._on_add_file)
         btn_uri.Bind(wx.EVT_BUTTON, self._on_add_uri)
         btn_rm.Bind(wx.EVT_BUTTON, self._on_rm)
@@ -335,19 +412,19 @@ class MainWindow(wx.Frame):
         self.headers = []
         self.raw_data = []
         self.knowledge_files = []
-        self.quality_rules = {}  # dialog expects a dict
+        self.quality_rules = {}
         self.current_process = ""
 
-        # KPI state (only filled by their respective actions)
+        # KPI state
         self.metrics = {
             "rows": None,
             "cols": None,
-            "null_pct": None,        # after Profile
-            "uniqueness": None,      # after Profile
-            "dq_score": None,        # after Quality
-            "validity": None,        # after Quality
-            "completeness": None,    # after Quality
-            "anomalies": None,       # after Detect Anomalies
+            "null_pct": None,
+            "uniqueness": None,
+            "dq_score": None,
+            "validity": None,
+            "completeness": None,
+            "anomalies": None,
         }
 
         self._build_ui()
@@ -377,65 +454,58 @@ class MainWindow(wx.Frame):
         title.SetForegroundColour(wx.Colour(230, 230, 230))
         title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         tp_sizer = wx.BoxSizer(wx.VERTICAL)
-        tp_sizer.AddStretchSpacer()
-        tp_sizer.Add(title, 0, wx.ALL, 4)
-        tp_sizer.AddStretchSpacer()
+        tp_sizer.AddStretchSpacer(); tp_sizer.Add(title, 0, wx.ALL, 4); tp_sizer.AddStretchSpacer()
         title_panel.SetSizer(tp_sizer)
         header_row.Add(title_panel, 1, wx.EXPAND)
 
         main.Add(header_row, 0, wx.EXPAND)
 
-        # KPI row
+        # KPI band with Little Buddy pill aligned to the right
         kpi_panel = wx.Panel(self)
         kpi_panel.SetBackgroundColour(BG)
-        kpi_row = wx.WrapSizer()
+        row = wx.BoxSizer(wx.HORIZONTAL)
 
-        self.card_rows        = KPIBadge(kpi_panel, "Rows")
-        self.card_cols        = KPIBadge(kpi_panel, "Columns")
-        self.card_nulls       = KPIBadge(kpi_panel, "Null %")
-        self.card_unique      = KPIBadge(kpi_panel, "Uniqueness")
-        self.card_quality     = KPIBadge(kpi_panel, "DQ Score")
-        self.card_validity    = KPIBadge(kpi_panel, "Validity")
-        self.card_complete    = KPIBadge(kpi_panel, "Completeness")
-        self.card_anoms       = KPIBadge(kpi_panel, "Anomalies")
+        flow = wx.WrapSizer(wx.HORIZONTAL)
+        self.card_rows     = KPIBadge(kpi_panel, "Rows")
+        self.card_cols     = KPIBadge(kpi_panel, "Columns")
+        self.card_nulls    = KPIBadge(kpi_panel, "Null %")
+        self.card_unique   = KPIBadge(kpi_panel, "Uniqueness")
+        self.card_quality  = KPIBadge(kpi_panel, "DQ Score")
+        self.card_validity = KPIBadge(kpi_panel, "Validity")
+        self.card_complete = KPIBadge(kpi_panel, "Completeness")
+        self.card_anoms    = KPIBadge(kpi_panel, "Anomalies")
 
-        for c in (
-            self.card_rows, self.card_cols, self.card_nulls, self.card_unique,
-            self.card_quality, self.card_validity, self.card_complete, self.card_anoms
-        ):
-            kpi_row.Add(c, 0, wx.ALL, 6)
+        for c in (self.card_rows, self.card_cols, self.card_nulls, self.card_unique,
+                  self.card_quality, self.card_validity, self.card_complete, self.card_anoms):
+            flow.Add(c, 0, wx.ALL, 6)
 
-        kpi_panel.SetSizer(kpi_row)
+        row.Add(flow, 1, wx.EXPAND | wx.RIGHT, 6)
+
+        # The special pill button lives to the right of KPIs
+        self.little_pill = LittleBuddyPill(kpi_panel, handler=self.on_little_buddy)
+        row.Add(self.little_pill, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 8)
+
+        kpi_panel.SetSizer(row)
         main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
-        # Menu bar with separate "File" and "Settings" menus
+        # Menus
         mb = wx.MenuBar()
-        m_file = wx.Menu()
-        m_file.Append(wx.ID_EXIT, "&Quit\tCtrl+Q")
-        mb.Append(m_file, "&File")
+        m_file = wx.Menu(); m_file.Append(wx.ID_EXIT, "&Quit\tCtrl+Q"); mb.Append(m_file, "&File")
         self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=wx.ID_EXIT)
-
-        m_settings = wx.Menu()
-        OPEN_SETTINGS_ID = wx.NewIdRef()
-        m_settings.Append(OPEN_SETTINGS_ID, "&Preferences...\tCtrl+,")
-        mb.Append(m_settings, "&Settings")
+        m_settings = wx.Menu(); OPEN_SETTINGS_ID = wx.NewIdRef()
+        m_settings.Append(OPEN_SETTINGS_ID, "&Preferences...\tCtrl+,"); mb.Append(m_settings, "&Settings")
         self.Bind(wx.EVT_MENU, self.open_settings, id=OPEN_SETTINGS_ID)
         self.SetMenuBar(mb)
 
-        # Toolbar
-        toolbar_panel = wx.Panel(self)
-        toolbar_panel.SetBackgroundColour(PANEL)
+        # Toolbar (Little Buddy removed here)
+        toolbar_panel = wx.Panel(self); toolbar_panel.SetBackgroundColour(PANEL)
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
-
         def add_btn(label, handler):
             b = RoundedShadowButton(toolbar_panel, label, handler, colour=BLUE, radius=12)
-            toolbar.Add(b, 0, wx.ALL, 6)
-            return b
-
+            toolbar.Add(b, 0, wx.ALL, 6); return b
         add_btn("Knowledge Files", self.on_load_knowledge)
         add_btn("Load File", self.on_load_file)
         add_btn("Load from URI/S3", self.on_load_s3)
-        # MDM button here
         add_btn("MDM", self.on_mdm)
         add_btn("Synthetic Data", self.on_generate_synth)
         add_btn("Rule Assignment", self.on_rules)
@@ -448,18 +518,14 @@ class MainWindow(wx.Frame):
         add_btn("Export CSV", self.on_export_csv)
         add_btn("Export TXT", self.on_export_txt)
         add_btn("Upload to S3", self.on_upload_s3)
-        add_btn("Little Buddy", self.on_little_buddy)
-
         toolbar_panel.SetSizer(toolbar)
         main.Add(toolbar_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
         # Knowledge line
-        info_panel = wx.Panel(self)
-        info_panel.SetBackgroundColour(wx.Colour(48, 48, 48))
+        info_panel = wx.Panel(self); info_panel.SetBackgroundColour(wx.Colour(48, 48, 48))
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
-        lab.SetForegroundColour(TXT)
-        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        lab.SetForegroundColour(TXT); lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         self.knowledge_lbl = wx.StaticText(info_panel, label="(none)")
         self.knowledge_lbl.SetForegroundColour(wx.Colour(200, 200, 200))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
@@ -469,22 +535,17 @@ class MainWindow(wx.Frame):
         main.Add(info_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
         # Grid
-        grid_panel = wx.Panel(self)
-        grid_panel.SetBackgroundColour(BG)
-        self.grid = gridlib.Grid(grid_panel)
-        self.grid.CreateGrid(0, 0)
+        grid_panel = wx.Panel(self); grid_panel.SetBackgroundColour(BG)
+        self.grid = gridlib.Grid(grid_panel); self.grid.CreateGrid(0, 0)
         self.grid.SetDefaultCellTextColour(wx.Colour(230, 230, 230))
         self.grid.SetDefaultCellBackgroundColour(wx.Colour(35, 35, 35))
         self.grid.SetLabelTextColour(wx.Colour(210, 210, 210))
         self.grid.SetLabelBackgroundColour(wx.Colour(40, 40, 40))
         self.grid.SetGridLineColour(wx.Colour(55, 55, 55))
         self.grid.EnableEditing(False)
-        self.grid.SetRowLabelSize(36)
-        self.grid.SetColLabelSize(28)
+        self.grid.SetRowLabelSize(36); self.grid.SetColLabelSize(28)
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
-
-        gp = wx.BoxSizer(wx.VERTICAL)
-        gp.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
+        gp = wx.BoxSizer(wx.VERTICAL); gp.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
         grid_panel.SetSizer(gp)
         main.Add(grid_panel, 1, wx.EXPAND | wx.ALL, 4)
 
@@ -527,8 +588,7 @@ class MainWindow(wx.Frame):
         null_pct = (nulls / total_cells) * 100.0 if total_cells else 0.0
         uniqs = []
         for c in df.columns:
-            s = df[c].dropna()
-            n = len(s)
+            s = df[c].dropna(); n = len(s)
             uniqs.append((s.nunique() / n * 100.0) if n else 0.0)
         uniq_pct = sum(uniqs) / len(uniqs) if uniqs else 0.0
         return null_pct, uniq_pct
@@ -550,8 +610,7 @@ class MainWindow(wx.Frame):
         nulls = int(df.isna().sum().sum())
         completeness = (1.0 - (nulls / total_cells)) * 100.0 if total_cells else 0.0
         rules = self._compile_rules()
-        checked = 0
-        valid = 0
+        checked = 0; valid = 0
         for col, rx in rules.items():
             if col in df.columns:
                 for val in df[col].astype(str):
@@ -561,11 +620,9 @@ class MainWindow(wx.Frame):
         validity = (valid / checked) * 100.0 if checked else None
         if self.metrics["uniqueness"] is None or self.metrics["null_pct"] is None:
             null_pct, uniq_pct = self._compute_profile_metrics(df)
-            self.metrics["null_pct"] = null_pct
-            self.metrics["uniqueness"] = uniq_pct
+            self.metrics["null_pct"] = null_pct; self.metrics["uniqueness"] = uniq_pct
         components = [self.metrics["uniqueness"], completeness]
-        if validity is not None:
-            components.append(validity)
+        if validity is not None: components.append(validity)
         dq_score = sum(components) / len(components) if components else 0.0
         return completeness, validity, dq_score
 
@@ -573,10 +630,8 @@ class MainWindow(wx.Frame):
         work = df.copy()
 
         def to_num(s):
-            if s is None:
-                return None
-            if isinstance(s, (int, float)):
-                return float(s)
+            if s is None: return None
+            if isinstance(s, (int, float)): return float(s)
             st = str(s).strip().replace(",", "")
             m = re.search(r"([-+]?\d*\.?\d+)", st)
             return float(m.group(1)) if m else None
@@ -589,34 +644,27 @@ class MainWindow(wx.Frame):
 
         flags = pd.Series(False, index=work.index)
         reasons = [[] for _ in range(len(work))]
-
         for cname, s in num_cols:
             x = s.astype(float)
-            mu = x.mean()
-            sd = x.std(ddof=0)
-            if not sd or sd == 0:
-                continue
+            mu = x.mean(); sd = x.std(ddof=0)
+            if not sd: continue
             z = (x - mu).abs() / sd
             hits = z > 3.0
             flags = flags | hits.fillna(False)
             for i, hit in hits.fillna(False).items():
-                if hit:
-                    reasons[i].append(f"{cname} z>{3}")
-
+                if hit: reasons[i].append(f"{cname} z>{3}")
         work["__anomaly__"] = [", ".join(r) if r else "" for r in reasons]
-        count = int(flags.sum())
-        return work, count
+        return work, int(flags.sum())
 
     # ──────────────────────────────────────────────────────────────────────
-    # Menu handlers
+    # Settings & Little Buddy
     # ──────────────────────────────────────────────────────────────────────
     def open_settings(self, _evt=None):
         try:
             dlg = SettingsWindow(self)
             if hasattr(dlg, "ShowModal"):
                 dlg.ShowModal()
-                if hasattr(dlg, "Destroy"):
-                    dlg.Destroy()
+                if hasattr(dlg, "Destroy"): dlg.Destroy()
             else:
                 dlg.Show()
         except Exception as e:
@@ -627,8 +675,7 @@ class MainWindow(wx.Frame):
             dlg = DataBuddyDialog(self)
             if hasattr(dlg, "ShowModal"):
                 dlg.ShowModal()
-                if hasattr(dlg, "Destroy"):
-                    dlg.Destroy()
+                if hasattr(dlg, "Destroy"): dlg.Destroy()
             else:
                 dlg.Show()
         except Exception as e:
@@ -640,10 +687,8 @@ class MainWindow(wx.Frame):
     def on_load_knowledge(self, _evt=None):
         dlg = wx.FileDialog(self, "Load knowledge files", wildcard="Text|*.txt;*.csv;*.tsv|All|*.*",
                             style=wx.FD_OPEN | wx.FD_MULTIPLE | wx.FD_FILE_MUST_EXIST)
-        if dlg.ShowModal() != wx.ID_OK:
-            return
-        files = dlg.GetPaths()
-        dlg.Destroy()
+        if dlg.ShowModal() != wx.ID_OK: return
+        files = dlg.GetPaths(); dlg.Destroy()
         self.knowledge_files = files
         self.knowledge_lbl.SetLabel(", ".join(os.path.basename(p) for p in files) if files else "(none)")
 
@@ -653,48 +698,34 @@ class MainWindow(wx.Frame):
     def on_load_file(self, _evt=None):
         dlg = wx.FileDialog(self, "Open data file", wildcard="Data|*.csv;*.tsv;*.txt|All|*.*",
                             style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
-        if dlg.ShowModal() != wx.ID_OK:
-            return
-        path = dlg.GetPath()
-        dlg.Destroy()
+        if dlg.ShowModal() != wx.ID_OK: return
+        path = dlg.GetPath(); dlg.Destroy()
         try:
-            text = self._load_text_file(path)
-            hdr, data = detect_and_split_data(text)
+            text = self._load_text_file(path); hdr, data = detect_and_split_data(text)
         except Exception as e:
-            wx.MessageBox(f"Could not read file: {e}", "Error", wx.OK | wx.ICON_ERROR)
-            return
-        self.headers = hdr
-        self.raw_data = data
-        self._display(hdr, data)
-        self._reset_kpis_for_new_dataset(hdr, data)
+            wx.MessageBox(f"Could not read file: {e}", "Error", wx.OK | wx.ICON_ERROR); return
+        self.headers = hdr; self.raw_data = data
+        self._display(hdr, data); self._reset_kpis_for_new_dataset(hdr, data)
 
     def on_load_s3(self, _evt=None):
         with wx.TextEntryDialog(self, "Enter URI (S3 presigned or HTTP/HTTPS):", "Load from URI/S3") as dlg:
-            if dlg.ShowModal() != wx.ID_OK:
-                return
+            if dlg.ShowModal() != wx.ID_OK: return
             uri = dlg.GetValue().strip()
         try:
-            text = download_text_from_uri(uri)
-            hdr, data = detect_and_split_data(text)
+            text = download_text_from_uri(uri); hdr, data = detect_and_split_data(text)
         except Exception as e:
-            wx.MessageBox(f"Download failed: {e}", "Error", wx.OK | wx.ICON_ERROR)
-            return
-        self.headers = hdr
-        self.raw_data = data
-        self._display(hdr, data)
-        self._reset_kpis_for_new_dataset(hdr, data)
+            wx.MessageBox(f"Download failed: {e}", "Error", wx.OK | wx.ICON_ERROR); return
+        self.headers = hdr; self.raw_data = data
+        self._display(hdr, data); self._reset_kpis_for_new_dataset(hdr, data)
 
     def on_rules(self, _evt=None):
         if not self.headers:
             wx.MessageBox("Load data first so fields are available.", "Quality Rules", wx.OK | wx.ICON_WARNING)
             return
         if not isinstance(self.quality_rules, dict):
-            try:
-                self.quality_rules = dict(self.quality_rules)
-            except Exception:
-                self.quality_rules = {}
-        fields = list(self.headers)
-        current_rules = self.quality_rules
+            try: self.quality_rules = dict(self.quality_rules)
+            except Exception: self.quality_rules = {}
+        fields = list(self.headers); current_rules = self.quality_rules
         dlg = None
         try:
             dlg = QualityRuleDialog(self, fields, current_rules)
@@ -702,36 +733,16 @@ class MainWindow(wx.Frame):
                 res = dlg.ShowModal()
                 if res == wx.ID_OK:
                     self.quality_rules = getattr(dlg, "current_rules", current_rules)
-                if hasattr(dlg, "Destroy"):
-                    dlg.Destroy()
+                if hasattr(dlg, "Destroy"): dlg.Destroy()
             else:
                 dlg.Show()
         except Exception as e:
-            if dlg and hasattr(dlg, "Destroy"):
-                dlg.Destroy()
+            if dlg and hasattr(dlg, "Destroy"): dlg.Destroy()
             wx.MessageBox(f"Could not open Quality Rule Assignment:\n{e}", "Quality Rules", wx.OK | wx.ICON_ERROR)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Synthetic data (generator helpers)
+    # Synthetic data + generators (unchanged)
     # ──────────────────────────────────────────────────────────────────────
-    @staticmethod
-    def _clean_float(x):
-        if x is None:
-            return None
-        if isinstance(x, (int, float)):
-            return float(x)
-        s = str(x).strip()
-        if not s:
-            return None
-        s = s.replace(",", "")
-        m = re.search(r"([-+]?\d*\.?\d+)", s)
-        if not m:
-            return None
-        try:
-            return float(m.group(1))
-        except Exception:
-            return None
-
     @staticmethod
     def _most_common_format(strings, default_mask="DDD-DDD-DDDD"):
         def mask_one(s): return re.sub(r"\d", "D", s)
@@ -740,12 +751,9 @@ class MainWindow(wx.Frame):
 
     @staticmethod
     def _sample_with_weights(values):
-        if not values:
-            return lambda *_: None
-        counts = Counter(values)
-        vals, weights = zip(*counts.items())
-        total = float(sum(weights))
-        probs = [w / total for w in weights]
+        if not values: return lambda *_: None
+        counts = Counter(values); vals, weights = zip(*counts.items())
+        total = float(sum(weights)); probs = [w / total for w in weights]
         def pick(_row=None):
             r = random.random(); acc = 0.0
             for v, p in zip(vals, probs):
@@ -756,8 +764,8 @@ class MainWindow(wx.Frame):
 
     def _build_generators(self, src_df: pd.DataFrame, fields):
         gens = {}
-        name_first = [ "James","Mary","Robert","Patricia","John","Jennifer","Michael","Linda","William","Elizabeth" ]
-        name_last  = [ "Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez" ]
+        name_first = ["James","Mary","Robert","Patricia","John","Jennifer","Michael","Linda","William","Elizabeth"]
+        name_last  = ["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez"]
         first_col = next((c for c in src_df.columns if "first" in c.lower() and "name" in c.lower()), None)
         last_col  = next((c for c in src_df.columns if "last"  in c.lower() and "name" in c.lower()), None)
 
@@ -787,23 +795,19 @@ class MainWindow(wx.Frame):
 
             if any(k in lower for k in ["phone","mobile","cell","telephone"]):
                 mask = self._most_common_format([s for s in col_strs if re.search(r"\d", s)])
-                def gen(_row):
-                    return "".join(str(random.randint(0,9)) if ch=="D" else ch for ch in mask)
+                def gen(_row): return "".join(str(random.randint(0,9)) if ch=="D" else ch for ch in mask)
                 gens[col] = gen; continue
 
             if "date" in lower or "dob" in lower:
-                parsed=[]
+                parsed=[]; 
                 for s in col_strs:
                     for fmt in ("%Y-%m-%d","%m/%d/%Y","%d/%m/%Y","%Y/%m/%d"):
                         try: parsed.append(datetime.strptime(s, fmt)); break
                         except: pass
                 if parsed: dmin,dmax=min(parsed),max(parsed)
-                else:
-                    dmax=datetime.today(); dmin=dmax-timedelta(days=3650)
-                delta=(dmax-dmin).days or 365
-                out_fmt="%Y-%m-%d"
-                def gen(_row):
-                    return (dmin+timedelta(days=random.randint(0, max(1,delta)))).strftime(out_fmt)
+                else: dmax=datetime.today(); dmin=dmax-timedelta(days=3650)
+                delta=(dmax-dmin).days or 365; out_fmt="%Y-%m-%d"
+                def gen(_row): return (dmin+timedelta(days=random.randint(0, max(1,delta)))).strftime(out_fmt)
                 gens[col]=gen; continue
 
             uniq = set(col_vals)
@@ -821,262 +825,169 @@ class MainWindow(wx.Frame):
 
     def on_generate_synth(self, _evt=None):
         if not self.headers:
-            wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
-            return
+            wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING); return
         src_df = pd.DataFrame(self.raw_data, columns=self.headers)
         dlg = SyntheticDataDialog(self, fields=list(self.headers))
         if hasattr(dlg, "ShowModal"):
-            if dlg.ShowModal() != wx.ID_OK:
-                dlg.Destroy()
-                return
+            if dlg.ShowModal() != wx.ID_OK: dlg.Destroy(); return
         try:
-            if hasattr(dlg, "get_values"):
-                n_rows, fields = dlg.get_values()
+            if hasattr(dlg, "get_values"): n_rows, fields = dlg.get_values()
             else:
-                n_rows = getattr(dlg, "n_rows", 0)
-                fields = getattr(dlg, "fields", list(self.headers))
-            if not fields:
-                fields = list(self.headers)
+                n_rows = getattr(dlg, "n_rows", 0); fields = getattr(dlg, "fields", list(self.headers))
+            if not fields: fields = list(self.headers)
             gens = self._build_generators(src_df, fields)
             out_rows = []
             for _ in range(int(n_rows)):
                 row_map = {}
                 for f in fields:
-                    g = gens.get(f)
-                    val = g(row_map) if callable(g) else None
+                    g = gens.get(f); val = g(row_map) if callable(g) else None
                     row_map[f] = "" if val is None else val
                 out_rows.append([row_map[f] for f in fields])
             df = pd.DataFrame(out_rows, columns=fields)
         except Exception as e:
             wx.MessageBox(f"Synthetic data error: {e}", "Error", wx.OK | wx.ICON_ERROR)
-            if hasattr(dlg, "Destroy"):
-                dlg.Destroy()
-            return
-        if hasattr(dlg, "Destroy"):
-            dlg.Destroy()
-        hdr = list(df.columns)
-        data = df.values.tolist()
-        self.headers = hdr
-        self.raw_data = data
-        self._display(hdr, data)
-        self._reset_kpis_for_new_dataset(hdr, data)
+            if hasattr(dlg, "Destroy"): dlg.Destroy(); return
+        if hasattr(dlg, "Destroy"): dlg.Destroy()
+        hdr = list(df.columns); data = df.values.tolist()
+        self.headers = hdr; self.raw_data = data
+        self._display(hdr, data); self._reset_kpis_for_new_dataset(hdr, data)
 
     # ──────────────────────────────────────────────────────────────────────
-    # MDM — match & merge to golden records
+    # MDM (match & merge) — same as in previous version you have
     # ──────────────────────────────────────────────────────────────────────
     def on_mdm(self, _evt=None):
         if not self.headers:
             wx.MessageBox("Load a base dataset first (or generate synthetic data).", "MDM", wx.OK | wx.ICON_WARNING)
             return
-
         dlg = MDMDialog(self)
         if dlg.ShowModal() != wx.ID_OK:
-            dlg.Destroy()
-            return
-        params = dlg.get_params()
-        dlg.Destroy()
+            dlg.Destroy(); return
+        params = dlg.get_params(); dlg.Destroy()
 
-        # Collect dataframes
-        dataframes = []
-        labels = []
-
+        dataframes = []; labels = []
         if params["include_current"]:
-            dataframes.append(pd.DataFrame(self.raw_data, columns=self.headers))
-            labels.append("current")
-
-        # Add extra sources
+            dataframes.append(pd.DataFrame(self.raw_data, columns=self.headers)); labels.append("current")
         try:
             for src in params["sources"]:
                 if src["type"] == "file":
                     text = self._load_text_file(src["value"])
                     hdr, data = detect_and_split_data(text)
                     dataframes.append(pd.DataFrame(data, columns=hdr))
-                    labels.append(os.path.basename(src["value"]))
                 else:
                     text = download_text_from_uri(src["value"])
                     hdr, data = detect_and_split_data(text)
                     dataframes.append(pd.DataFrame(data, columns=hdr))
-                    labels.append(src["value"])
         except Exception as e:
-            wx.MessageBox(f"Failed to load a source:\n{e}", "MDM", wx.OK | wx.ICON_ERROR)
-            return
-
+            wx.MessageBox(f"Failed to load a source:\n{e}", "MDM", wx.OK | wx.ICON_ERROR); return
         if len(dataframes) < 2:
-            wx.MessageBox("Please add at least one additional dataset.", "MDM", wx.OK | wx.ICON_WARNING)
-            return
-
+            wx.MessageBox("Please add at least one additional dataset.", "MDM", wx.OK | wx.ICON_WARNING); return
         try:
             golden = self._run_mdm(
                 dataframes,
-                use_email=params["use_email"],
-                use_phone=params["use_phone"],
-                use_name=params["use_name"],
-                use_addr=params["use_addr"],
+                use_email=params["use_email"], use_phone=params["use_phone"],
+                use_name=params["use_name"], use_addr=params["use_addr"],
                 threshold=params["threshold"]
             )
         except Exception as e:
             import traceback
-            wx.MessageBox(f"MDM failed:\n{e}\n\n{traceback.format_exc()}", "MDM", wx.OK | wx.ICON_ERROR)
-            return
+            wx.MessageBox(f"MDM failed:\n{e}\n\n{traceback.format_exc()}", "MDM", wx.OK | wx.ICON_ERROR); return
+        hdr = list(golden.columns); data = golden.astype(str).values.tolist()
+        self.headers = hdr; self.raw_data = data
+        self._display(hdr, data); self._reset_kpis_for_new_dataset(hdr, data); self.current_process = "MDM"
 
-        hdr = list(golden.columns)
-        data = golden.astype(str).values.tolist()
-        self.headers = hdr
-        self.raw_data = data
-        self._display(hdr, data)
-        self._reset_kpis_for_new_dataset(hdr, data)
-        self.current_process = "MDM"
-
-    # Field name helpers
     @staticmethod
     def _find_col(cols, *candidates):
         cl = {c.lower(): c for c in cols}
         for cand in candidates:
             for c in cl:
-                if cand in c:
-                    return cl[c]
+                if cand in c: return cl[c]
         return None
 
     @staticmethod
-    def _norm_email(x):
-        return str(x).strip().lower() if x is not None else None
-
+    def _norm_email(x): return str(x).strip().lower() if x is not None else None
     @staticmethod
     def _norm_phone(x):
-        if x is None:
-            return None
+        if x is None: return None
         digits = re.sub(r"\D+", "", str(x))
-        if len(digits) >= 10:
-            return digits[-10:]
+        if len(digits) >= 10: return digits[-10:]
         return digits or None
-
     @staticmethod
-    def _norm_name(x):
-        if x is None:
-            return None
-        return re.sub(r"[^a-z]", "", str(x).lower())
-
+    def _norm_name(x): return re.sub(r"[^a-z]", "", str(x).lower()) if x is not None else None
     @staticmethod
-    def _norm_text(x):
-        if x is None:
-            return None
-        return re.sub(r"\s+", " ", str(x).strip().lower())
-
+    def _norm_text(x): return re.sub(r"\s+", " ", str(x).strip().lower()) if x is not None else None
     @staticmethod
     def _sim(a, b):
-        if not a or not b:
-            return 0.0
+        if not a or not b: return 0.0
         return SequenceMatcher(None, a, b).ratio()
 
     def _block_key(self, row, cols):
-        """Simple blocking: prefer email/phone; else name initials + zip/city."""
         e = row.get(cols.get("email"))
-        if e:
-            return f"e:{self._norm_email(e)}"
+        if e: return f"e:{self._norm_email(e)}"
         p = row.get(cols.get("phone"))
-        if p:
-            return f"p:{self._norm_phone(p)}"
+        if p: return f"p:{self._norm_phone(p)}"
         fi = (row.get(cols.get("first")) or "")[:1].lower()
         li = (row.get(cols.get("last")) or "")[:1].lower()
         zipc = str(row.get(cols.get("zip")) or "")[:3]
         city = str(row.get(cols.get("city")) or "")[:3].lower()
-        key = f"n:{fi}{li}|{zipc or city}"
-        return key
+        return f"n:{fi}{li}|{zipc or city}"
 
     def _score_pair(self, a, b, cols, use_email, use_phone, use_name, use_addr):
-        parts = []
-        weights = []
-
+        parts = []; weights = []
         if use_email and cols.get("email"):
-            ea = self._norm_email(a.get(cols["email"]))
-            eb = self._norm_email(b.get(cols["email"]))
-            if ea and eb:
-                parts.append(1.0 if ea == eb else self._sim(ea, eb))
-                weights.append(0.5)
-
+            ea = self._norm_email(a.get(cols["email"])); eb = self._norm_email(b.get(cols["email"]))
+            if ea and eb: parts.append(1.0 if ea == eb else self._sim(ea, eb)); weights.append(0.5)
         if use_phone and cols.get("phone"):
-            pa = self._norm_phone(a.get(cols["phone"]))
-            pb = self._norm_phone(b.get(cols["phone"]))
-            if pa and pb:
-                parts.append(1.0 if pa == pb else self._sim(pa, pb))
-                weights.append(0.5)
-
+            pa = self._norm_phone(a.get(cols["phone"])); pb = self._norm_phone(b.get(cols["phone"]))
+            if pa and pb: parts.append(1.0 if pa == pb else self._sim(pa, pb)); weights.append(0.5)
         if use_name and (cols.get("first") or cols.get("last")):
-            fa = self._norm_name(a.get(cols.get("first")))
-            fb = self._norm_name(b.get(cols.get("first")))
-            la = self._norm_name(a.get(cols.get("last")))
-            lb = self._norm_name(b.get(cols.get("last")))
-            if fa and fb:
-                parts.append(self._sim(fa, fb))
-                weights.append(0.25)
-            if la and lb:
-                parts.append(self._sim(la, lb))
-                weights.append(0.3)
-
+            fa = self._norm_name(a.get(cols.get("first"))); fb = self._norm_name(b.get(cols.get("first")))
+            la = self._norm_name(a.get(cols.get("last")));  lb = self._norm_name(b.get(cols.get("last")))
+            if fa and fb: parts.append(self._sim(fa, fb)); weights.append(0.25)
+            if la and lb: parts.append(self._sim(la, lb)); weights.append(0.3)
         if use_addr and (cols.get("addr") or cols.get("city")):
-            aa = self._norm_text(a.get(cols.get("addr")))
-            ab = self._norm_text(b.get(cols.get("addr")))
-            ca = self._norm_text(a.get(cols.get("city")))
-            cb = self._norm_text(b.get(cols.get("city")))
-            sa = self._norm_text(a.get(cols.get("state")))
-            sb = self._norm_text(b.get(cols.get("state")))
-            za = self._norm_text(a.get(cols.get("zip")))
-            zb = self._norm_text(b.get(cols.get("zip")))
+            aa = self._norm_text(a.get(cols.get("addr"))); ab = self._norm_text(b.get(cols.get("addr")))
+            ca = self._norm_text(a.get(cols.get("city"))); cb = self._norm_text(b.get(cols.get("city")))
+            sa = self._norm_text(a.get(cols.get("state"))); sb = self._norm_text(b.get(cols.get("state")))
+            za = self._norm_text(a.get(cols.get("zip")));   zb = self._norm_text(b.get(cols.get("zip")))
             chunk = []
             if aa and ab: chunk.append(self._sim(aa, ab))
             if ca and cb: chunk.append(self._sim(ca, cb))
             if sa and sb: chunk.append(self._sim(sa, sb))
             if za and zb: chunk.append(1.0 if za == zb else self._sim(za, zb))
-            if chunk:
-                parts.append(sum(chunk) / len(chunk))
-                weights.append(0.25)
-
-        if not parts:
-            return 0.0
+            if chunk: parts.append(sum(chunk)/len(chunk)); weights.append(0.25)
+        if not parts: return 0.0
         wsum = sum(weights) or 1.0
-        score = sum(p * w for p, w in zip(parts, weights)) / wsum
-        return score
+        return sum(p*w for p, w in zip(parts, weights)) / wsum
 
     def _run_mdm(self, dataframes, use_email=True, use_phone=True, use_name=True, use_addr=True, threshold=0.85):
-        """Return golden-record DataFrame from a list of DataFrames."""
-        # Normalize column names & pick likely identity columns
-        datasets = []
-        union_cols = set()
+        datasets = []; union_cols = set()
         for df in dataframes:
             cols = list(df.columns)
-            lc = [c.lower() for c in cols]
             colmap = {
                 "email": self._find_col(cols, "email"),
                 "phone": self._find_col(cols, "phone", "mobile", "cell", "telephone"),
                 "first": self._find_col(cols, "first name", "firstname", "given"),
                 "last":  self._find_col(cols, "last name", "lastname", "surname", "family"),
                 "addr":  self._find_col(cols, "address", "street"),
-                "city":  self._find_col(cols, "city",),
+                "city":  self._find_col(cols, "city"),
                 "state": self._find_col(cols, "state", "province", "region"),
                 "zip":   self._find_col(cols, "zip", "postal"),
             }
-            # keep all original columns for merging
             union_cols.update(cols)
             datasets.append((df.reset_index(drop=True), colmap))
 
-        # Prepare records with blocking
-        records = []
-        ds_offsets = []
-        offset = 0
+        records = []; offset = 0
         for df, colmap in datasets:
-            ds_offsets.append(offset)
             for i in range(len(df)):
                 row = df.iloc[i].to_dict()
                 records.append((offset + i, row, colmap))
             offset += len(df)
 
-        # Build blocks
         blocks = defaultdict(list)
         for rec_id, row, cmap in records:
             key = self._block_key(row, cmap)
             blocks[(key, tuple(sorted(cmap.items())) )].append((rec_id, row, cmap))
 
-        # DSU for clustering
         parent = {}
         def find(x):
             parent.setdefault(x, x)
@@ -1085,86 +996,64 @@ class MainWindow(wx.Frame):
             return parent[x]
         def union(a, b):
             ra, rb = find(a), find(b)
-            if ra != rb:
-                parent[rb] = ra
+            if ra != rb: parent[rb] = ra
 
-        # Pairwise within blocks
         for _, members in blocks.items():
             n = len(members)
-            if n <= 1:
-                continue
+            if n <= 1: continue
             for i in range(n):
                 for j in range(i + 1, n):
                     (id_a, row_a, cmap_a) = members[i]
                     (id_b, row_b, cmap_b) = members[j]
-                    # use the intersection of available columns in either map
                     cols = {}
                     for k in ("email","phone","first","last","addr","city","state","zip"):
                         cols[k] = cmap_a.get(k) or cmap_b.get(k)
                     score = self._score_pair(row_a, row_b, cols, use_email, use_phone, use_name, use_addr)
-                    if score >= threshold:
-                        union(id_a, id_b)
+                    if score >= threshold: union(id_a, id_b)
 
-        # Collect clusters
         clusters = defaultdict(list)
         for rec_id, row, cmap in records:
             clusters[find(rec_id)].append((row, cmap))
 
-        # Merge strategy per column
         def best_value(values):
-            """Majority vote; numeric -> median; date -> most recent; tie -> longest string."""
             vals = [v for v in values if (v is not None and str(v).strip() != "")]
-            if not vals:
-                return ""
-            # Date-like?
+            if not vals: return ""
             parsed = []
             for v in vals:
                 s = str(v)
                 for fmt in ("%Y-%m-%d","%m/%d/%Y","%d/%m/%Y","%Y/%m/%d"):
-                    try:
-                        parsed.append(datetime.strptime(s, fmt))
-                        break
-                    except Exception:
-                        continue
+                    try: parsed.append(datetime.strptime(s, fmt)); break
+                    except: pass
             if parsed and len(parsed) >= len(vals) * 0.6:
                 return max(parsed).strftime("%Y-%m-%d")
-            # Numeric?
             nums = pd.to_numeric(pd.Series(vals).astype(str).str.replace(",", ""), errors="coerce").dropna()
             if len(nums) >= len(vals) * 0.6:
-                return str(int(nums.median())) if float(nums.median()).is_integer() else f"{float(nums.median()):.2f}"
-            # Majority / longest
+                med = float(nums.median())
+                return str(int(med)) if med.is_integer() else f"{med:.2f}"
             counts = Counter([str(v).strip() for v in vals])
             top, freq = counts.most_common(1)[0]
             ties = [k for k, c in counts.items() if c == freq]
-            if len(ties) == 1:
-                return ties[0]
+            if len(ties) == 1: return ties[0]
             return max(ties, key=len)
 
-        # Create golden rows
         all_cols = list(sorted(union_cols, key=lambda x: x.lower()))
         golden_rows = []
         for cluster_rows in clusters.values():
-            merged = {}
-            for col in all_cols:
-                merged[col] = best_value([r.get(col) for r, _ in cluster_rows])
+            merged = {col: best_value([r.get(col) for r, _ in cluster_rows]) for col in all_cols}
             golden_rows.append(merged)
-
-        golden_df = pd.DataFrame(golden_rows, columns=all_cols)
-        return golden_df
+        return pd.DataFrame(golden_rows, columns=all_cols)
 
     # ──────────────────────────────────────────────────────────────────────
     # Analyses
     # ──────────────────────────────────────────────────────────────────────
     def do_analysis_process(self, proc_name: str):
         if not self.headers:
-            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING)
-            return
+            wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING); return
         self.current_process = proc_name
         df = self._as_df(self.raw_data, self.headers)
 
         if proc_name == "Profile":
-            try:
-                hdr, data = profile_analysis(df)
+            try: hdr, data = profile_analysis(df)
             except Exception:
                 desc = pd.DataFrame({
                     "Field": df.columns,
@@ -1173,15 +1062,12 @@ class MainWindow(wx.Frame):
                 })
                 hdr, data = list(desc.columns), desc.values.tolist()
             null_pct, uniq_pct = self._compute_profile_metrics(df)
-            self.metrics["null_pct"] = null_pct
-            self.metrics["uniqueness"] = uniq_pct
+            self.metrics["null_pct"] = null_pct; self.metrics["uniqueness"] = uniq_pct
             self._render_kpis()
 
         elif proc_name == "Quality":
-            try:
-                hdr, data = quality_analysis(df, self.quality_rules)
-            except Exception:
-                hdr, data = list(df.columns), df.values.tolist()
+            try: hdr, data = quality_analysis(df, self.quality_rules)
+            except Exception: hdr, data = list(df.columns), df.values.tolist()
             completeness, validity, dq = self._compute_quality_metrics(df)
             self.metrics["completeness"] = completeness
             self.metrics["validity"] = validity
@@ -1189,18 +1075,12 @@ class MainWindow(wx.Frame):
             self._render_kpis()
 
         elif proc_name == "Detect Anomalies":
-            try:
-                work, count = self._detect_anomalies(df)
-                hdr, data = list(work.columns), work.values.tolist()
-            except Exception:
-                hdr, data = list(df.columns), df.values.tolist()
-                count = 0
-            self.metrics["anomalies"] = count
-            self._render_kpis()
+            try: work, count = self._detect_anomalies(df); hdr, data = list(work.columns), work.values.tolist()
+            except Exception: hdr, data = list(df.columns), df.values.tolist(); count = 0
+            self.metrics["anomalies"] = count; self._render_kpis()
 
         elif proc_name == "Catalog":
-            try:
-                hdr, data = catalog_analysis(df)
+            try: hdr, data = catalog_analysis(df)
             except Exception:
                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 rows = []
@@ -1213,10 +1093,8 @@ class MainWindow(wx.Frame):
                 data = rows
 
         elif proc_name == "Compliance":
-            try:
-                hdr, data = compliance_analysis(df)
-            except Exception:
-                hdr, data = list(df.columns), df.values.tolist()
+            try: hdr, data = compliance_analysis(df)
+            except Exception: hdr, data = list(df.columns), df.values.tolist()
 
         else:
             hdr, data = ["Message"], [[f"Unknown process: {proc_name}"]]
@@ -1229,10 +1107,8 @@ class MainWindow(wx.Frame):
     def on_export_csv(self, _evt=None):
         dlg = wx.FileDialog(self, "Save CSV", wildcard="CSV|*.csv",
                             style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
-        if dlg.ShowModal() != wx.ID_OK:
-            return
-        path = dlg.GetPath()
-        dlg.Destroy()
+        if dlg.ShowModal() != wx.ID_OK: return
+        path = dlg.GetPath(); dlg.Destroy()
         try:
             hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
             data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))] for r in range(self.grid.GetNumberRows())]
@@ -1244,10 +1120,8 @@ class MainWindow(wx.Frame):
     def on_export_txt(self, _evt=None):
         dlg = wx.FileDialog(self, "Save TXT", wildcard="TXT|*.txt",
                             style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
-        if dlg.ShowModal() != wx.ID_OK:
-            return
-        path = dlg.GetPath()
-        dlg.Destroy()
+        if dlg.ShowModal() != wx.ID_OK: return
+        path = dlg.GetPath(); dlg.Destroy()
         try:
             hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
             data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))] for r in range(self.grid.GetNumberRows())]
@@ -1266,61 +1140,43 @@ class MainWindow(wx.Frame):
             wx.MessageBox(f"Upload failed: {e}", "Upload", wx.OK | wx.ICON_ERROR)
 
     def on_run_tasks(self, _evt=None):
-        dlg = wx.FileDialog(
-            self,
-            "Open Tasks File",
-            wildcard="Tasks (*.json;*.txt)|*.json;*.txt|All|*.*",
-            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST
-        )
-        if dlg.ShowModal() != wx.ID_OK:
-            dlg.Destroy()
-            return
-        path = dlg.GetPath()
-        dlg.Destroy()
+        dlg = wx.FileDialog(self, "Open Tasks File",
+            wildcard="Tasks (*.json;*.txt)|*.json;*.txt|All|*.*", style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
+        if dlg.ShowModal() != wx.ID_OK: dlg.Destroy(); return
+        path = dlg.GetPath(); dlg.Destroy()
         try:
             tasks = self._load_tasks_from_file(path)
         except Exception as e:
-            wx.MessageBox(f"Could not read tasks file:\n{e}", "Tasks", wx.OK | wx.ICON_ERROR)
-            return
+            wx.MessageBox(f"Could not read tasks file:\n{e}", "Tasks", wx.OK | wx.ICON_ERROR); return
         threading.Thread(target=self._run_tasks_worker, args=(tasks,), daemon=True).start()
 
     def _load_tasks_from_file(self, path: str):
         text = open(path, "r", encoding="utf-8", errors="ignore").read().strip()
-        if not text:
-            return []
+        if not text: return []
         try:
             obj = json.loads(text)
             if isinstance(obj, dict):
                 obj = obj.get("tasks") or obj.get("steps") or obj.get("actions") or []
-            if not isinstance(obj, list):
-                raise ValueError("JSON must be a list of task objects")
+            if not isinstance(obj, list): raise ValueError("JSON must be a list of task objects")
             out = []
             for it in obj:
                 if not isinstance(it, dict) or "action" not in it:
                     raise ValueError("Each JSON task must be an object with 'action'")
-                t = {k: v for k, v in it.items()}
-                t["action"] = str(t["action"]).strip()
-                out.append(t)
+                t = {k: v for k, v in it.items()}; t["action"] = str(t["action"]).strip(); out.append(t)
             return out
-        except Exception:
-            pass
+        except Exception: pass
 
         tasks = []
         for line in text.splitlines():
             line = line.strip()
-            if not line or line.startswith("#"):
-                continue
+            if not line or line.startswith("#"): continue
             parts = line.split(maxsplit=1)
-            action = parts[0]
-            arg = parts[1] if len(parts) == 2 else None
+            action = parts[0]; arg = parts[1] if len(parts) == 2 else None
             t = {"action": action}
             if arg:
-                if action.lower() in ("loadfile", "exportcsv", "exporttxt"):
-                    t["path"] = arg
-                elif action.lower() in ("loads3", "loaduri"):
-                    t["uri"] = arg
-                else:
-                    t["arg"] = arg
+                if action.lower() in ("loadfile", "exportcsv", "exporttxt"): t["path"] = arg
+                elif action.lower() in ("loads3", "loaduri"): t["uri"] = arg
+                else: t["arg"] = arg
             tasks.append(t)
         return tasks
 
@@ -1329,7 +1185,6 @@ class MainWindow(wx.Frame):
         for i, t in enumerate(tasks, 1):
             try:
                 act = (t.get("action") or "").strip().lower()
-
                 if act == "loadfile":
                     p = t.get("path") or t.get("file")
                     if not p: raise ValueError("LoadFile requires 'path'")
@@ -1337,7 +1192,6 @@ class MainWindow(wx.Frame):
                     self.headers, self.raw_data = detect_and_split_data(text)
                     wx.CallAfter(self._display, self.headers, self.raw_data)
                     wx.CallAfter(self._reset_kpis_for_new_dataset, self.headers, self.raw_data)
-
                 elif act in ("loads3", "loaduri"):
                     uri = t.get("uri") or t.get("path")
                     if not uri: raise ValueError("LoadS3/LoadURI requires 'uri'")
@@ -1345,37 +1199,27 @@ class MainWindow(wx.Frame):
                     self.headers, self.raw_data = detect_and_split_data(text)
                     wx.CallAfter(self._display, self.headers, self.raw_data)
                     wx.CallAfter(self._reset_kpis_for_new_dataset, self.headers, self.raw_data)
-
                 elif act in ("profile", "quality", "catalog", "compliance", "detectanomalies"):
                     name = {"detectanomalies": "Detect Anomalies"}.get(act, act.capitalize())
                     wx.CallAfter(self.do_analysis_process, name)
-
                 elif act == "exportcsv":
                     p = t.get("path")
                     if not p: raise ValueError("ExportCSV requires 'path'")
                     wx.CallAfter(self._export_to_path, p, ",")
-
                 elif act == "exporttxt":
                     p = t.get("path")
                     if not p: raise ValueError("ExportTXT requires 'path'")
                     wx.CallAfter(self._export_to_path, p, "\t")
-
                 elif act == "uploads3":
                     wx.CallAfter(self.on_upload_s3, None)
-
                 elif act == "sleep":
-                    import time
-                    time.sleep(float(t.get("seconds", 1)))
-
+                    import time; time.sleep(float(t.get("seconds", 1)))
                 else:
                     raise ValueError(f"Unknown action: {t.get('action')}")
-
                 ran += 1
-
             except Exception as e:
                 wx.CallAfter(wx.MessageBox, f"Tasks stopped at step {i}:\n{t}\n\n{e}", "Tasks", wx.OK | wx.ICON_ERROR)
                 return
-
         wx.CallAfter(wx.MessageBox, f"Tasks completed. {ran} step(s) executed.", "Tasks", wx.OK | wx.ICON_INFORMATION)
 
     def _export_to_path(self, path: str, sep: str):
@@ -1396,28 +1240,22 @@ class MainWindow(wx.Frame):
             self.grid.DeleteRows(0, self.grid.GetNumberRows())
         if self.grid.GetNumberCols():
             self.grid.DeleteCols(0, self.grid.GetNumberCols())
-
         if not hdr:
-            self._render_kpis()
-            return
-
+            self._render_kpis(); return
         self.grid.AppendCols(len(hdr))
         for i, h in enumerate(hdr):
             self.grid.SetColLabelValue(i, str(h))
-
         self.grid.AppendRows(len(data))
         for r, row in enumerate(data):
             for c, val in enumerate(row):
                 self.grid.SetCellValue(r, c, str(val))
                 if r % 2 == 0:
                     self.grid.SetCellBackgroundColour(r, c, wx.Colour(45, 45, 45))
-        self.adjust_grid()
-        self._render_kpis()
+        self.adjust_grid(); self._render_kpis()
 
     def adjust_grid(self):
         cols = self.grid.GetNumberCols()
-        if cols == 0:
-            return
+        if cols == 0: return
         total_w = self.grid.GetClientSize().GetWidth()
         usable = max(0, total_w - self.grid.GetRowLabelSize())
         w = max(60, usable // cols)
