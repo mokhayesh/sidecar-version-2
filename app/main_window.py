@@ -60,10 +60,7 @@ class KernelManager:
                 ]
             },
             "stats": {"launch_count": 0},
-            "state": {
-                "last_dataset": None,
-                "kpis": {}
-            },
+            "state": {"last_dataset": None, "kpis": {}},
             "events": []
         }
 
@@ -272,10 +269,10 @@ class RoundedShadowButton(wx.Control):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Special "Little Buddy" pill with icon (GraphicsContext)
+# Little Buddy pill (GraphicsContext)
 # ──────────────────────────────────────────────────────────────────────────────
 class LittleBuddyPill(wx.Control):
-    """A distinctive glossy pill with a speech-bubble icon, rendered via wx.GraphicsContext."""
+    """A glossy pill with a speech-bubble icon, rendered via wx.GraphicsContext."""
     def __init__(self, parent, label="Little Buddy", handler=None):
         super().__init__(parent, style=wx.BORDER_NONE)
         self._label = label
@@ -386,7 +383,7 @@ class LittleBuddyPill(wx.Control):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# KPI badge (flex width so 8 KPIs fit one row)
+# KPI badge
 # ──────────────────────────────────────────────────────────────────────────────
 class KPIBadge(wx.Panel):
     def __init__(self, parent, title, init_value="—", colour=wx.Colour(32, 35, 41)):
@@ -398,8 +395,8 @@ class KPIBadge(wx.Panel):
         self._colour = colour
         self._accent = wx.Colour(90, 180, 255)
         self._accent2 = wx.Colour(80, 210, 140)
-        self._font_title = wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL)
-        self._font_value = wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD)
+        self._font_title = wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+        self._font_value = wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
         self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
         self.Bind(wx.EVT_PAINT, self.on_paint)
         self.Bind(wx.EVT_SIZE, lambda e: self.Refresh())
@@ -561,7 +558,7 @@ class MainWindow(wx.Frame):
         self.kernel.log("app_started", version=self.kernel.data["kernel_version"])
 
         self.headers = []
-               self.raw_data = []
+        self.raw_data = []
         self.knowledge_files = []
         self.quality_rules = {}
         self.current_process = ""
@@ -639,7 +636,7 @@ class MainWindow(wx.Frame):
 
         kpi_v.Add(kpi_row, 0, wx.EXPAND)
 
-        # ── Toolbar under KPIs (SWAPPED)
+        # Toolbar under KPIs (buttons) — SWAPPED HERE
         toolbar_panel = wx.Panel(kpi_panel)
         toolbar_panel.SetBackgroundColour(PANEL)
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
@@ -671,7 +668,7 @@ class MainWindow(wx.Frame):
         kpi_panel.SetSizer(kpi_v)
         main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
-        # ── Little Buddy moved down, right-aligned (SWAPPED)
+        # Little Buddy moved BELOW buttons, right-aligned — SWAPPED HERE
         pill_panel = wx.Panel(self)
         pill_panel.SetBackgroundColour(BG)
         pill_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -701,7 +698,7 @@ class MainWindow(wx.Frame):
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
         lab.SetForegroundColour(TXT)
-        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
+        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         self.knowledge_lbl = wx.StaticText(info_panel, label="(none)")
         self.knowledge_lbl.SetForegroundColour(wx.Colour(200, 200, 200))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
@@ -733,7 +730,7 @@ class MainWindow(wx.Frame):
         self.SetSizer(main)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Knowledge files helpers (keep label + env var in sync; kernel first)
+    # Knowledge files helpers
     # ──────────────────────────────────────────────────────────────────────
     def _get_prioritized_knowledge(self):
         paths = []
@@ -745,7 +742,6 @@ class MainWindow(wx.Frame):
         return paths
 
     def _update_knowledge_label_and_env(self):
-        # Label shows all; env var stores prioritized (kernel first)
         names = ", ".join(os.path.basename(p) for p in self._get_prioritized_knowledge()) or "(none)"
         self.knowledge_lbl.SetLabel(names)
         prio = self._get_prioritized_knowledge()
@@ -968,17 +964,15 @@ class MainWindow(wx.Frame):
             wx.MessageBox(f"Could not open Settings:\n{e}", "Settings", wx.OK | wx.ICON_ERROR)
 
     def on_little_buddy(self, _evt=None):
-        """Open chat and make Knowledge Files (kernel first) the primary context."""
+        """Open chat with Knowledge Files (kernel first) as primary context."""
         try:
             dlg = DataBuddyDialog(self)
 
-            # Build prioritized list (kernel first), keep env vars in sync
             prio = self._get_prioritized_knowledge()
             os.environ["SIDECAR_KNOWLEDGE_FILES"] = os.pathsep.join(prio)
             os.environ["SIDECAR_KNOWLEDGE_FIRST"] = "1"
             os.environ["SIDECAR_KERNEL_FIRST"] = "1"
 
-            # Pass kernel + knowledge files to the dialog
             if hasattr(dlg, "set_kernel"):
                 dlg.set_kernel(self.kernel)
             elif hasattr(dlg, "kernel"):
@@ -1017,7 +1011,7 @@ class MainWindow(wx.Frame):
         files = dlg.GetPaths()
         dlg.Destroy()
 
-        # Make sure kernel is always included and first; then add selected files
+        # kernel first
         new_list = []
         if self.kernel and os.path.exists(self.kernel.path):
             new_list.append(self.kernel.path)
@@ -1128,8 +1122,8 @@ class MainWindow(wx.Frame):
 
     def _build_generators(self, src_df: pd.DataFrame, fields):
         gens = {}
-        name_first = [ "James","Mary","Robert","Patricia","John","Jennifer","Michael","Linda","William","Elizabeth" ]
-        name_last  = [ "Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez" ]
+        name_first = ["James","Mary","Robert","Patricia","John","Jennifer","Michael","Linda","William","Elizabeth"]
+        name_last  = ["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez"]
         first_col = next((c for c in src_df.columns if "first" in c.lower() and "name" in c.lower()), None)
         last_col  = next((c for c in src_df.columns if "last"  in c.lower() and "name" in c.lower()), None)
 
@@ -1294,7 +1288,7 @@ class MainWindow(wx.Frame):
         self.current_process = "MDM"
         self.kernel.log("mdm_completed", golden_rows=len(data), golden_cols=len(hdr), params=params)
 
-    # Field name helpers
+    # Helpers for MDM
     @staticmethod
     def _find_col(cols, *candidates):
         cl = {c.lower(): c for c in cols}
@@ -1419,7 +1413,7 @@ class MainWindow(wx.Frame):
                 "first": self._find_col(cols, "first name", "firstname", "given"),
                 "last":  self._find_col(cols, "last name", "lastname", "surname", "family"),
                 "addr":  self._find_col(cols, "address", "street"),
-                "city":  self._find_col(cols, "city",),
+                "city":  self._find_col(cols, "city"),
                 "state": self._find_col(cols, "state", "province", "region"),
                 "zip":   self._find_col(cols, "zip", "postal"),
             }
@@ -1564,9 +1558,10 @@ class MainWindow(wx.Frame):
                 for c in df.columns:
                     ex = next((str(v) for v in df[c].dropna().head(1).tolist()), "")
                     dtype = "Number" if pd.to_numeric(df[c], errors="coerce").notna().mean() > 0.8 else "Text"
-                    rows.append([c, c.replace("_"," ").title(), f"Automatically generated description for {c}.", dtype,
-                                 "No" if df[c].isna().mean() < 0.5 else "Yes", ex, now])
-                hdr = ["Field","Friendly Name","Description","Data Type","Nullable","Example","Analysis Date"]
+                    rows.append([c, c.replace("_", " ").title(),
+                                 f"Automatically generated description for {c}.",
+                                 dtype, "No" if df[c].isna().mean() < 0.5 else "Yes", ex, now])
+                hdr = ["Field", "Friendly Name", "Description", "Data Type", "Nullable", "Example", "Analysis Date"]
                 data = rows
             self.kernel.log("run_catalog", columns=len(hdr))
 
@@ -1776,7 +1771,8 @@ class MainWindow(wx.Frame):
             self.grid.SetColLabelValue(i, str(h))
 
         self.grid.AppendRows(len(data))
-        # find anomaly column index if present
+
+        # anomaly column index if present
         try:
             anom_idx = hdr.index("__anomaly__")
         except ValueError:
@@ -1790,7 +1786,7 @@ class MainWindow(wx.Frame):
                 self.grid.SetCellValue(r, c, str(val))
                 base_col = wx.Colour(45, 45, 45) if r % 2 == 0 else wx.Colour(35, 35, 35)
                 if row_has_anom:
-                    base_col = wx.Colour(72, 32, 32)  # subtle red tint for anomalies
+                    base_col = wx.Colour(72, 32, 32)  # faint red to highlight anomaly rows
                 self.grid.SetCellBackgroundColour(r, c, base_col)
 
         self.adjust_grid()
