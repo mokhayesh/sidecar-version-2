@@ -214,14 +214,21 @@ def anomalies_analysis(df: pd.DataFrame):
       • Duplicate full rows
       • Numeric outliers (|z| > 3)
       • Email format checks for columns with 'email' in the name
+
+    Side effect:
+      • Writes per-row flags: __anomaly__ (0/1) and __anomaly_mark__ ('⚠'/'')
     """
     findings = []
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # 0) Duplicate rows
-    dups = df.duplicated(keep="first")
+    # Row-wise flags we will write back (aligned by index)
+    row_flags = pd.Series(False, index=df.index)
+
+    # 0) Duplicate rows (ignore any existing anomaly columns when checking)
+    dups = df.drop(columns=["__anomaly__", "__anomaly_mark__"], errors="ignore").duplicated(keep="first")
     for idx in dups[dups].index.tolist():
         findings.append(["(row)", "Duplicate row", "Deduplicate or add a key", now])
+    row_flags |= dups
 
     # 1) Missing / blank
     for col in df.columns:
@@ -230,6 +237,7 @@ def anomalies_analysis(df: pd.DataFrame):
         n_blanks = int(blanks_mask.sum())
         if n_blanks:
             findings.append([col, f"{n_blanks} missing/blank", "Impute, drop or enforce NOT NULL", now])
+        row_flags |= blanks_mask
 
     # 2) Numeric outliers via z-score > 3 (handles commas)
     for col in df.columns:
@@ -240,24 +248,26 @@ def anomalies_analysis(df: pd.DataFrame):
         sigma = s_num.std(ddof=0)
         if sigma and np.isfinite(sigma) and sigma > 0:
             z = (s_num - mu).abs() / sigma
-            out_idx = z[z > 3].index.tolist()
-            if out_idx:
-                findings.append([col, f"{len(out_idx)} outlier(s) (|z|>3)", "Winsorize, robust scale, or verify source", now])
+            out_mask = (z > 3)
+            n_out = int(out_mask.sum())
+            if n_out:
+                findings.append([col, f"{n_out} outlier(s) (|z|>3)", "Winsorize, robust scale, or verify source", now])
+            row_flags |= out_mask.fillna(False)
 
-    # 3) Email format check
+    # 3) Email format check (vectorized)
     email_cols = [c for c in df.columns if "email" in c.lower()]
     if email_cols:
-        email_re = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
         for col in email_cols:
-            bad = 0
-            for _, val in df[col].items():
-                if pd.isna(val):
-                    continue
-                v = str(val).strip()
-                if v and not email_re.match(v):
-                    bad += 1
-            if bad:
-                findings.append([col, f"{bad} invalid email(s)", "Validate with regex & cleanse source", now])
+            bad_mask = ~df[col].astype(str).str.match(_EMAIL_RE, na=False)
+            bad_count = int(bad_mask.sum())
+            if bad_count:
+                findings.append([col, f"{bad_count} invalid email(s)", "Validate with regex & cleanse source", now])
+            row_flags |= bad_mask
+
+    # Write back flags for the KPI/grid
+    df["__anomaly__"] = row_flags.astype(int)
+    # Optional visible marker (useful if your grid renders 0 as blank)
+    df["__anomaly_mark__"] = np.where(df["__anomaly__"].eq(1), "⚠", "")
 
     if not findings:
         findings = [["(none)", "No anomalies found", "", now]]
