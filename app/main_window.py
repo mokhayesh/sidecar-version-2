@@ -639,7 +639,7 @@ class MainWindow(wx.Frame):
 
         kpi_v.Add(kpi_row, 0, wx.EXPAND)
 
-        # ── (SWAPPED) Toolbar now sits UNDER the KPIs (inside the KPI panel)
+        # ── Toolbar under KPIs (SWAPPED)
         toolbar_panel = wx.Panel(kpi_panel)
         toolbar_panel.SetBackgroundColour(PANEL)
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
@@ -671,7 +671,7 @@ class MainWindow(wx.Frame):
         kpi_panel.SetSizer(kpi_v)
         main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
-        # ── (SWAPPED) Little Buddy pill moves DOWN here, aligned right
+        # ── Little Buddy moved down, right-aligned (SWAPPED)
         pill_panel = wx.Panel(self)
         pill_panel.SetBackgroundColour(BG)
         pill_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -795,7 +795,6 @@ class MainWindow(wx.Frame):
     @staticmethod
     def _as_df(rows, cols):
         df = pd.DataFrame(rows, columns=cols)
-        # Using applymap keeps compatibility across pandas versions
         return df.applymap(lambda x: None if (x is None or (isinstance(x, str) and x.strip() == "")) else x)
 
     def _compute_profile_metrics(self, df: pd.DataFrame):
@@ -847,40 +846,93 @@ class MainWindow(wx.Frame):
         return completeness, validity, dq_score
 
     def _detect_anomalies(self, df: pd.DataFrame):
+        """
+        Robust anomaly detector:
+          • Parses numeric values from strings (handles $, %, commas, parentheses negatives).
+          • Skips phone/ID-like columns.
+          • Flags outliers by Z-score (>3σ) OR IQR (1.5×IQR).
+        Returns a (DataFrame_with_reason_column, count) tuple.
+        """
         work = df.copy()
 
-        def to_num(s):
-            if s is None:
+        def parse_number(x):
+            if x is None:
                 return None
-            if isinstance(s, (int, float)):
-                return float(s)
-            st = str(s).strip().replace(",", "")
-            m = re.search(r"([-+]?\d*\.?\d+)", st)
-            return float(m.group(1)) if m else None
+            s = str(x).strip()
+            if s == "":
+                return None
+            neg = False
+            if s.startswith("(") and s.endswith(")"):
+                neg = True
+                s = s[1:-1]
+            is_percent = s.endswith("%")
+            s = s.replace("$", "").replace(",", "").replace("%", "").strip()
+            # strict numeric match
+            if re.fullmatch(r"[-+]?\d*\.?\d+", s):
+                try:
+                    v = float(s)
+                    if neg:
+                        v = -v
+                    if is_percent:
+                        v = v / 100.0
+                    return v
+                except Exception:
+                    return None
+            return None
 
-        num_cols = []
+        numeric_cols = []
         for c in work.columns:
-            series = work[c].map(to_num)
-            if series.notna().sum() >= 3:
-                num_cols.append((c, series))
+            col_as_str = work[c].astype(str)
+            # phone/ID-like heuristic: lots of dashes/parentheses and many digits length
+            dash_ratio = col_as_str.str.contains(r"[-()]+").mean()
+            digit_median = col_as_str.str.findall(r"\d").map(len).median() if len(col_as_str) else 0
+            phone_like = dash_ratio > 0.5 and digit_median >= 9
+
+            vals = work[c].map(parse_number)
+            ratio = vals.notna().mean()
+            if ratio >= 0.60 and not phone_like:
+                numeric_cols.append((c, vals.astype(float)))
 
         flags = pd.Series(False, index=work.index)
         reasons = [[] for _ in range(len(work))]
+        pos_map = {idx: i for i, idx in enumerate(work.index)}
 
-        for cname, s in num_cols:
-            x = s.astype(float)
-            mu = x.mean()
-            sd = x.std(ddof=0)
-            if not sd or sd == 0:
+        for cname, x in numeric_cols:
+            s = x.dropna()
+            if s.size < 5:
                 continue
-            z = (x - mu).abs() / sd
-            hits = z > 3.0
-            flags = flags | hits.fillna(False)
-            for i, hit in hits.fillna(False).items():
-                if hit:
-                    reasons[i].append(f"{cname} z>{3}")
 
-        work["__anomaly__"] = [", ".join(r) if r else "" for r in reasons]
+            # Z-score
+            zhits = pd.Series(False, index=x.index)
+            mu = s.mean()
+            sd = s.std(ddof=0)
+            if sd and sd != 0:
+                z = (x - mu).abs() / sd
+                zhits = (z > 3.0)
+
+            # IQR
+            iqr_hits = pd.Series(False, index=x.index)
+            q1 = s.quantile(0.25)
+            q3 = s.quantile(0.75)
+            iqr = q3 - q1
+            if iqr and iqr != 0:
+                low = q1 - 1.5 * iqr
+                high = q3 + 1.5 * iqr
+                iqr_hits = (x < low) | (x > high)
+
+            hits = zhits.fillna(False) | iqr_hits.fillna(False)
+            flags = flags | hits.fillna(False)
+
+            for idx, is_hit in hits.fillna(False).items():
+                if is_hit:
+                    rbits = []
+                    if bool(zhits.get(idx, False)):
+                        rbits.append("z>3")
+                    if bool(iqr_hits.get(idx, False)):
+                        rbits.append("IQR")
+                    reasons[pos_map[idx]].append(f"{cname} {'/'.join(rbits) if rbits else ''}".strip())
+
+        work["__anomaly__"] = ["; ".join(r) if r else "" for r in reasons]
         count = int(flags.sum())
         return work, count
 
