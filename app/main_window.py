@@ -287,7 +287,7 @@ class LittleBuddyPill(wx.Control):
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
         self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
         self.Bind(wx.EVT_PAINT, self.on_paint)
-        self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self._set_hover(True))
+               self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self._set_hover(True))
         self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
         self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
         self.Bind(wx.EVT_LEFT_UP, self.on_up)
@@ -386,7 +386,7 @@ class LittleBuddyPill(wx.Control):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# KPI badge (flex width so 8 KPIs fit one row)
+# KPI badge
 # ──────────────────────────────────────────────────────────────────────────────
 class KPIBadge(wx.Panel):
     def __init__(self, parent, title, init_value="—", colour=wx.Colour(32, 35, 41)):
@@ -733,7 +733,7 @@ class MainWindow(wx.Frame):
         self.SetSizer(main)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Knowledge files helpers (keep label + env var in sync; kernel first)
+    # Knowledge files helpers
     # ──────────────────────────────────────────────────────────────────────
     def _get_prioritized_knowledge(self):
         paths = []
@@ -745,7 +745,6 @@ class MainWindow(wx.Frame):
         return paths
 
     def _update_knowledge_label_and_env(self):
-        # Label shows all; env var stores prioritized (kernel first)
         names = ", ".join(os.path.basename(p) for p in self._get_prioritized_knowledge()) or "(none)"
         self.knowledge_lbl.SetLabel(names)
         prio = self._get_prioritized_knowledge()
@@ -848,10 +847,11 @@ class MainWindow(wx.Frame):
     def _detect_anomalies(self, df: pd.DataFrame):
         """
         Robust anomaly detector:
-          • Parses numeric values from strings (handles $, %, commas, parentheses negatives).
+          • Parses numeric values from strings (handles $, %, commas, and (123) negatives).
           • Skips phone/ID-like columns.
-          • Flags outliers by Z-score (>3σ) OR IQR (1.5×IQR).
-        Returns a (DataFrame_with_reason_column, count) tuple.
+          • Flags outliers by Z-score (>3σ) OR IQR (1.5×IQR) OR extreme quantiles (<1%/>99% if n≥50),
+            plus unexpected negatives and rare zeros.
+        Returns (DataFrame_with_reason_column, count).
         """
         work = df.copy()
 
@@ -867,25 +867,20 @@ class MainWindow(wx.Frame):
                 s = s[1:-1]
             is_percent = s.endswith("%")
             s = s.replace("$", "").replace(",", "").replace("%", "").strip()
-            # strict numeric match
             if re.fullmatch(r"[-+]?\d*\.?\d+", s):
-                try:
-                    v = float(s)
-                    if neg:
-                        v = -v
-                    if is_percent:
-                        v = v / 100.0
-                    return v
-                except Exception:
-                    return None
+                v = float(s)
+                if neg:
+                    v = -v
+                if is_percent:
+                    v = v / 100.0
+                return v
             return None
 
         numeric_cols = []
         for c in work.columns:
-            col_as_str = work[c].astype(str)
-            # phone/ID-like heuristic: lots of dashes/parentheses and many digits length
-            dash_ratio = col_as_str.str.contains(r"[-()]+").mean()
-            digit_median = col_as_str.str.findall(r"\d").map(len).median() if len(col_as_str) else 0
+            col_str = work[c].astype(str)
+            dash_ratio = col_str.str.contains(r"[-()]+").mean()
+            digit_median = col_str.str.findall(r"\d").map(len).median() if len(col_str) else 0
             phone_like = dash_ratio > 0.5 and digit_median >= 9
 
             vals = work[c].map(parse_number)
@@ -902,35 +897,54 @@ class MainWindow(wx.Frame):
             if s.size < 5:
                 continue
 
-            # Z-score
-            zhits = pd.Series(False, index=x.index)
+            # thresholds
             mu = s.mean()
             sd = s.std(ddof=0)
-            if sd and sd != 0:
-                z = (x - mu).abs() / sd
-                zhits = (z > 3.0)
-
-            # IQR
-            iqr_hits = pd.Series(False, index=x.index)
             q1 = s.quantile(0.25)
             q3 = s.quantile(0.75)
             iqr = q3 - q1
-            if iqr and iqr != 0:
-                low = q1 - 1.5 * iqr
-                high = q3 + 1.5 * iqr
-                iqr_hits = (x < low) | (x > high)
+            lo = q1 - 1.5 * iqr if iqr else None
+            hi = q3 + 1.5 * iqr if iqr else None
+            p01 = s.quantile(0.01) if len(s) >= 50 else None
+            p99 = s.quantile(0.99) if len(s) >= 50 else None
+            mostly_nonneg = (s.ge(0).mean() >= 0.95)
+            mostly_nonzero = (s.ne(0).mean() >= 0.95)
 
-            hits = zhits.fillna(False) | iqr_hits.fillna(False)
+            zhits = pd.Series(False, index=x.index)
+            if sd and sd != 0:
+                z = (x - mu).abs() / sd
+                zhits = z > 3.0
+
+            iqr_hits = pd.Series(False, index=x.index)
+            if lo is not None and hi is not None:
+                iqr_hits = (x < lo) | (x > hi)
+
+            q_hits = pd.Series(False, index=x.index)
+            if p01 is not None and p99 is not None:
+                q_hits = (x < p01) | (x > p99)
+
+            neg_hits = pd.Series(False, index=x.index)
+            if mostly_nonneg:
+                neg_hits = x < 0
+
+            zero_hits = pd.Series(False, index=x.index)
+            if mostly_nonzero:
+                zero_hits = x == 0
+
+            hits = (zhits.fillna(False) | iqr_hits.fillna(False) |
+                    q_hits.fillna(False) | neg_hits.fillna(False) | zero_hits.fillna(False))
+
             flags = flags | hits.fillna(False)
 
             for idx, is_hit in hits.fillna(False).items():
                 if is_hit:
-                    rbits = []
-                    if bool(zhits.get(idx, False)):
-                        rbits.append("z>3")
-                    if bool(iqr_hits.get(idx, False)):
-                        rbits.append("IQR")
-                    reasons[pos_map[idx]].append(f"{cname} {'/'.join(rbits) if rbits else ''}".strip())
+                    bits = []
+                    if bool(zhits.get(idx, False)): bits.append("z>3")
+                    if bool(iqr_hits.get(idx, False)): bits.append("IQR")
+                    if bool(q_hits.get(idx, False)): bits.append("P1/P99")
+                    if bool(neg_hits.get(idx, False)): bits.append("neg")
+                    if bool(zero_hits.get(idx, False)): bits.append("zero")
+                    reasons[pos_map[idx]].append(f"{cname} {'/'.join(bits)}")
 
         work["__anomaly__"] = ["; ".join(r) if r else "" for r in reasons]
         count = int(flags.sum())
@@ -953,17 +967,14 @@ class MainWindow(wx.Frame):
             wx.MessageBox(f"Could not open Settings:\n{e}", "Settings", wx.OK | wx.ICON_ERROR)
 
     def on_little_buddy(self, _evt=None):
-        """Open chat and make Knowledge Files (kernel first) the primary context."""
         try:
             dlg = DataBuddyDialog(self)
 
-            # Build prioritized list (kernel first), keep env vars in sync
             prio = self._get_prioritized_knowledge()
             os.environ["SIDECAR_KNOWLEDGE_FILES"] = os.pathsep.join(prio)
             os.environ["SIDECAR_KNOWLEDGE_FIRST"] = "1"
             os.environ["SIDECAR_KERNEL_FIRST"] = "1"
 
-            # Pass kernel + knowledge files to the dialog in a few compatible ways
             if hasattr(dlg, "set_kernel"):
                 dlg.set_kernel(self.kernel)
             elif hasattr(dlg, "kernel"):
@@ -974,7 +985,6 @@ class MainWindow(wx.Frame):
             if hasattr(dlg, "set_knowledge_files"):
                 dlg.set_knowledge_files(list(prio))
             else:
-                # common fallbacks some dialogs look for
                 setattr(dlg, "knowledge_files", list(prio))
                 setattr(dlg, "priority_sources", list(prio))
                 setattr(dlg, "knowledge_first", True)
@@ -1003,13 +1013,11 @@ class MainWindow(wx.Frame):
         files = dlg.GetPaths()
         dlg.Destroy()
 
-        # Make sure kernel is always included and first; then add selected files
         new_list = []
         if self.kernel and os.path.exists(self.kernel.path):
             new_list.append(self.kernel.path)
         new_list.extend(files)
 
-        # de-dup while preserving order
         seen = set()
         self.knowledge_files = [x for x in new_list if not (x in seen or seen.add(x))]
 
@@ -1392,7 +1400,6 @@ class MainWindow(wx.Frame):
         return score
 
     def _run_mdm(self, dataframes, use_email=True, use_phone=True, use_name=True, use_addr=True, threshold=0.85):
-        """Return golden-record DataFrame from a list of DataFrames."""
         datasets = []
         union_cols = set()
         for df in dataframes:
@@ -1760,11 +1767,23 @@ class MainWindow(wx.Frame):
             self.grid.SetColLabelValue(i, str(h))
 
         self.grid.AppendRows(len(data))
+        # find anomaly column index if present
+        try:
+            anom_idx = hdr.index("__anomaly__")
+        except ValueError:
+            anom_idx = -1
+
         for r, row in enumerate(data):
+            row_has_anom = False
+            if anom_idx >= 0 and anom_idx < len(row):
+                row_has_anom = bool(str(row[anom_idx]).strip())
             for c, val in enumerate(row):
                 self.grid.SetCellValue(r, c, str(val))
-                if r % 2 == 0:
-                    self.grid.SetCellBackgroundColour(r, c, wx.Colour(45, 45, 45))
+                base_col = wx.Colour(45, 45, 45) if r % 2 == 0 else wx.Colour(35, 35, 35)
+                if row_has_anom:
+                    base_col = wx.Colour(72, 32, 32)  # subtle red tint for anomalies
+                self.grid.SetCellBackgroundColour(r, c, base_col)
+
         self.adjust_grid()
         self._render_kpis()
 
