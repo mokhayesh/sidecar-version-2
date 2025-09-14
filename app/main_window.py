@@ -22,7 +22,6 @@ from app.analysis import (
     quality_analysis,
     catalog_analysis,
     compliance_analysis,
-    detect_anomalies as analysis_detect_anomalies,  # use the shared anomaly detector
 )
 
 
@@ -640,32 +639,8 @@ class MainWindow(wx.Frame):
 
         kpi_v.Add(kpi_row, 0, wx.EXPAND)
 
-        # Little Buddy aligned to the RIGHT (under KPI strip)
-        self.little_pill = LittleBuddyPill(kpi_panel, handler=self.on_little_buddy)
-        lb_row = wx.BoxSizer(wx.HORIZONTAL)
-        lb_row.AddStretchSpacer(1)
-        lb_row.Add(self.little_pill, 0, wx.RIGHT | wx.TOP | wx.BOTTOM, 10)
-        kpi_v.Add(lb_row, 0, wx.EXPAND)
-
-        kpi_panel.SetSizer(kpi_v)
-        main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
-
-        # Menus
-        mb = wx.MenuBar()
-        m_file = wx.Menu()
-        m_file.Append(wx.ID_EXIT, "&Quit\tCtrl+Q")
-        mb.Append(m_file, "&File")
-        self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=wx.ID_EXIT)
-
-        m_settings = wx.Menu()
-        OPEN_SETTINGS_ID = wx.NewIdRef()
-        m_settings.Append(OPEN_SETTINGS_ID, "&Preferences...\tCtrl+,")
-        mb.Append(m_settings, "&Settings")
-        self.Bind(wx.EVT_MENU, self.open_settings, id=OPEN_SETTINGS_ID)
-        self.SetMenuBar(mb)
-
-        # Toolbar
-        toolbar_panel = wx.Panel(self)
+        # ── (SWAPPED) Toolbar now sits UNDER the KPIs (inside the KPI panel)
+        toolbar_panel = wx.Panel(kpi_panel)
         toolbar_panel.SetBackgroundColour(PANEL)
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
 
@@ -691,7 +666,34 @@ class MainWindow(wx.Frame):
         add_btn("Upload to S3", self.on_upload_s3)
 
         toolbar_panel.SetSizer(toolbar)
-        main.Add(toolbar_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
+        kpi_v.Add(toolbar_panel, 0, wx.EXPAND | wx.ALL, 6)
+
+        kpi_panel.SetSizer(kpi_v)
+        main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
+
+        # ── (SWAPPED) Little Buddy pill moves DOWN here, aligned right
+        pill_panel = wx.Panel(self)
+        pill_panel.SetBackgroundColour(BG)
+        pill_row = wx.BoxSizer(wx.HORIZONTAL)
+        pill_row.AddStretchSpacer(1)
+        self.little_pill = LittleBuddyPill(pill_panel, handler=self.on_little_buddy)
+        pill_row.Add(self.little_pill, 0, wx.RIGHT | wx.TOP | wx.BOTTOM, 10)
+        pill_panel.SetSizer(pill_row)
+        main.Add(pill_panel, 0, wx.EXPAND)
+
+        # Menus
+        mb = wx.MenuBar()
+        m_file = wx.Menu()
+        m_file.Append(wx.ID_EXIT, "&Quit\tCtrl+Q")
+        mb.Append(m_file, "&File")
+        self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=wx.ID_EXIT)
+
+        m_settings = wx.Menu()
+        OPEN_SETTINGS_ID = wx.NewIdRef()
+        m_settings.Append(OPEN_SETTINGS_ID, "&Preferences...\tCtrl+,")
+        mb.Append(m_settings, "&Settings")
+        self.Bind(wx.EVT_MENU, self.open_settings, id=OPEN_SETTINGS_ID)
+        self.SetMenuBar(mb)
 
         # Knowledge line
         info_panel = wx.Panel(self)
@@ -793,19 +795,8 @@ class MainWindow(wx.Frame):
     @staticmethod
     def _as_df(rows, cols):
         df = pd.DataFrame(rows, columns=cols)
-
-        def clean(x):
-            if x is None:
-                return None
-            if isinstance(x, str) and x.strip() == "":
-                return None
-            return x
-
-        # Pandas 2.2+: DataFrame.applymap is deprecated. Prefer DataFrame.map with fallback.
-        try:
-            return df.map(clean)  # pandas ≥ 2.2
-        except Exception:
-            return df.apply(lambda s: s.map(clean))  # fallback for older versions
+        # Using applymap keeps compatibility across pandas versions
+        return df.applymap(lambda x: None if (x is None or (isinstance(x, str) and x.strip() == "")) else x)
 
     def _compute_profile_metrics(self, df: pd.DataFrame):
         total_cells = df.shape[0] * max(1, df.shape[1])
@@ -854,6 +845,44 @@ class MainWindow(wx.Frame):
             components.append(validity)
         dq_score = sum(components) / len(components) if components else 0.0
         return completeness, validity, dq_score
+
+    def _detect_anomalies(self, df: pd.DataFrame):
+        work = df.copy()
+
+        def to_num(s):
+            if s is None:
+                return None
+            if isinstance(s, (int, float)):
+                return float(s)
+            st = str(s).strip().replace(",", "")
+            m = re.search(r"([-+]?\d*\.?\d+)", st)
+            return float(m.group(1)) if m else None
+
+        num_cols = []
+        for c in work.columns:
+            series = work[c].map(to_num)
+            if series.notna().sum() >= 3:
+                num_cols.append((c, series))
+
+        flags = pd.Series(False, index=work.index)
+        reasons = [[] for _ in range(len(work))]
+
+        for cname, s in num_cols:
+            x = s.astype(float)
+            mu = x.mean()
+            sd = x.std(ddof=0)
+            if not sd or sd == 0:
+                continue
+            z = (x - mu).abs() / sd
+            hits = z > 3.0
+            flags = flags | hits.fillna(False)
+            for i, hit in hits.fillna(False).items():
+                if hit:
+                    reasons[i].append(f"{cname} z>{3}")
+
+        work["__anomaly__"] = [", ".join(r) if r else "" for r in reasons]
+        count = int(flags.sum())
+        return work, count
 
     # ──────────────────────────────────────────────────────────────────────
     # Settings & Little Buddy
@@ -1448,18 +1477,15 @@ class MainWindow(wx.Frame):
             self.kernel.log("run_quality", completeness=completeness, validity=validity, dq_score=dq)
 
         elif proc_name == "Detect Anomalies":
-            # Use the shared analysis module’s anomalies to keep logic consistent with the rest of the app
             try:
-                hdr, rows = analysis_detect_anomalies(df)
+                work, count = self._detect_anomalies(df)
+                hdr, data = list(work.columns), work.values.tolist()
             except Exception:
-                hdr, rows = list(df.columns), df.values.tolist()
-            # Count anomalies (ignore the single "(none)" row)
-            count = 0 if (len(rows) == 1 and str(rows[0][0]).lower() == "(none)") else len(rows)
+                hdr, data = list(df.columns), df.values.tolist()
+                count = 0
             self.metrics["anomalies"] = count
             self._render_kpis()
             self.kernel.log("run_detect_anomalies", anomalies=count)
-            self._display(hdr, rows)
-            return  # already displayed
 
         elif proc_name == "Catalog":
             try:
