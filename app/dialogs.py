@@ -57,7 +57,8 @@ class QualityRuleDialog(wx.Dialog):
                          size=(740, 560),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
-        self.fields = fields
+        # Ensure we always have a list (wx ListBox uses index access later)
+        self.fields = list(fields)
         self.current_rules = current_rules
         self.loaded_rules = {}
 
@@ -76,7 +77,7 @@ class QualityRuleDialog(wx.Dialog):
         fbox = wx.StaticBox(pnl, label="Fields")
         fbox.SetForegroundColour(TXT)
         fsz = wx.StaticBoxSizer(fbox, wx.HORIZONTAL)
-        self.field_list = wx.ListBox(pnl, choices=list(fields), style=wx.LB_EXTENDED)
+        self.field_list = wx.ListBox(pnl, choices=list(self.fields), style=wx.LB_EXTENDED)
         self.field_list.SetBackgroundColour(INPUT_BG)
         self.field_list.SetForegroundColour(INPUT_TXT)
         self.field_list.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
@@ -166,7 +167,8 @@ class QualityRuleDialog(wx.Dialog):
             data = json.load(open(path, "r", encoding="utf-8"))
             self.loaded_rules = {k: (v if isinstance(v, str) else v.get("pattern", "")) for k, v in data.items()}
             self.rule_choice.Clear()
-            self.rule_choice.Append(list(self.loaded_rules))
+            # Correct API for wx.ComboBox to add multiple items
+            self.rule_choice.AppendItems(list(self.loaded_rules))
             self.preview.SetValue(json.dumps(data, indent=2))
             wx.MessageBox(f"Loaded {len(self.loaded_rules)} rule(s).", "Rules loaded", wx.OK | wx.ICON_INFORMATION)
         except Exception as e:
@@ -192,6 +194,7 @@ class QualityRuleDialog(wx.Dialog):
             wx.MessageBox(f"Invalid regex: {e}", "Regex error", wx.OK | wx.ICON_ERROR)
             return
         for i in sel:
+            # self.fields is guaranteed to be a list
             self.current_rules[self.fields[i]] = compiled
         self._refresh_view()
         wx.MessageBox(f"Assigned to {len(sel)} field(s).", "Assigned", wx.OK | wx.ICON_INFORMATION)
@@ -647,13 +650,14 @@ class DataBuddyDialog(wx.Dialog):
         provider = (defaults.get("image_provider") or os.environ.get("IMAGE_PROVIDER") or "openai").lower().strip()
         tried_msgs = []
 
-        order = []
         if provider == "auto":
-            order = ["openai", "gemini", "stability"]
+            order = ["openai", "gemini", "stability", "offline"]
         else:
             order = [provider]
+            if "offline" not in order:
+                order.append("offline")
 
-        for prov in order + ["offline"] if "offline" not in order else order:
+        for prov in order:
             try:
                 if prov == "openai":
                     path = self._generate_image_openai(prompt)
