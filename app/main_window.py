@@ -287,7 +287,7 @@ class LittleBuddyPill(wx.Control):
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
         self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
         self.Bind(wx.EVT_PAINT, self.on_paint)
-               self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self._set_hover(True))
+        self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self._set_hover(True))
         self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
         self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
         self.Bind(wx.EVT_LEFT_UP, self.on_up)
@@ -296,7 +296,7 @@ class LittleBuddyPill(wx.Control):
 
     def _set_hover(self, v):
         self._hover = v
-        self.Refresh()
+               self.Refresh()
 
     def on_down(self, _):
         self._down = True
@@ -386,7 +386,7 @@ class LittleBuddyPill(wx.Control):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# KPI badge
+# KPI badge (flex width so 8 KPIs fit one row)
 # ──────────────────────────────────────────────────────────────────────────────
 class KPIBadge(wx.Panel):
     def __init__(self, parent, title, init_value="—", colour=wx.Colour(32, 35, 41)):
@@ -733,7 +733,7 @@ class MainWindow(wx.Frame):
         self.SetSizer(main)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Knowledge files helpers
+    # Knowledge files helpers (keep label + env var in sync; kernel first)
     # ──────────────────────────────────────────────────────────────────────
     def _get_prioritized_knowledge(self):
         paths = []
@@ -745,6 +745,7 @@ class MainWindow(wx.Frame):
         return paths
 
     def _update_knowledge_label_and_env(self):
+        # Label shows all; env var stores prioritized (kernel first)
         names = ", ".join(os.path.basename(p) for p in self._get_prioritized_knowledge()) or "(none)"
         self.knowledge_lbl.SetLabel(names)
         prio = self._get_prioritized_knowledge()
@@ -967,14 +968,17 @@ class MainWindow(wx.Frame):
             wx.MessageBox(f"Could not open Settings:\n{e}", "Settings", wx.OK | wx.ICON_ERROR)
 
     def on_little_buddy(self, _evt=None):
+        """Open chat and make Knowledge Files (kernel first) the primary context."""
         try:
             dlg = DataBuddyDialog(self)
 
+            # Build prioritized list (kernel first), keep env vars in sync
             prio = self._get_prioritized_knowledge()
             os.environ["SIDECAR_KNOWLEDGE_FILES"] = os.pathsep.join(prio)
             os.environ["SIDECAR_KNOWLEDGE_FIRST"] = "1"
             os.environ["SIDECAR_KERNEL_FIRST"] = "1"
 
+            # Pass kernel + knowledge files to the dialog
             if hasattr(dlg, "set_kernel"):
                 dlg.set_kernel(self.kernel)
             elif hasattr(dlg, "kernel"):
@@ -1013,11 +1017,13 @@ class MainWindow(wx.Frame):
         files = dlg.GetPaths()
         dlg.Destroy()
 
+        # Make sure kernel is always included and first; then add selected files
         new_list = []
         if self.kernel and os.path.exists(self.kernel.path):
             new_list.append(self.kernel.path)
         new_list.extend(files)
 
+        # de-dup while preserving order
         seen = set()
         self.knowledge_files = [x for x in new_list if not (x in seen or seen.add(x))]
 
@@ -1400,6 +1406,7 @@ class MainWindow(wx.Frame):
         return score
 
     def _run_mdm(self, dataframes, use_email=True, use_phone=True, use_name=True, use_addr=True, threshold=0.85):
+        """Return golden-record DataFrame from a list of DataFrames."""
         datasets = []
         union_cols = set()
         for df in dataframes:
