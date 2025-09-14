@@ -296,7 +296,7 @@ class LittleBuddyPill(wx.Control):
 
     def _set_hover(self, v):
         self._hover = v
-               self.Refresh()
+        self.Refresh()
 
     def on_down(self, _):
         self._down = True
@@ -398,8 +398,8 @@ class KPIBadge(wx.Panel):
         self._colour = colour
         self._accent = wx.Colour(90, 180, 255)
         self._accent2 = wx.Colour(80, 210, 140)
-        self._font_title = wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
-        self._font_value = wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        self._font_title = wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL)
+        self._font_value = wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD)
         self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
         self.Bind(wx.EVT_PAINT, self.on_paint)
         self.Bind(wx.EVT_SIZE, lambda e: self.Refresh())
@@ -561,7 +561,7 @@ class MainWindow(wx.Frame):
         self.kernel.log("app_started", version=self.kernel.data["kernel_version"])
 
         self.headers = []
-        self.raw_data = []
+               self.raw_data = []
         self.knowledge_files = []
         self.quality_rules = {}
         self.current_process = ""
@@ -701,7 +701,7 @@ class MainWindow(wx.Frame):
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
         lab.SetForegroundColour(TXT)
-        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        lab.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
         self.knowledge_lbl = wx.StaticText(info_panel, label="(none)")
         self.knowledge_lbl.SetForegroundColour(wx.Colour(200, 200, 200))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
@@ -1028,9 +1028,11 @@ class MainWindow(wx.Frame):
         self.knowledge_files = [x for x in new_list if not (x in seen or seen.add(x))]
 
         self._update_knowledge_label_and_env()
-        self.kernel.log("load_knowledge_files",
-                        count=len(self._get_prioritized_knowledge()),
-                        files=[os.path.basename(p) for p in self._get_prioritized_knowledge()])
+        self.kernel.log(
+            "load_knowledge_files",
+            count=len(self._get_prioritized_knowledge()),
+            files=[os.path.basename(p) for p in self._get_prioritized_knowledge()],
+        )
 
     def _load_text_file(self, path):
         return open(path, "r", encoding="utf-8", errors="ignore").read()
