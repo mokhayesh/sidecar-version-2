@@ -1,4 +1,6 @@
 # app/main_window.py
+import wx.adv as wxadv
+
 import os
 import re
 import json
@@ -398,8 +400,16 @@ class MainWindow(wx.Frame):
         hz2.Add(self.chips_panel, 1, wx.ALL | wx.EXPAND, 4)
 
         # link to load more
-        link = wx.adv.HyperlinkCtrl(info, id=wx.ID_ANY, label="(add)", url="")
-        link.Bind(wx.EVT_HYPERLINK, lambda e: self.on_load_knowledge())
+       try:
+          link = wxadv.HyperlinkCtrl(info, id=wx.ID_ANY, label="(add)", url="")
+          link.Bind(wxadv.EVT_HYPERLINK, lambda e: self.on_load_knowledge())
+       except Exception:
+    # Fallback if wx.adv isn’t available in your build
+          link = wx.StaticText(info, label="(add)")
+          link.SetForegroundColour(wx.Colour(60, 80, 200))
+          f = link.GetFont(); f.SetUnderlined(True); link.SetFont(f)
+          link.Bind(wx.EVT_LEFT_UP, lambda e: self.on_load_knowledge())
+
         hz2.Add(link, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 8)
 
         info.SetSizer(hz2)
