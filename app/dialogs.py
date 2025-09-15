@@ -1,3 +1,4 @@
+# app/dialogs.py
 import os
 import re
 import json
@@ -102,8 +103,9 @@ class QualityRuleDialog(wx.Dialog):
 
         self.pattern_txt = wx.TextCtrl(pnl)
         self.pattern_txt.SetBackgroundColour(INPUT_BG)
+        this_font = wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
         self.pattern_txt.SetForegroundColour(INPUT_TXT)
-        self.pattern_txt.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.pattern_txt.SetFont(this_font)
         g.Add(self.pattern_txt, 0, wx.EXPAND)
 
         main.Add(g, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
@@ -196,22 +198,31 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy — provider-aware streaming (OpenAI + Gemini), voice, images, STT
+# Little Buddy — provider-aware streaming, voice, images, STT, chat bubbles
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None, knowledge=None):
         super().__init__(parent, title="Little Buddy", size=(920, 720),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
-        self.session = requests.Session()  # ← needed by streaming/image calls
+        self.session = requests.Session()
         self.data = data
         self.headers = headers
-        self.knowledge = knowledge or []
+        self.knowledge = list(knowledge or [])
+
+        kpath = os.environ.get("SIDECAR_KERNEL_PATH", "")
+        if kpath and kpath not in self.knowledge:
+            self.knowledge.append(kpath)
+
+        self.kernel = None
 
         self._tts_file = None
         self._tts_thread = None
         self._listening = False
         self._stop_listening = None
+
+        self._bubble_open = False
+        self._bubble_sender = None
 
         self.COLORS = {
             "bg": wx.Colour(35, 35, 35),
@@ -221,6 +232,10 @@ class DataBuddyDialog(wx.Dialog):
             "accent": wx.Colour(70, 130, 180),
             "input_bg": wx.Colour(50, 50, 50),
             "input_fg": wx.Colour(240, 240, 240),
+            "bubble_user_bg": wx.Colour(44, 62, 80),
+            "bubble_user_fg": wx.Colour(240, 240, 240),
+            "bubble_bot_bg": wx.Colour(56, 42, 120),
+            "bubble_bot_fg": wx.Colour(255, 255, 255),
             "reply_bg": wx.Colour(28, 28, 28),
             "reply_fg": wx.Colour(255, 255, 255),
         }
@@ -313,6 +328,7 @@ class DataBuddyDialog(wx.Dialog):
 
         vbox.Add(row, 0, wx.EXPAND | wx.ALL, 5)
 
+        # Chat area
         self.reply = rt.RichTextCtrl(pnl, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.BORDER_SIMPLE)
         self.reply.SetBackgroundColour(self.COLORS["reply_bg"])
         self.reply.SetForegroundColour(self.COLORS["reply_fg"])
@@ -320,28 +336,77 @@ class DataBuddyDialog(wx.Dialog):
         vbox.Add(self.reply, 1, wx.EXPAND | wx.ALL, 6)
 
         pnl.SetSizer(vbox)
-        self._write_reply("Hi, I'm Little Buddy!")
 
-    # ---------- helpers
-    def _current_attr(self):
+        # Greet
+        self._append_user_bubble("Hi!", fake=True)
+        self._append_bot_bubble("Hi, I'm Little Buddy!")
+
+    def set_kernel(self, kernel):
+        self.kernel = kernel
+        try:
+            kpath = kernel.path
+            if kpath and kpath not in self.knowledge:
+                self.knowledge.append(kpath)
+        except Exception:
+            pass
+
+    # ---------- bubble helpers
+    def _reset_reply_style(self):
         attr = rt.RichTextAttr()
         attr.SetTextColour(self.COLORS["reply_fg"])
         attr.SetFontSize(11)
         attr.SetFontFaceName("Segoe UI")
-        return attr
-
-    def _reset_reply_style(self):
-        attr = self._current_attr()
         self.reply.SetDefaultStyle(attr)
         self.reply.SetBasicStyle(attr)
 
-    def _write_reply(self, text, newline=False):
-        attr = self._current_attr()
+    def _start_bubble(self, sender: str):
+        if self._bubble_open:
+            self._end_bubble()
+
+        if self.reply.GetLastPosition() > 0:
+            self.reply.Newline()
+
+        attr = rt.RichTextAttr()
+        if sender == "user":
+            attr.SetBackgroundColour(self.COLORS["bubble_user_bg"])
+            attr.SetTextColour(self.COLORS["bubble_user_fg"])
+        else:
+            attr.SetBackgroundColour(self.COLORS["bubble_bot_bg"])
+            attr.SetTextColour(self.COLORS["bubble_bot_fg"])
+
+        attr.SetLeftIndent(20, 40)
+        attr.SetRightIndent(20)
+        attr.SetParagraphSpacingAfter(6)
+        attr.SetFontSize(11)
+        attr.SetFontFaceName("Segoe UI")
+
         self.reply.BeginStyle(attr)
-        try:
-            self.reply.WriteText(text + ("\n" if newline else ""))
-        finally:
+        self._bubble_open = True
+        self._bubble_sender = sender
+
+    def _bubble_write(self, text: str):
+        if not self._bubble_open:
+            self._start_bubble("bot")
+        self.reply.WriteText(text)
+
+    def _end_bubble(self):
+        if self._bubble_open:
             self.reply.EndStyle()
+        self._bubble_open = False
+        self._bubble_sender = None
+
+    def _append_user_bubble(self, text: str, fake: bool = False):
+        self._start_bubble("user")
+        self.reply.WriteText(text)
+        self._end_bubble()
+        if not fake:
+            self.reply.Newline()
+
+    def _append_bot_bubble(self, text: str):
+        self._start_bubble("bot")
+        self.reply.WriteText(text)
+        self._end_bubble()
+        self.reply.Newline()
 
     def _set_tts_status(self, msg):
         try:
@@ -350,20 +415,15 @@ class DataBuddyDialog(wx.Dialog):
         except Exception:
             pass
 
-    def _build_knowledge_context(self, max_chars=1200):
-        """
-        Accepts self.knowledge as a list of dicts OR file-path strings.
-        Dict form: {"name": "...", "content": "..."}.
-        String form: "C:\\path\\file.txt" (reads a small snippet for text-like files).
-        """
+    # Build knowledge context (Knowledge files + kernel.json first)
+    def _build_knowledge_context(self, max_chars=1600):
         if not self.knowledge:
             return ""
         chunks = []
-        per_file = max(180, max_chars // max(1, len(self.knowledge)))
+        per_file = max(220, max_chars // max(1, len(self.knowledge)))
         for item in self.knowledge:
             name = "file"
             content = None
-            # normalize
             if isinstance(item, dict):
                 name = item.get("name", "file")
                 content = item.get("content")
@@ -374,19 +434,15 @@ class DataBuddyDialog(wx.Dialog):
                 else:
                     chunks.append(f"File: {name} (image or binary)")
                     continue
-            # string path
             try:
                 path = str(item)
                 name = os.path.basename(path) or "file"
                 if os.path.exists(path):
                     ext = os.path.splitext(path)[1].lower()
-                    if ext in (".txt", ".md", ".csv", ".json"):
-                        try:
-                            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-                                data = fh.read(per_file)
-                            chunks.append(f"File: {name}\n{data.strip()}")
-                        except Exception:
-                            chunks.append(f"File: {name} [read error]")
+                    if ext in (".txt", ".md", ".csv", ".json", ".log"):
+                        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                            data = fh.read(per_file)
+                        chunks.append(f"File: {name}\n{data.strip()}")
                     else:
                         chunks.append(f"File: {name} (binary {ext})")
                 else:
@@ -399,41 +455,46 @@ class DataBuddyDialog(wx.Dialog):
             text = text[:max_chars] + "\n…(truncated)…"
         return text
 
-    # ---------- chat entrypoint (provider aware)
+    # ---------- chat entrypoint
     def on_ask(self, _):
         q = self.prompt.GetValue().strip()
         self.prompt.SetValue("")
         if not q:
             return
-        self.reply.Clear()
-        self._reset_reply_style()
-        self._write_reply("Thinking…\n")
-
+        self._append_user_bubble(q)
         threading.Thread(target=self._answer_dispatch, args=(q,), daemon=True).start()
 
     def _answer_dispatch(self, q: str):
         persona = self.persona.GetValue()
-        prompt = f"As a {persona}, {q}" if persona else q
+        system_prefix = (
+            "You are 'Little Buddy', the in-app assistant for the Sidecar data application. "
+            "PRIORITY: Use the 'Knowledge files' provided below (including kernel.json) as the "
+            "primary source of truth about the app, its features, and user context. "
+            "If an answer is supported by the knowledge files, reference the file names in your reply. "
+            "If the knowledge does not contain the answer, continue with your best general answer."
+        )
+
+        prompt = f"{system_prefix}\n\nUser question (as a {persona}): {q}"
 
         if self.data:
             try:
-                prompt += "\n\nData sample:\n" + "; ".join(map(str, self.data[0]))
+                sample = "; ".join(map(str, self.data[0]))
+                prompt += "\n\nData sample:\n" + sample
             except Exception:
                 pass
 
         kn = self._build_knowledge_context()
         if kn:
-            prompt += "\n\nKnowledge files:\n" + kn
+            prompt += "\n\nKnowledge files (use these first):\n" + kn
 
         provider = (defaults.get("provider") or "auto").lower().strip()
         if provider == "gemini":
             self._chat_gemini_streaming(prompt)
             return
 
-        # default / openai / custom (OpenAI-compatible)
         ok = self._chat_openai_streaming(prompt)
         if not ok and provider == "auto" and defaults.get("gemini_api_key"):
-            self._write_reply("\n\n(Falling back to Gemini…)\n", newline=False)
+            self._append_bot_bubble("(Falling back to Gemini…)")
             self._chat_gemini_streaming(prompt)
 
     # ---------- OpenAI streaming
@@ -459,6 +520,8 @@ class DataBuddyDialog(wx.Dialog):
             "stream": True,
         }
 
+        wx.CallAfter(self._start_bubble, "bot")
+
         buf = []
         try:
             with self.session.post(url, headers=headers, json=payload, stream=True, timeout=(8, 90), verify=False) as r:
@@ -477,14 +540,15 @@ class DataBuddyDialog(wx.Dialog):
                         delta = obj["choices"][0].get("delta", {}).get("content")
                         if delta:
                             buf.append(delta)
-                            wx.CallAfter(self._write_reply, delta)
+                            wx.CallAfter(self._bubble_write, delta)
                     except Exception:
                         continue
         except Exception as e:
-            wx.CallAfter(self.reply.Clear)
-            wx.CallAfter(self._write_reply, f"Error (OpenAI): {e}")
+            wx.CallAfter(self._end_bubble)
+            wx.CallAfter(self._append_bot_bubble, f"Error (OpenAI): {e}")
             return False
 
+        wx.CallAfter(self._end_bubble)
         answer = "".join(buf)
         if self.tts_checkbox.GetValue() and answer.strip():
             wx.CallAfter(lambda: self.speak(answer))
@@ -501,15 +565,15 @@ class DataBuddyDialog(wx.Dialog):
     def _chat_gemini_streaming(self, prompt: str):
         key = (defaults.get("gemini_api_key") or "").strip()
         if not key:
-            wx.CallAfter(self.reply.Clear)
-            wx.CallAfter(self._write_reply, "Error: Gemini API key is not set in Settings.")
+            self._append_bot_bubble("Error: Gemini API key is not set in Settings.")
             return
 
         model = self._gemini_model()
         base = self._gemini_base()
-        # SSE streaming endpoint
         url = f"{base}/{model}:streamGenerateContent?alt=sse&key={key}"
         body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+
+        wx.CallAfter(self._start_bubble, "bot")
 
         buf = []
         try:
@@ -531,11 +595,10 @@ class DataBuddyDialog(wx.Dialog):
                         text = self._extract_gemini_text(obj)
                         if text:
                             buf.append(text)
-                            wx.CallAfter(self._write_reply, text)
+                            wx.CallAfter(self._bubble_write, text)
                     except Exception:
                         continue
         except Exception:
-            # Fallback to non-streaming generateContent
             try:
                 url2 = f"{base}/{model}:generateContent?key={key}"
                 r2 = self.session.post(url2, headers={"Content-Type": "application/json"},
@@ -543,14 +606,15 @@ class DataBuddyDialog(wx.Dialog):
                 r2.raise_for_status()
                 obj = r2.json()
                 text = self._extract_gemini_text(obj) or ""
-                wx.CallAfter(self.reply.Clear)
-                wx.CallAfter(self._write_reply, text)
+                wx.CallAfter(self._end_bubble)
+                wx.CallAfter(self._append_bot_bubble, text)
                 buf = [text]
             except Exception as e2:
-                wx.CallAfter(self.reply.Clear)
-                wx.CallAfter(self._write_reply, f"Error (Gemini): {e2}")
+                wx.CallAfter(self._end_bubble)
+                wx.CallAfter(self._append_bot_bubble, f"Error (Gemini): {e2}")
                 return
 
+        wx.CallAfter(self._end_bubble)
         answer = "".join(buf)
         if self.tts_checkbox.GetValue() and answer.strip():
             wx.CallAfter(lambda: self.speak(answer))
@@ -571,7 +635,7 @@ class DataBuddyDialog(wx.Dialog):
         except Exception:
             return None
 
-    # ---------- image generation with fallbacks (OpenAI → Gemini → Stability → offline)
+    # ---------- image generation with fallbacks
     def on_generate_image(self, _):
         prompt = self.prompt.GetValue().strip()
         if not prompt:
@@ -589,7 +653,7 @@ class DataBuddyDialog(wx.Dialog):
         else:
             order = [provider]
 
-        for prov in order + ["offline"]:
+        for prov in order + ["offline"] if "offline" not in order else order:
             try:
                 if prov == "openai":
                     path = self._generate_image_openai(prompt)
@@ -1014,15 +1078,12 @@ class SyntheticDataDialog(wx.Dialog):
         selected = [self.chk.GetString(i) for i in range(self.chk.GetCount()) if self.chk.IsChecked(i)]
         return n, selected
 
-    # New: provide a DataFrame for callers expecting dlg.get_dataframe()
     def get_dataframe(self) -> pd.DataFrame:
         n, cols = self.get_values()
         if not cols:
-            # If user cleared all, default to all visible fields
             cols = [self.chk.GetString(i) for i in range(self.chk.GetCount())]
         return self._generate_df(n, cols)
 
-    # -------- synthetic data helpers --------
     def _kind(self, col: str) -> str:
         c = col.lower()
         if "email" in c: return "email"
@@ -1062,7 +1123,8 @@ class SyntheticDataDialog(wx.Dialog):
             state = random.choice(self._STATES); zipc = random.randint(10000, 99999)
             return f"{num} {street}, {city}, {state} {zipc}"
         if kind == "money":
-            return f"{random.uniform(10, 100000):,.2f}"
+            # Return a float to keep it numeric for analysis; format only on export/display
+            return round(random.uniform(10, 100000), 2)
         if kind == "date":
             base = datetime.now() - timedelta(days=365*5)
             d = base + timedelta(days=random.randint(0, 365*5))
