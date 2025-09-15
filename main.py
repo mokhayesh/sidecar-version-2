@@ -1,73 +1,16 @@
 # main.py
-# Application launcher for the Data Buddy UI.
-# Robust to missing optional dependencies; keeps your defaults handling.
-
 import os
 import json
 import wx
-import urllib3
 
-# Required UI modules
-from main_window import MainWindow
+# ──────────────────────────────────────────────────────────────────────────────
+# Config loading/saving
+# ──────────────────────────────────────────────────────────────────────────────
 
-# Optional/utility modules (imported defensively so UI can still launch)
-try:
-    import wx.grid as gridlib  # noqa: F401
-except Exception:
-    gridlib = None
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULTS_FILE = os.path.join(BASE_DIR, "defaults.json")
 
-try:
-    import wx.richtext as rt  # noqa: F401
-except Exception:
-    rt = None
-
-try:
-    import pandas as pd  # noqa: F401
-except Exception:
-    pd = None
-
-# Nice-to-have libs; don't block UI if missing
-def _try_import(name):
-    try:
-        module = __import__(name)
-        return module
-    except Exception:
-        return None
-
-re = _try_import("re")
-csv = _try_import("csv")
-io = _try_import("io")
-requests = _try_import("requests")
-boto3 = _try_import("boto3")
-urllib3 = _try_import("urllib3") or urllib3  # keep built-in ref if local import fails
-
-# botocore bits are optional
-try:
-    from botocore import UNSIGNED  # noqa: F401
-    from botocore.config import Config  # noqa: F401
-except Exception:
-    UNSIGNED = None
-    Config = None
-
-# Speech / TTS / audio (optional)
-sr = _try_import("speech_recognition")
-edge_tts = _try_import("edge_tts")
-pygame = _try_import("pygame")
-
-from datetime import datetime  # noqa: F401
-
-# Disable SSL warnings
-if urllib3:
-    try:
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    except Exception:
-        pass
-
-# ╔═════════════════════════════════════════════════════════════════════════╗
-# ║                             Global Defaults                            ║
-# ╚═════════════════════════════════════════════════════════════════════════╝
-DEFAULTS_FILE = "defaults.json"
-
+# Default settings (can be overridden by defaults.json)
 defaults = {
     "api_key": "",
     "filepath": os.path.expanduser("~"),
@@ -99,15 +42,17 @@ defaults = {
     "to_email": ""
 }
 
-def _load_defaults():
+def load_defaults():
+    """Load defaults.json from the repo root if present."""
     if os.path.exists(DEFAULTS_FILE):
         try:
-            with open(DEFAULTS_FILE, encoding="utf-8") as f:
+            with open(DEFAULTS_FILE, "r", encoding="utf-8") as f:
                 defaults.update(json.load(f))
         except Exception as e:
-            print(f"Warning: Could not load defaults from {DEFAULTS_FILE} — {e}")
+            print(f"Warning: Could not load defaults.json — {e}")
 
 def save_defaults():
+    """Write the current defaults dict back to defaults.json."""
     try:
         with open(DEFAULTS_FILE, "w", encoding="utf-8") as f:
             json.dump(defaults, f, indent=2)
@@ -115,24 +60,18 @@ def save_defaults():
     except Exception as e:
         wx.MessageBox(f"Failed to save settings:\n{e}", "Settings", wx.OK | wx.ICON_ERROR)
 
-# Load defaults on import
-_load_defaults()
-
-# ╔═════════════════════════════════════════════════════════════════════════╗
-# ║                             UI Entry Point                             ║
-# ╚═════════════════════════════════════════════════════════════════════════╝
-def main():
-    # Initialize pygame audio lazily (ignore if not installed)
-    if pygame:
-        try:
-            pygame.mixer.init()
-        except Exception:
-            pass
-
-    app = wx.App(False)
-    win = MainWindow()
-    win.Show()
-    app.MainLoop()
+# ──────────────────────────────────────────────────────────────────────────────
+# App entrypoint
+# ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    main()
+    load_defaults()
+
+    app = wx.App(False)
+
+    # Import AFTER wx.App() is created so child windows can use wx safely.
+    # Use the package path ("app.main_window") so Python finds the file in /app.
+    from app.main_window import MainWindow
+
+    MainWindow()
+    app.MainLoop()
