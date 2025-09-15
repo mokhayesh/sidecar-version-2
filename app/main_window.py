@@ -399,16 +399,18 @@ class MainWindow(wx.Frame):
         self.chips_panel.SetSizer(self._chips_sizer)
         hz2.Add(self.chips_panel, 1, wx.ALL | wx.EXPAND, 4)
 
-        # link to load more
-       try:
-          link = wxadv.HyperlinkCtrl(info, id=wx.ID_ANY, label="(add)", url="")
-          link.Bind(wxadv.EVT_HYPERLINK, lambda e: self.on_load_knowledge())
-       except Exception:
-    # Fallback if wx.adv isn’t available in your build
-          link = wx.StaticText(info, label="(add)")
-          link.SetForegroundColour(wx.Colour(60, 80, 200))
-          f = link.GetFont(); f.SetUnderlined(True); link.SetFont(f)
-          link.Bind(wx.EVT_LEFT_UP, lambda e: self.on_load_knowledge())
+        # link to load more — FIXED INDENTATION
+        try:
+            link = wxadv.HyperlinkCtrl(info, id=wx.ID_ANY, label="(add)", url="")
+            link.Bind(wxadv.EVT_HYPERLINK, lambda e: self.on_load_knowledge())
+        except Exception:
+            # Fallback if wx.adv isn’t available in your build
+            link = wx.StaticText(info, label="(add)")
+            link.SetForegroundColour(wx.Colour(60, 80, 200))
+            f = link.GetFont()
+            f.SetUnderlined(True)
+            link.SetFont(f)
+            link.Bind(wx.EVT_LEFT_UP, lambda e: self.on_load_knowledge())
 
         hz2.Add(link, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 8)
 
