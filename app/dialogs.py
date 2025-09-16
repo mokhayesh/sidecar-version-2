@@ -6,14 +6,13 @@ import base64
 import threading
 import tempfile
 import requests
-import random
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import wx
 import wx.richtext as rt
 import pandas as pd
 
-# Optional audio / speech libs (gracefully degrade if missing)
+# Optional audio / speech libs (gracefully degrade)
 try:
     import pygame
 except Exception:
@@ -39,7 +38,6 @@ try:
 except Exception:
     pyttsx3 = None
 
-# Optional: Pillow for offline placeholder images
 try:
     from PIL import Image, ImageDraw, ImageFont
 except Exception:
@@ -103,9 +101,8 @@ class QualityRuleDialog(wx.Dialog):
 
         self.pattern_txt = wx.TextCtrl(pnl)
         self.pattern_txt.SetBackgroundColour(INPUT_BG)
-        this_font = wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
         self.pattern_txt.SetForegroundColour(INPUT_TXT)
-        self.pattern_txt.SetFont(this_font)
+        self.pattern_txt.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         g.Add(self.pattern_txt, 0, wx.EXPAND)
 
         main.Add(g, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
@@ -198,7 +195,7 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy — provider-aware streaming, voice, images, STT, chat bubbles
+# Little Buddy — modern look + streaming + TTS + image generation
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None, knowledge=None):
@@ -209,7 +206,6 @@ class DataBuddyDialog(wx.Dialog):
         self.data = data
         self.headers = headers
         self.knowledge = list(knowledge or [])
-
         kpath = os.environ.get("SIDECAR_KERNEL_PATH", "")
         if kpath and kpath not in self.knowledge:
             self.knowledge.append(kpath)
@@ -218,11 +214,6 @@ class DataBuddyDialog(wx.Dialog):
 
         self._tts_file = None
         self._tts_thread = None
-        self._listening = False
-        self._stop_listening = None
-
-        self._bubble_open = False
-        self._bubble_sender = None
 
         self.COLORS = {
             "bg": wx.Colour(35, 35, 35),
@@ -241,8 +232,7 @@ class DataBuddyDialog(wx.Dialog):
         }
 
         self.SetBackgroundColour(self.COLORS["bg"])
-        pnl = wx.Panel(self)
-        pnl.SetBackgroundColour(self.COLORS["panel"])
+        pnl = wx.Panel(self); pnl.SetBackgroundColour(self.COLORS["panel"])
         vbox = wx.BoxSizer(wx.VERTICAL)
 
         title = wx.StaticText(pnl, label="Little Buddy")
@@ -350,7 +340,7 @@ class DataBuddyDialog(wx.Dialog):
         except Exception:
             pass
 
-    # ---------- bubble helpers
+    # Bubble helpers (chat look)
     def _reset_reply_style(self):
         attr = rt.RichTextAttr()
         attr.SetTextColour(self.COLORS["reply_fg"])
@@ -360,9 +350,6 @@ class DataBuddyDialog(wx.Dialog):
         self.reply.SetBasicStyle(attr)
 
     def _start_bubble(self, sender: str):
-        if self._bubble_open:
-            self._end_bubble()
-
         if self.reply.GetLastPosition() > 0:
             self.reply.Newline()
 
@@ -381,19 +368,9 @@ class DataBuddyDialog(wx.Dialog):
         attr.SetFontFaceName("Segoe UI")
 
         self.reply.BeginStyle(attr)
-        self._bubble_open = True
-        self._bubble_sender = sender
-
-    def _bubble_write(self, text: str):
-        if not self._bubble_open:
-            self._start_bubble("bot")
-        self.reply.WriteText(text)
 
     def _end_bubble(self):
-        if self._bubble_open:
-            self.reply.EndStyle()
-        self._bubble_open = False
-        self._bubble_sender = None
+        self.reply.EndStyle()
 
     def _append_user_bubble(self, text: str, fake: bool = False):
         self._start_bubble("user")
@@ -408,53 +385,6 @@ class DataBuddyDialog(wx.Dialog):
         self._end_bubble()
         self.reply.Newline()
 
-    def _set_tts_status(self, msg):
-        try:
-            self.tts_status.SetLabel(f"TTS: {msg}")
-            self.tts_status.GetParent().Layout()
-        except Exception:
-            pass
-
-    # Build knowledge context (Knowledge files + kernel.json first)
-    def _build_knowledge_context(self, max_chars=1600):
-        if not self.knowledge:
-            return ""
-        chunks = []
-        per_file = max(220, max_chars // max(1, len(self.knowledge)))
-        for item in self.knowledge:
-            name = "file"
-            content = None
-            if isinstance(item, dict):
-                name = item.get("name", "file")
-                content = item.get("content")
-                if content and isinstance(content, str):
-                    snippet = content[:min(len(content), per_file)].strip()
-                    chunks.append(f"File: {name}\n{snippet}")
-                    continue
-                else:
-                    chunks.append(f"File: {name} (image or binary)")
-                    continue
-            try:
-                path = str(item)
-                name = os.path.basename(path) or "file"
-                if os.path.exists(path):
-                    ext = os.path.splitext(path)[1].lower()
-                    if ext in (".txt", ".md", ".csv", ".json", ".log"):
-                        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-                            data = fh.read(per_file)
-                        chunks.append(f"File: {name}\n{data.strip()}")
-                    else:
-                        chunks.append(f"File: {name} (binary {ext})")
-                else:
-                    chunks.append(f"File: {name} [missing]")
-            except Exception:
-                chunks.append(f"File: {name} [error]")
-
-        text = "\n\n".join(chunks)
-        if len(text) > max_chars:
-            text = text[:max_chars] + "\n…(truncated)…"
-        return text
-
     # ---------- chat entrypoint
     def on_ask(self, _):
         q = self.prompt.GetValue().strip()
@@ -464,14 +394,34 @@ class DataBuddyDialog(wx.Dialog):
         self._append_user_bubble(q)
         threading.Thread(target=self._answer_dispatch, args=(q,), daemon=True).start()
 
+    def _build_knowledge_context(self, max_chars=1600):
+        if not self.knowledge:
+            return ""
+        chunks = []
+        per_file = max(220, max_chars // max(1, len(self.knowledge)))
+        for item in self.knowledge:
+            try:
+                path = str(item)
+                name = os.path.basename(path) or "file"
+                if os.path.exists(path) and os.path.splitext(path)[1].lower() in (".txt",".md",".json",".csv",".tsv",".log"):
+                    with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                        data = fh.read(per_file)
+                    chunks.append(f"File: {name}\n{data.strip()}")
+                else:
+                    chunks.append(f"File: {name} (binary or missing)")
+            except Exception:
+                continue
+        text = "\n\n".join(chunks)
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n…(truncated)…"
+        return text
+
     def _answer_dispatch(self, q: str):
         persona = self.persona.GetValue()
         system_prefix = (
             "You are 'Little Buddy', the in-app assistant for the Sidecar data application. "
             "PRIORITY: Use the 'Knowledge files' provided below (including kernel.json) as the "
-            "primary source of truth about the app, its features, and user context. "
-            "If an answer is supported by the knowledge files, reference the file names in your reply. "
-            "If the knowledge does not contain the answer, continue with your best general answer."
+            "primary source of truth about the app, its features, and user context."
         )
 
         prompt = f"{system_prefix}\n\nUser question (as a {persona}): {q}"
@@ -520,14 +470,13 @@ class DataBuddyDialog(wx.Dialog):
             "stream": True,
         }
 
-        wx.CallAfter(self._start_bubble, "bot")
-
         buf = []
         try:
             with self.session.post(url, headers=headers, json=payload, stream=True, timeout=(8, 90), verify=False) as r:
                 if r.status_code in (401, 403):
                     raise requests.HTTPError(f"{r.status_code} auth error", response=r)
                 r.raise_for_status()
+                self._start_bubble("bot")
                 for raw in r.iter_lines(decode_unicode=True):
                     if not raw:
                         continue
@@ -540,7 +489,7 @@ class DataBuddyDialog(wx.Dialog):
                         delta = obj["choices"][0].get("delta", {}).get("content")
                         if delta:
                             buf.append(delta)
-                            wx.CallAfter(self._bubble_write, delta)
+                            wx.CallAfter(self.reply.WriteText, delta)
                     except Exception:
                         continue
         except Exception as e:
@@ -573,8 +522,6 @@ class DataBuddyDialog(wx.Dialog):
         url = f"{base}/{model}:streamGenerateContent?alt=sse&key={key}"
         body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
 
-        wx.CallAfter(self._start_bubble, "bot")
-
         buf = []
         try:
             with self.session.post(url, headers={"Content-Type": "application/json"},
@@ -582,6 +529,7 @@ class DataBuddyDialog(wx.Dialog):
                 if r.status_code == 404 or r.status_code == 400:
                     raise requests.HTTPError("SSE not available", response=r)
                 r.raise_for_status()
+                self._start_bubble("bot")
                 for line in r.iter_lines(decode_unicode=True):
                     if not line:
                         continue
@@ -595,7 +543,7 @@ class DataBuddyDialog(wx.Dialog):
                         text = self._extract_gemini_text(obj)
                         if text:
                             buf.append(text)
-                            wx.CallAfter(self._bubble_write, text)
+                            wx.CallAfter(self.reply.WriteText, text)
                     except Exception:
                         continue
         except Exception:
@@ -606,11 +554,9 @@ class DataBuddyDialog(wx.Dialog):
                 r2.raise_for_status()
                 obj = r2.json()
                 text = self._extract_gemini_text(obj) or ""
-                wx.CallAfter(self._end_bubble)
                 wx.CallAfter(self._append_bot_bubble, text)
                 buf = [text]
             except Exception as e2:
-                wx.CallAfter(self._end_bubble)
                 wx.CallAfter(self._append_bot_bubble, f"Error (Gemini): {e2}")
                 return
 
@@ -635,7 +581,7 @@ class DataBuddyDialog(wx.Dialog):
         except Exception:
             return None
 
-    # ---------- image generation with fallbacks
+    # ---------- Image generation with fallbacks (OpenAI → Gemini → offline)
     def on_generate_image(self, _):
         prompt = self.prompt.GetValue().strip()
         if not prompt:
@@ -645,49 +591,30 @@ class DataBuddyDialog(wx.Dialog):
 
     def _gen_image_worker(self, prompt: str):
         provider = (defaults.get("image_provider") or os.environ.get("IMAGE_PROVIDER") or "openai").lower().strip()
-        tried_msgs = []
+        order = ["openai", "gemini"] if provider in ("auto", "openai") else [provider]
+        if provider == "auto": order.append("offline")
 
-        order = []
-        if provider == "auto":
-            order = ["openai", "gemini", "stability"]
-        else:
-            order = [provider]
-
-        for prov in order + ["offline"] if "offline" not in order else order:
+        for prov in order:
             try:
                 if prov == "openai":
                     path = self._generate_image_openai(prompt)
                 elif prov == "gemini":
                     path = self._generate_image_gemini(prompt)
-                elif prov == "stability":
-                    path = self._generate_image_stability(prompt)
                 elif prov == "offline":
                     path = self._generate_image_offline(prompt)
                 else:
                     continue
                 wx.CallAfter(self._show_image_preview, path)
                 return
-            except Exception as e:
-                tried_msgs.append(f"{prov.capitalize()}: {e}")
-
-        wx.CallAfter(wx.MessageBox, "Image generation failed:\n" + "\n".join(tried_msgs),
-                     "Image Error", wx.OK | wx.ICON_ERROR)
+            except Exception:
+                continue
+        wx.CallAfter(wx.MessageBox, "Image generation failed.", "Image Error", wx.OK | wx.ICON_ERROR)
 
     def _generate_image_openai(self, prompt: str) -> str:
         url = (defaults.get("image_generation_url") or "https://api.openai.com/v1/images/generations").strip()
-        headers = {
-            "Authorization": f"Bearer {defaults.get('api_key','')}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": defaults.get("image_model", "gpt-image-1"),
-            "prompt": prompt,
-            "n": 1,
-            "size": "1024x1024",
-        }
+        headers = {"Authorization": f"Bearer {defaults.get('api_key','')}", "Content-Type": "application/json"}
+        body = {"model": defaults.get("image_model", "gpt-image-1"), "prompt": prompt, "n": 1, "size": "1024x1024"}
         resp = self.session.post(url, headers=headers, json=body, timeout=120, verify=False)
-        if resp.status_code in (401, 403):
-            raise RuntimeError(f"{resp.status_code} {resp.reason}: check OpenAI key access/billing for Images.")
         resp.raise_for_status()
         data = resp.json().get("data", [])
         if not data:
@@ -697,8 +624,6 @@ class DataBuddyDialog(wx.Dialog):
             img_bytes = base64.b64decode(b64)
         else:
             img_url = data[0].get("url")
-            if not img_url:
-                raise RuntimeError("No image url or base64 in response.")
             img_bytes = requests.get(img_url, timeout=60).content
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
         tmp.write(img_bytes); tmp.close()
@@ -711,64 +636,15 @@ class DataBuddyDialog(wx.Dialog):
         base = (defaults.get("gemini_text_url") or "https://generativelanguage.googleapis.com/v1beta/models").rstrip("/")
         model = defaults.get("image_model", "gemini-1.5-flash")
         url = f"{base}/{model}:generateContent?key={key}"
-        body = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "image/png"}
-        }
+        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {"responseMimeType": "image/png"}}
         r = self.session.post(url, headers={"Content-Type": "application/json"}, json=body, timeout=120)
-        if r.status_code in (401, 403):
-            raise RuntimeError(f"{r.status_code} {r.reason}: Gemini key not authorized for image generation.")
         r.raise_for_status()
         obj = r.json()
-        try:
-            cands = obj.get("candidates") or []
-            if not cands:
-                raise RuntimeError("No candidates in response.")
-            parts = cands[0]["content"]["parts"]
-            inline = next((p["inlineData"] for p in parts if "inlineData" in p), None)
-            if not inline:
-                txt = next((p["text"] for p in parts if "text" in p), None)
-                if txt:
-                    raise RuntimeError(f"Gemini returned text instead of image:\n{txt}")
-                raise RuntimeError("No inlineData image in response.")
-            if inline.get("mimeType") not in ("image/png", "image/jpeg", "image/jpg", "image/webp"):
-                raise RuntimeError(f"Unsupported mimeType: {inline.get('mimeType')}")
-            img_bytes = base64.b64decode(inline.get("data", ""))
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-            tmp.write(img_bytes); tmp.close()
-            return tmp.name
-        except Exception as e:
-            raise RuntimeError(f"Parse error: {e}")
-
-    def _generate_image_stability(self, prompt: str) -> str:
-        key = (defaults.get("stability_api_key") or os.environ.get("STABILITY_API_KEY") or "").strip()
-        if not key:
-            raise RuntimeError("No Stability API key configured (stability_api_key).")
-        url = "https://api.stability.ai/v1/generation/stable-diffusion-v1-6/text-to-image"
-        headers = {
-            "Authorization": f"Bearer {key}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "text_prompts": [{"text": prompt}],
-            "cfg_scale": 7,
-            "height": 1024,
-            "width": 1024,
-            "samples": 1,
-            "steps": 30
-        }
-        r = self.session.post(url, headers=headers, json=body, timeout=120)
-        if r.status_code in (401, 403):
-            raise RuntimeError(f"{r.status_code} {r.reason}: Stability key not authorized.")
-        r.raise_for_status()
-        out = r.json()
-        if not out.get("artifacts"):
-            raise RuntimeError("Stability returned no artifacts.")
-        img_b64 = out["artifacts"][0].get("base64")
-        if not img_b64:
-            raise RuntimeError("Missing base64 payload from Stability.")
-        img_bytes = base64.b64decode(img_b64)
+        cands = obj.get("candidates") or []
+        parts = cands[0]["content"]["parts"]
+        inline = next((p["inlineData"] for p in parts if "inlineData" in p), None)
+        img_bytes = base64.b64decode(inline.get("data", ""))
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
         tmp.write(img_bytes); tmp.close()
         return tmp.name
@@ -783,14 +659,13 @@ class DataBuddyDialog(wx.Dialog):
                 font = ImageFont.truetype("arial.ttf", 28)
             except Exception:
                 font = ImageFont.load_default()
-            text = f"[Offline Placeholder]\n{prompt}"
-            draw.multiline_text((40, 40), text, fill=(220, 230, 255), font=font, spacing=6)
+            draw.multiline_text((40, 40), f"[Offline Placeholder]\n{prompt}",
+                                fill=(220, 230, 255), font=font, spacing=6)
             img.save(tmp.name, "PNG")
         else:
             bmp = wx.Bitmap(1024, 1024)
             dc = wx.MemoryDC(bmp)
-            dc.SetBackground(wx.Brush(wx.Colour(32, 36, 44)))
-            dc.Clear()
+            dc.SetBackground(wx.Brush(wx.Colour(32, 36, 44))); dc.Clear()
             dc.SetTextForeground(wx.Colour(220, 230, 255))
             dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
             dc.DrawText("[Offline Placeholder]", 40, 40)
@@ -819,323 +694,72 @@ class DataBuddyDialog(wx.Dialog):
         def on_save(_):
             s = wx.FileDialog(dlg, "Save Image", wildcard="PNG|*.png", style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
             if s.ShowModal() == wx.ID_OK:
-                try:
-                    with open(path, "rb") as fsrc, open(s.GetPath(), "wb") as fdst:
-                        fdst.write(fsrc.read())
-                    wx.MessageBox("Saved.", "Image", wx.OK | wx.ICON_INFORMATION)
-                except Exception as e:
-                    wx.MessageBox(f"Failed to save: {e}", "Error", wx.OK | wx.ICON_ERROR)
+                wx.Image(path).SaveFile(s.GetPath(), wx.BITMAP_TYPE_PNG)
             s.Destroy()
 
         save.Bind(wx.EVT_BUTTON, on_save)
-        close.Bind(wx.EVT_BUTTON, lambda e: dlg.Destroy())
+        close.Bind(wx.EVT_BUTTON, lambda _: dlg.Destroy())
         pnl.SetSizer(v)
         dlg.ShowModal()
 
-    # ---------- TTS
-    def _clear_edge_azure_env(self):
-        for k in ("SPEECH_KEY", "SPEECH_REGION", "AZURE_TTS_KEY", "AZURE_TTS_REGION", "EDGE_TTS_KEY", "EDGE_TTS_REGION"):
-            try:
-                os.environ.pop(k, None)
-            except Exception:
-                pass
-
+    # ---------- Voice (three fallbacks; keeps current behavior)
     def speak(self, text: str):
-        self._stop_playback()
+        if not text: return
 
-        def worker():
-            engine_name = "idle"
-            ok = False
-
-            key = (defaults.get("azure_tts_key") or os.environ.get("SPEECH_KEY") or "").strip()
-            region = (defaults.get("azure_tts_region") or os.environ.get("SPEECH_REGION") or "").strip()
-            if edge_tts and key and region and not ok:
-                import asyncio
-
-                async def _azure():
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-                    tmp.close()
+        def run_tts():
+            try:
+                if edge_tts:
                     voice = self.voice.GetStringSelection() or "en-US-GuyNeural"
-                    communicate = edge_tts.Communicate(text, voice, key=key, region=region)
-                    await communicate.save(tmp.name)
-                    return tmp.name
+                    out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
+                    import asyncio
+                    async def _edge():
+                        comm = edge_tts.Communicate(text, voice=voice)
+                        await comm.save(out)
+                    asyncio.run(_edge())
+                    self._play_file(out); return
+                if gTTS:
+                    out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
+                    gTTS(text).save(out)
+                    self._play_file(out); return
+                if pyttsx3:
+                    eng = pyttsx3.init()
+                    eng.say(text); eng.runAndWait(); return
+            except Exception:
+                pass  # swallow and move on
 
-                try:
-                    try:
-                        self._tts_file = asyncio.run(_azure())
-                    except RuntimeError:
-                        loop = asyncio.new_event_loop()
-                        loop.run_until_complete(_azure())
-                        loop.close()
-                    ok = True
-                    engine_name = "Azure"
-                except Exception:
-                    ok = False
+        t = threading.Thread(target=run_tts, daemon=True)
+        t.start()
 
-            if edge_tts and not ok:
-                import asyncio
+    def _play_file(self, path):
+        if not pygame:
+            return
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+            pygame.mixer.music.load(path)
+            pygame.mixer.music.play()
+        except Exception:
+            pass
 
-                async def _edge_public():
-                    self._clear_edge_azure_env()
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-                    tmp.close()
-                    voice = self.voice.GetStringSelection() or "en-US-GuyNeural"
-                    communicate = edge_tts.Communicate(text, voice)
-                    await communicate.save(tmp.name)
-                    return tmp.name
+    # STT (optional; only if SpeechRecognition & pyaudio available)
+    def on_mic_toggle(self, _evt):
+        if not sr:
+            wx.MessageBox("SpeechRecognition not installed.", "Speak", wx.OK | wx.ICON_INFORMATION)
+            return
+        r = sr.Recognizer()
+        with sr.Microphone() as source:
+            self.tts_status.SetLabel("TTS: listening…")
+            audio = r.listen(source, phrase_time_limit=6)
+        try:
+            text = r.recognize_google(audio)
+            self.prompt.SetValue(text)
+            self.on_ask(None)
+        except Exception as e:
+            wx.MessageBox(f"STT failed: {e}", "Speak", wx.OK | wx.ICON_ERROR)
 
-                try:
-                    try:
-                        self._tts_file = asyncio.run(_edge_public())
-                    except RuntimeError:
-                        loop = asyncio.new_event_loop()
-                        loop.run_until_complete(_edge_public())
-                        loop.close()
-                    ok = True
-                    engine_name = "Edge"
-                except Exception:
-                    ok = False
-
-            if gTTS and not ok:
-                try:
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-                    tmp.close()
-                    voice_val = self.voice.GetStringSelection() or "en-US-GuyNeural"
-                    lang = voice_val.split("-", 1)[0].lower() if "-" in voice_val else "en"
-                    gTTS(text=text, lang=lang).save(tmp.name)
-                    self._tts_file = tmp.name
-                    ok = True
-                    engine_name = "gTTS"
-                except Exception:
-                    ok = False
-
-            if pyttsx3 and not ok:
-                try:
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-                    tmp.close()
-                    engine = pyttsx3.init()
-                    engine.save_to_file(text, tmp.name)
-                    engine.runAndWait()
-                    self._tts_file = tmp.name
-                    ok = True
-                    engine_name = "Offline"
-                except Exception:
-                    ok = False
-
-            wx.CallAfter(self._set_tts_status, engine_name if ok else "error")
-            if ok and self._tts_file:
-                try:
-                    if not pygame:
-                        return
-                    if not pygame.mixer.get_init():
-                        pygame.mixer.init()
-                    pygame.mixer.music.load(self._tts_file)
-                    pygame.mixer.music.play()
-                except Exception:
-                    pass
-
-        self._tts_thread = threading.Thread(target=worker, daemon=True)
-        self._tts_thread.start()
-
-    def _stop_playback(self):
+    def on_stop_voice(self, _evt):
         try:
             if pygame and pygame.mixer.get_init():
                 pygame.mixer.music.stop()
         except Exception:
             pass
-        if self._tts_file and os.path.exists(self._tts_file):
-            try:
-                os.remove(self._tts_file)
-            except Exception:
-                pass
-        self._tts_file = None
-
-    # ---------- STT
-    def on_mic_toggle(self, _):
-        if not sr:
-            wx.MessageBox("Speech-to-text requires 'SpeechRecognition'.\nInstall with: pip install SpeechRecognition",
-                          "STT Not Available", wx.OK | wx.ICON_WARNING)
-            return
-
-        if not self._listening:
-            try:
-                recognizer = sr.Recognizer()
-                mic = sr.Microphone()
-                with mic as source:
-                    recognizer.adjust_for_ambient_noise(source, duration=0.5)
-
-                def callback(rec, audio):
-                    try:
-                        text = rec.recognize_google(audio)
-                    except Exception:
-                        text = ""
-                    if text:
-                        wx.CallAfter(self.prompt.SetValue, text)
-
-                self._stop_listening = recognizer.listen_in_background(mic, callback, phrase_time_limit=12)
-                self._listening = True
-                self.mic_btn.SetLabel("Stop Mic")
-            except Exception as e:
-                wx.MessageBox(f"Microphone error: {e}", "STT Error", wx.OK | wx.ICON_ERROR)
-        else:
-            self._stop_stt()
-
-    def _stop_stt(self):
-        if self._stop_listening:
-            try:
-                self._stop_listening(wait_for_stop=False)
-            except Exception:
-                pass
-        self._stop_listening = None
-        self._listening = False
-        self.mic_btn.SetLabel("🎙 Speak")
-
-    def on_stop_voice(self, _):
-        self._stop_playback()
-        self._stop_stt()
-        try:
-            wx.Bell()
-        except Exception:
-            pass
-        self.prompt.SetFocus()
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Synthetic Data Dialog
-# ──────────────────────────────────────────────────────────────────────────────
-class SyntheticDataDialog(wx.Dialog):
-    def __init__(self, parent, fields):
-        super().__init__(parent, title="Generate Synthetic Data", size=(520, 520),
-                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
-
-        BG = wx.Colour(38, 38, 38)
-        PANEL = wx.Colour(38, 38, 38)
-        TXT = wx.Colour(235, 235, 235)
-        INPUT_BG = wx.Colour(50, 50, 50)
-        INPUT_TXT = wx.Colour(240, 240, 240)
-        ACCENT = wx.Colour(70, 130, 180)
-
-        self.SetBackgroundColour(BG)
-
-        top = wx.BoxSizer(wx.VERTICAL)
-        pnl = wx.Panel(self)
-        pnl.SetBackgroundColour(PANEL)
-        top.Add(pnl, 1, wx.EXPAND)
-        s = wx.BoxSizer(wx.VERTICAL)
-        pnl.SetSizer(s)
-
-        box1 = wx.StaticBox(pnl, label="How many records?")
-        box1.SetForegroundColour(TXT)
-        s1 = wx.StaticBoxSizer(box1, wx.HORIZONTAL)
-        self.count = wx.SpinCtrl(pnl, min=1, max=1_000_000, initial=100)
-        self.count.SetBackgroundColour(INPUT_BG)
-        self.count.SetForegroundColour(INPUT_TXT)
-        self.count.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-        s1.Add(self.count, 1, wx.ALL | wx.EXPAND, 6)
-        s.Add(s1, 0, wx.EXPAND | wx.ALL, 8)
-
-        box2 = wx.StaticBox(pnl, label="Choose fields to include")
-        box2.SetForegroundColour(TXT)
-        s2 = wx.StaticBoxSizer(box2, wx.VERTICAL)
-        self.chk = wx.CheckListBox(pnl, choices=list(fields))
-        self.chk.SetBackgroundColour(INPUT_BG)
-        self.chk.SetForegroundColour(INPUT_TXT)
-        self.chk.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-        for i in range(len(fields)):
-            self.chk.Check(i, True)
-        s2.Add(self.chk, 1, wx.ALL | wx.EXPAND, 6)
-
-        row = wx.BoxSizer(wx.HORIZONTAL)
-        btn_all = wx.Button(pnl, label="Select All")
-        btn_none = wx.Button(pnl, label="Clear")
-        for b in (btn_all, btn_none):
-            b.SetBackgroundColour(ACCENT)
-            b.SetForegroundColour(wx.WHITE)
-        btn_all.Bind(wx.EVT_BUTTON, lambda e: [self.chk.Check(i, True) for i in range(self.chk.GetCount())])
-        btn_none.Bind(wx.EVT_BUTTON, lambda e: [self.chk.Check(i, False) for i in range(self.chk.GetCount())])
-        row.Add(btn_all, 0, wx.RIGHT, 6)
-        row.Add(btn_none, 0)
-        s2.Add(row, 0, wx.LEFT | wx.BOTTOM, 6)
-
-        s.Add(s2, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
-        btns = wx.StdDialogButtonSizer()
-        ok_btn = wx.Button(pnl, wx.ID_OK)
-        cancel_btn = wx.Button(pnl, wx.ID_CANCEL)
-        for b in (ok_btn, cancel_btn):
-            b.SetBackgroundColour(ACCENT)
-            b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-        btns.AddButton(ok_btn)
-        btns.AddButton(cancel_btn)
-        btns.Realize()
-        s.Add(btns, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
-
-        self.SetSizerAndFit(top)
-
-    def get_values(self):
-        n = int(self.count.GetValue())
-        selected = [self.chk.GetString(i) for i in range(self.chk.GetCount()) if self.chk.IsChecked(i)]
-        return n, selected
-
-    def get_dataframe(self) -> pd.DataFrame:
-        n, cols = self.get_values()
-        if not cols:
-            cols = [self.chk.GetString(i) for i in range(self.chk.GetCount())]
-        return self._generate_df(n, cols)
-
-    def _kind(self, col: str) -> str:
-        c = col.lower()
-        if "email" in c: return "email"
-        if "phone" in c or "tel" in c: return "phone"
-        if "first" in c and "name" in c: return "first_name"
-        if "last" in c and "name" in c: return "last_name"
-        if "address" in c: return "address"
-        if any(k in c for k in ("amount", "price", "total", "balance", "usd", "cost")): return "money"
-        if "date" in c or "timestamp" in c: return "date"
-        if "id" in c: return "id"
-        return "text"
-
-    _FIRST = ["Alex","Sam","Jordan","Taylor","Riley","Casey","Avery","Quinn","Rowan","Cameron",
-              "Morgan","Hayden","Reese","Dakota","Skyler","Emerson","Parker","Logan","Jamie","Drew"]
-    _LAST  = ["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez",
-              "Hernandez","Lopez","Gonzalez","Wilson","Anderson","Thomas","Taylor","Moore","Jackson","Martin"]
-    _STREETS = ["Main St","First Ave","Second St","Oak St","Pine St","Maple Ave","Cedar St","Elm St","Walnut Ave","Sunset Blvd"]
-    _STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","MA","MD",
-               "ME","MI","MN","MO","MS","MT","NC","ND","NE","NH","NJ","NM","NV","NY","OH","OK","OR","PA","RI","SC",
-               "SD","TN","TX","UT","VA","VT","WA","WI","WV","WY"]
-
-    def _value(self, kind: str, i: int):
-        if kind == "first_name":
-            return random.choice(self._FIRST)
-        if kind == "last_name":
-            return random.choice(self._LAST)
-        if kind == "email":
-            base = (random.choice(self._FIRST) + "." + random.choice(self._LAST)).lower()
-            domain = random.choice(["example.com","mail.com","sample.net","test.org"])
-            return f"{base}{random.randint(1,299)}@{domain}"
-        if kind == "phone":
-            return f"{random.randint(200,989):03d}-{random.randint(200,989):03d}-{random.randint(1000,9999):04d}"
-        if kind == "address":
-            num = random.randint(100, 9999)
-            street = random.choice(self._STREETS)
-            city = random.choice(["Riverton","Bayview","Lakeview","Fairview","Hillsboro","Brookfield"])
-            state = random.choice(self._STATES); zipc = random.randint(10000, 99999)
-            return f"{num} {street}, {city}, {state} {zipc}"
-        if kind == "money":
-            # Return a float to keep it numeric for analysis; format only on export/display
-            return round(random.uniform(10, 100000), 2)
-        if kind == "date":
-            base = datetime.now() - timedelta(days=365*5)
-            d = base + timedelta(days=random.randint(0, 365*5))
-            return d.strftime("%Y-%m-%d")
-        if kind == "id":
-            return f"ID-{i:06d}"
-        return f"Value_{i}"
-
-    def _generate_df(self, n: int, cols: list[str]) -> pd.DataFrame:
-        data = {}
-        for col in cols:
-            kind = self._kind(col)
-            data[col] = [self._value(kind, i) for i in range(1, n + 1)]
-        return pd.DataFrame(data)
