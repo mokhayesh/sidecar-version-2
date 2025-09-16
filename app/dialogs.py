@@ -135,7 +135,7 @@ class QualityRuleDialog(wx.Dialog):
         for b in (load_btn, assign_btn, close_btn):
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
+            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         load_btn.Bind(wx.EVT_BUTTON, self.on_load_rules)
         assign_btn.Bind(wx.EVT_BUTTON, self.on_assign)
         close_btn.Bind(wx.EVT_BUTTON, lambda _: self.EndModal(wx.ID_OK))
@@ -197,7 +197,7 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Synthetic Data (kept simple, no extra deps)
+# Synthetic Data
 # ──────────────────────────────────────────────────────────────────────────────
 class SyntheticDataDialog(wx.Dialog):
     """
@@ -215,19 +215,16 @@ class SyntheticDataDialog(wx.Dialog):
         pnl = wx.Panel(self)
         v = wx.BoxSizer(wx.VERTICAL)
 
-        # How many rows?
         row_box = wx.BoxSizer(wx.HORIZONTAL)
         row_box.Add(wx.StaticText(pnl, label="Number of rows:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
         self.rows_spin = wx.SpinCtrl(pnl, min=1, max=100000, initial=100)
         row_box.Add(self.rows_spin, 0, wx.RIGHT, 12)
         v.Add(row_box, 0, wx.ALL, 10)
 
-        # Which columns?
         v.Add(wx.StaticText(pnl, label="Columns (from current dataset if loaded):"), 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
         self.cols_list = wx.ListBox(pnl, choices=self.sample_cols or ["col1", "col2", "col3"], style=wx.LB_EXTENDED)
         v.Add(self.cols_list, 1, wx.EXPAND | wx.ALL, 10)
 
-        # Buttons
         btns = wx.BoxSizer(wx.HORIZONTAL)
         gen = wx.Button(pnl, label="Generate")
         ok = wx.Button(pnl, label="OK")
@@ -246,7 +243,6 @@ class SyntheticDataDialog(wx.Dialog):
     def get_dataframe(self) -> pd.DataFrame:
         return self._df if isinstance(self._df, pd.DataFrame) else pd.DataFrame()
 
-    # --- generation helpers
     def _on_generate(self, _):
         cols = self.sample_cols or [self.cols_list.GetString(i) for i in range(self.cols_list.GetCount())]
         n = int(self.rows_spin.GetValue())
@@ -254,11 +250,11 @@ class SyntheticDataDialog(wx.Dialog):
         self._df = pd.DataFrame(data)
         wx.MessageBox(f"Generated {len(self._df)} rows, {len(self._df.columns)} cols.", "Synthetic Data", wx.OK | wx.ICON_INFORMATION)
 
-    def _fake_value_for(self, col: str, i: int):
+    def _fake_value_for(self, col: str, _i: int):
         name = col.lower().strip()
         if "email" in name:
             user = "".join(random.choice(string.ascii_lowercase) for _ in range(8))
-            domain = random.choice(["gmail.com","yahoo.com","outlook.com","hotmail.com"])
+            domain = random.choice(["gmail.com", "yahoo.com", "outlook.com", "hotmail.com"])
             return f"{user}@{domain}"
         if "phone" in name or "tel" in name:
             return f"{random.randint(100,999)}-{random.randint(100,999)}-{random.randint(1000,9999)}"
@@ -273,7 +269,6 @@ class SyntheticDataDialog(wx.Dialog):
         if "date" in name or "dt" in name:
             base = datetime(2021, 1, 1)
             return (base.replace(year=2021 + random.randint(0, 4)) + pd.to_timedelta(random.randint(0, 364), unit="D")).date().isoformat()
-        # default token
         return "".join(random.choice(string.ascii_uppercase) for _ in range(4))
 
 
@@ -315,7 +310,8 @@ class DataBuddyDialog(wx.Dialog):
         }
 
         self.SetBackgroundColour(self.COLORS["bg"])
-        pnl = wx.Panel(self); pnl.SetBackgroundColour(self.COLORS["panel"])
+        pnl = wx.Panel(self)
+        pnl.SetBackgroundColour(self.COLORS["panel"])
         vbox = wx.BoxSizer(wx.VERTICAL)
 
         title = wx.StaticText(pnl, label="Little Buddy")
@@ -369,7 +365,7 @@ class DataBuddyDialog(wx.Dialog):
 
         self.prompt = wx.TextCtrl(pnl, style=wx.TE_PROCESS_ENTER)
         self.prompt.SetBackgroundColour(self.COLORS["input_bg"])
-               self.prompt.SetForegroundColour(self.COLORS["input_fg"])
+        self.prompt.SetForegroundColour(self.COLORS["input_fg"])
         self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         self.prompt.SetHint("Type your question and press Enter…")
         self.prompt.Bind(wx.EVT_TEXT_ENTER, self.on_ask)
@@ -602,14 +598,14 @@ class DataBuddyDialog(wx.Dialog):
 
         model = self._gemini_model()
         base = self._gemini_base()
-        url = f"{base}/{model}:streamGenerateContent?alt=sse&key={key}"
+        url = f"{base}/{model}:streamGenerateContent?alt=SSE&key={key}"
         body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
 
         buf = []
         try:
             with self.session.post(url, headers={"Content-Type": "application/json"},
                                    json=body, stream=True, timeout=(8, 90)) as r:
-                if r.status_code == 404 or r.status_code == 400:
+                if r.status_code in (404, 400):
                     raise requests.HTTPError("SSE not available", response=r)
                 r.raise_for_status()
                 self._start_bubble("bot")
@@ -675,7 +671,8 @@ class DataBuddyDialog(wx.Dialog):
     def _gen_image_worker(self, prompt: str):
         provider = (defaults.get("image_provider") or os.environ.get("IMAGE_PROVIDER") or "openai").lower().strip()
         order = ["openai", "gemini"] if provider in ("auto", "openai") else [provider]
-        if provider == "auto": order.append("offline")
+        if provider == "auto":
+            order.append("offline")
 
         for prov in order:
             try:
@@ -709,7 +706,8 @@ class DataBuddyDialog(wx.Dialog):
             img_url = data[0].get("url")
             img_bytes = requests.get(img_url, timeout=60).content
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        tmp.write(img_bytes); tmp.close()
+        tmp.write(img_bytes)
+        tmp.close()
         return tmp.name
 
     def _generate_image_gemini(self, prompt: str) -> str:
@@ -729,7 +727,8 @@ class DataBuddyDialog(wx.Dialog):
         inline = next((p["inlineData"] for p in parts if "inlineData" in p), None)
         img_bytes = base64.b64decode(inline.get("data", ""))
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        tmp.write(img_bytes); tmp.close()
+        tmp.write(img_bytes)
+        tmp.close()
         return tmp.name
 
     def _generate_image_offline(self, prompt: str) -> str:
@@ -748,7 +747,8 @@ class DataBuddyDialog(wx.Dialog):
         else:
             bmp = wx.Bitmap(1024, 1024)
             dc = wx.MemoryDC(bmp)
-            dc.SetBackground(wx.Brush(wx.Colour(32, 36, 44))); dc.Clear()
+            dc.SetBackground(wx.Brush(wx.Colour(32, 36, 44)))
+            dc.Clear()
             dc.SetTextForeground(wx.Colour(220, 230, 255))
             dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
             dc.DrawText("[Offline Placeholder]", 40, 40)
@@ -765,13 +765,15 @@ class DataBuddyDialog(wx.Dialog):
         pnl.SetBackgroundColour(wx.Colour(30, 30, 30))
         v = wx.BoxSizer(wx.VERTICAL)
         img = wx.Image(path, wx.BITMAP_TYPE_ANY)
-        w = min(680, img.GetWidth()); h = int(w * img.GetHeight() / max(1, img.GetWidth()))
+        w = min(680, img.GetWidth())
+        h = int(w * img.GetHeight() / max(1, img.GetWidth()))
         img = img.Scale(w, h, wx.IMAGE_QUALITY_HIGH)
         v.Add(wx.StaticBitmap(pnl, bitmap=wx.Bitmap(img)), 1, wx.ALL | wx.EXPAND, 10)
         btns = wx.BoxSizer(wx.HORIZONTAL)
         save = wx.Button(pnl, label="Save As…")
         close = wx.Button(pnl, label="Close")
-        btns.Add(save, 0, wx.ALL, 6); btns.Add(close, 0, wx.ALL, 6)
+        btns.Add(save, 0, wx.ALL, 6)
+        btns.Add(close, 0, wx.ALL, 6)
         v.Add(btns, 0, wx.ALIGN_CENTER)
 
         def on_save(_):
@@ -787,7 +789,8 @@ class DataBuddyDialog(wx.Dialog):
 
     # ---------- Voice (three fallbacks; keeps current behavior)
     def speak(self, text: str):
-        if not text: return
+        if not text:
+            return
 
         def run_tts():
             try:
@@ -795,20 +798,26 @@ class DataBuddyDialog(wx.Dialog):
                     voice = self.voice.GetStringSelection() or "en-US-GuyNeural"
                     out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
                     import asyncio
+
                     async def _edge():
                         comm = edge_tts.Communicate(text, voice=voice)
                         await comm.save(out)
+
                     asyncio.run(_edge())
-                    self._play_file(out); return
+                    self._play_file(out)
+                    return
                 if gTTS:
                     out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
                     gTTS(text).save(out)
-                    self._play_file(out); return
+                    self._play_file(out)
+                    return
                 if pyttsx3:
                     eng = pyttsx3.init()
-                    eng.say(text); eng.runAndWait(); return
+                    eng.say(text)
+                    eng.runAndWait()
+                    return
             except Exception:
-                pass  # swallow and move on
+                pass
 
         t = threading.Thread(target=run_tts, daemon=True)
         t.start()
@@ -824,7 +833,7 @@ class DataBuddyDialog(wx.Dialog):
         except Exception:
             pass
 
-    # STT (optional; only if SpeechRecognition & pyaudio available)
+    # STT (optional)
     def on_mic_toggle(self, _evt):
         if not sr:
             wx.MessageBox("SpeechRecognition not installed.", "Speak", wx.OK | wx.ICON_INFORMATION)
