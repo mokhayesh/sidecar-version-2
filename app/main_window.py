@@ -2,10 +2,7 @@
 import os
 import re
 import json
-import random
 import threading
-from datetime import datetime, timedelta
-from collections import Counter
 
 import wx
 import wx.grid as gridlib
@@ -28,10 +25,9 @@ from app.analysis import (
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Theme (lavender / lilac to match the screenshot)
+# Theme (lavender / lilac to match the concept)
 # ──────────────────────────────────────────────────────────────────────────────
 PURPLE        = wx.Colour(67, 38, 120)     # header band
-PURPLE_DARK   = wx.Colour(53, 30, 97)
 PAGE_BG       = wx.Colour(245, 241, 251)   # app background
 CARD_BG       = wx.Colour(255, 255, 255)
 CARD_EDGE     = wx.Colour(225, 221, 240)
@@ -237,7 +233,7 @@ class StatCard(wx.Panel):
         if percent is None or percent < 0:
             self.gauge.Hide()
         else:
-            self.gauge.SetValue(int(max(0, min(100, percent))))
+            self.gauge.SetValue(int(max(0, min(100, percent)))))
             self.gauge.Show()
         self.Layout()
 
@@ -302,13 +298,20 @@ class MainWindow(wx.Frame):
         # Top nav (capsules)
         nav_panel = wx.Panel(self); nav_panel.SetBackgroundColour(PAGE_BG)
         nav = wx.WrapSizer(wx.HORIZONTAL); nav.AddSpacer(12)
+
         def add_capsule(label, handler):
-            b = CapsuleButton(nav_panel, label, handler); nav.Add(b, 0, wx.ALL, 8); return b
+            b = CapsuleButton(nav_panel, label, handler)
+            nav.Add(b, 0, wx.ALL, 8)
+            return b
+
         add_capsule("Upload", self._on_upload_menu)
         add_capsule("Profile", lambda _=None: self.do_analysis_process("Profile"))
         add_capsule("Quality", lambda _=None: self.do_analysis_process("Quality"))
         add_capsule("Catalog", lambda _=None: self.do_analysis_process("Catalog"))
+        add_capsule("Compliance", lambda _=None: self.do_analysis_process("Compliance"))
         add_capsule("Anomalies", lambda _=None: self.do_analysis_process("Detect Anomalies"))
+        add_capsule("Rule Assignment", self.on_rules)
+        add_capsule("Knowledge Files", self.on_load_knowledge)
         add_capsule("Optimizer", self.on_mdm)         # MDM slot (kept behavior)
         add_capsule("To Do", self.on_run_tasks)       # Tasks slot (kept behavior)
         nav_panel.SetSizer(nav)
@@ -362,13 +365,26 @@ class MainWindow(wx.Frame):
 
         self.SetSizer(outer)
 
-        # Menu (kept)
+        # Menu
         mb = wx.MenuBar()
-        m_file = wx.Menu(); m_file.Append(wx.ID_EXIT, "&Quit\tCtrl+Q"); mb.Append(m_file, "&File")
+        m_file = wx.Menu()
+        m_file.Append(wx.ID_EXIT, "&Quit\tCtrl+Q")
+        mb.Append(m_file, "&File")
         self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=wx.ID_EXIT)
+
         m_settings = wx.Menu(); OPEN_SETTINGS_ID = wx.NewIdRef()
-        m_settings.Append(OPEN_SETTINGS_ID, "&Preferences...\tCtrl+,"); mb.Append(m_settings, "&Settings")
+        m_settings.Append(OPEN_SETTINGS_ID, "&Preferences...\tCtrl+,")
+        mb.Append(m_settings, "&Settings")
         self.Bind(wx.EVT_MENU, self.open_settings, id=OPEN_SETTINGS_ID)
+
+        m_export = wx.Menu()
+        EXPORT_CSV = wx.NewIdRef(); EXPORT_TXT = wx.NewIdRef()
+        m_export.Append(EXPORT_CSV, "Export CSV…")
+        m_export.Append(EXPORT_TXT, "Export TXT…")
+        mb.Append(m_export, "&Export")
+        self.Bind(wx.EVT_MENU, lambda e: self._export("csv"), id=EXPORT_CSV)
+        self.Bind(wx.EVT_MENU, lambda e: self._export("txt"), id=EXPORT_TXT)
+
         self.SetMenuBar(mb)
 
     def _apply_light_grid_theme(self):
@@ -429,9 +445,13 @@ class MainWindow(wx.Frame):
     # ──────────────────────────────────────────────────────────────────
     def _refresh_kpis(self):
         m = self.metrics
-        def pct(v): return None if v is None else max(0, min(100, round(float(v), 1)))
-        def fmt(v, suffix=""): 
-            if v is None: return "—"
+
+        def pct(v):
+            return None if v is None else max(0, min(100, round(float(v), 1)))
+
+        def fmt(v, suffix=""):
+            if v is None:
+                return "—"
             if isinstance(v, (int,)) or (isinstance(v, float) and v.is_integer()):
                 return f"{int(v)}{suffix}"
             return f"{v:.1f}{suffix}"
@@ -536,7 +556,7 @@ class MainWindow(wx.Frame):
         return work, count
 
     # ──────────────────────────────────────────────────────────────────
-    # File / S3 / Knowledge / Rules
+    # File / S3 / Knowledge / Rules / Export
     # ──────────────────────────────────────────────────────────────────
     def _on_upload_menu(self, _evt=None):
         menu = wx.Menu()
@@ -546,11 +566,15 @@ class MainWindow(wx.Frame):
         itm3 = menu.Append(-1, "Synthetic Data…")
         itm4 = menu.Append(-1, "Rule Assignment…")
         itm5 = menu.Append(-1, "Upload to S3")
+        itm6 = menu.Append(-1, "Export CSV…")
+        itm7 = menu.Append(-1, "Export TXT…")
         self.Bind(wx.EVT_MENU, self.on_load_file, itm1)
         self.Bind(wx.EVT_MENU, self.on_load_s3, itm2)
         self.Bind(wx.EVT_MENU, self.on_generate_synth, itm3)
         self.Bind(wx.EVT_MENU, self.on_rules, itm4)
         self.Bind(wx.EVT_MENU, self.on_upload_s3, itm5)
+        self.Bind(wx.EVT_MENU, lambda e: self._export("csv"), itm6)
+        self.Bind(wx.EVT_MENU, lambda e: self._export("txt"), itm7)
         self.PopupMenu(menu); menu.Destroy()
 
     def on_load_knowledge(self, _evt=None):
@@ -612,7 +636,7 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Could not open Quality Rule Assignment:\n{e}", "Quality Rules", wx.OK | wx.ICON_ERROR)
 
-    # Synthetic data (kept behavior, dialog provided by app.dialogs)
+    # Synthetic data
     def on_generate_synth(self, _evt=None):
         try:
             sample = pd.DataFrame(self.raw_data, columns=self.headers) if self.headers else pd.DataFrame()
@@ -642,6 +666,25 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Upload failed:\n{e}", "Upload", wx.OK | wx.ICON_ERROR)
 
+    def _export(self, typ: str):
+        if not self.headers:
+            wx.MessageBox("No data loaded.", "Export", wx.OK | wx.ICON_WARNING); return
+        try:
+            df = pd.DataFrame(self.raw_data, columns=self.headers)
+            wildcard = "CSV|*.csv" if typ == "csv" else "Text|*.txt"
+            with wx.FileDialog(self, f"Export to {typ.upper()}",
+                               wildcard=wildcard,
+                               style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dlg:
+                if dlg.ShowModal() != wx.ID_OK: return
+                path = dlg.GetPath()
+            if typ == "csv":
+                df.to_csv(path, index=False)
+            else:
+                df.to_csv(path, index=False, sep="\t")
+            wx.MessageBox(f"Saved:\n{path}", "Export", wx.OK | wx.ICON_INFORMATION)
+        except Exception as e:
+            wx.MessageBox(f"Export failed:\n{e}", "Export", wx.OK | wx.ICON_ERROR)
+
     # ──────────────────────────────────────────────────────────────────
     # Analysis actions
     # ──────────────────────────────────────────────────────────────────
@@ -653,12 +696,10 @@ class MainWindow(wx.Frame):
 
         try:
             if which == "Profile":
-                # quick in-app KPI update
                 null_pct, uniq_pct = self._compute_profile_metrics(df)
                 self.metrics["null_pct"] = null_pct
                 self.metrics["uniqueness"] = uniq_pct
                 self._refresh_kpis()
-                # call your existing analysis hook (kept)
                 profile_analysis(df)
             elif which == "Quality":
                 completeness, validity, dq = self._compute_quality_metrics(df)
@@ -669,11 +710,12 @@ class MainWindow(wx.Frame):
                 quality_analysis(df, self._compile_rules())
             elif which == "Catalog":
                 catalog_analysis(df)
+            elif which == "Compliance":
+                compliance_analysis(df)
             elif which == "Detect Anomalies":
                 flagged, count = self._detect_anomalies(df)
                 self.metrics["anomalies"] = count
                 self._refresh_kpis()
-                # display flagged rows in the grid
                 self.headers = list(flagged.columns)
                 self.raw_data = flagged.values.tolist()
                 self._display(self.headers, self.raw_data)
@@ -682,26 +724,29 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"{which} failed:\n{e}", which, wx.OK | wx.ICON_ERROR)
 
-    # Placeholder handlers you already had wired in older UI
+    # Placeholder handlers you already had wired before
     def on_mdm(self, _evt=None):
-        wx.MessageBox("Optimizer/MDM placeholder (kept).", "MDM", wx.OK | wx.ICON_INFORMATION)
+        wx.MessageBox("Optimizer/MDM placeholder.", "MDM", wx.OK | wx.ICON_INFORMATION)
 
     def on_run_tasks(self, _evt=None):
-        wx.MessageBox("Tasks placeholder (kept).", "Tasks", wx.OK | wx.ICON_INFORMATION)
+        wx.MessageBox("To Do / Tasks placeholder.", "Tasks", wx.OK | wx.ICON_INFORMATION)
 
     # Settings & Little Buddy
     def open_settings(self, _evt=None):
         try:
             dlg = SettingsWindow(self)
-            dlg.ShowModal()
-            dlg.Destroy()
+            if hasattr(dlg, "ShowModal"):
+                dlg.ShowModal()
+                dlg.Destroy()
+            else:
+                dlg.Show()  # frame-style settings
         except Exception as e:
             wx.MessageBox(f"Settings failed to open:\n{e}", "Settings", wx.OK | wx.ICON_ERROR)
 
     def on_little_buddy(self, _evt=None):
         try:
-            dlg = DataBuddyDialog(self)
-            # Feed prioritized knowledge (kernel first)
+            dlg = DataBuddyDialog(self, data=self.raw_data, headers=self.headers,
+                                  knowledge=self._get_prioritized_knowledge())
             prio = self._get_prioritized_knowledge()
             os.environ["SIDECAR_KNOWLEDGE_FILES"] = os.pathsep.join(prio)
             os.environ["SIDECAR_KNOWLEDGE_FIRST"] = "1"
@@ -737,8 +782,8 @@ class MainWindow(wx.Frame):
 
             # data
             for r, row in enumerate(rows):
-                for c, v in enumerate(row):
-                    self.grid.SetCellValue(r, c, "" if v is None else str(v))
+                for c, val in enumerate(row):
+                    self.grid.SetCellValue(r, c, "" if val is None else str(val))
         finally:
             self.grid.EndBatch()
             self.grid.AutoSizeColumns(False)

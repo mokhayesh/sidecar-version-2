@@ -14,7 +14,7 @@ import wx
 import wx.richtext as rt
 import pandas as pd
 
-# Optional audio / speech libs (gracefully degrade)
+# Optional audio / speech libs (graceful fallbacks)
 try:
     import pygame
 except Exception:
@@ -54,7 +54,7 @@ from app.settings import defaults
 class QualityRuleDialog(wx.Dialog):
     def __init__(self, parent, fields, current_rules):
         super().__init__(parent, title="Quality Rule Assignment",
-                         size=(740, 560),
+                         size=(760, 580),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
         self.fields = fields
@@ -115,7 +115,7 @@ class QualityRuleDialog(wx.Dialog):
         self.preview = rt.RichTextCtrl(pnl, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
         self.preview.SetBackgroundColour(wx.Colour(35, 35, 35))
         self.preview.SetForegroundColour(wx.Colour(230, 230, 230))
-        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
+        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         pv.Add(self.preview, 1, wx.EXPAND | wx.ALL, 4)
         main.Add(pv, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
@@ -124,7 +124,7 @@ class QualityRuleDialog(wx.Dialog):
         asz = wx.StaticBoxSizer(abox, wx.VERTICAL)
         self.assign_view = wx.ListCtrl(pnl, style=wx.LC_REPORT | wx.BORDER_SUNKEN)
         self.assign_view.InsertColumn(0, "Field", width=180)
-        self.assign_view.InsertColumn(1, "Assigned Pattern", width=440)
+        self.assign_view.InsertColumn(1, "Assigned Pattern", width=460)
         asz.Add(self.assign_view, 1, wx.EXPAND | wx.ALL, 4)
         main.Add(asz, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
@@ -135,7 +135,7 @@ class QualityRuleDialog(wx.Dialog):
         for b in (load_btn, assign_btn, close_btn):
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         load_btn.Bind(wx.EVT_BUTTON, self.on_load_rules)
         assign_btn.Bind(wx.EVT_BUTTON, self.on_assign)
         close_btn.Bind(wx.EVT_BUTTON, lambda _: self.EndModal(wx.ID_OK))
@@ -290,7 +290,6 @@ class DataBuddyDialog(wx.Dialog):
 
         self.kernel = None
 
-        self._tts_file = None
         self._tts_thread = None
 
         self.COLORS = {
@@ -316,7 +315,7 @@ class DataBuddyDialog(wx.Dialog):
 
         title = wx.StaticText(pnl, label="Little Buddy")
         title.SetForegroundColour(self.COLORS["text"])
-        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
         # Options row
@@ -326,7 +325,7 @@ class DataBuddyDialog(wx.Dialog):
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
         self.voice.SetForegroundColour(self.COLORS["input_fg"])
-        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         opts.Add(self.voice, 0, wx.RIGHT | wx.EXPAND, 6)
 
         self.tts_checkbox = wx.CheckBox(pnl, label="🔊 Speak Reply")
@@ -341,7 +340,7 @@ class DataBuddyDialog(wx.Dialog):
 
         self.tts_status = wx.StaticText(pnl, label="TTS: idle")
         self.tts_status.SetForegroundColour(self.COLORS["muted"])
-        self.tts_status.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.tts_status.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         opts.Add(self.tts_status, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 12)
 
         vbox.Add(opts, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
@@ -354,19 +353,19 @@ class DataBuddyDialog(wx.Dialog):
         self.persona.SetSelection(0)
         self.persona.SetBackgroundColour(self.COLORS["input_bg"])
         self.persona.SetForegroundColour(self.COLORS["input_fg"])
-        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         vbox.Add(self.persona, 0, wx.EXPAND | wx.ALL, 5)
 
         row = wx.BoxSizer(wx.HORIZONTAL)
         ask_lbl = wx.StaticText(pnl, label="Ask:")
         ask_lbl.SetForegroundColour(self.COLORS["muted"])
-        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         row.Add(ask_lbl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
         self.prompt = wx.TextCtrl(pnl, style=wx.TE_PROCESS_ENTER)
         self.prompt.SetBackgroundColour(self.COLORS["input_bg"])
         self.prompt.SetForegroundColour(self.COLORS["input_fg"])
-        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         self.prompt.SetHint("Type your question and press Enter…")
         self.prompt.Bind(wx.EVT_TEXT_ENTER, self.on_ask)
         row.Add(self.prompt, 1, wx.EXPAND | wx.RIGHT, 6)
@@ -410,6 +409,7 @@ class DataBuddyDialog(wx.Dialog):
         self._append_user_bubble("Hi!", fake=True)
         self._append_bot_bubble("Hi, I'm Little Buddy!")
 
+    # external setters
     def set_kernel(self, kernel):
         self.kernel = kernel
         try:
@@ -418,6 +418,12 @@ class DataBuddyDialog(wx.Dialog):
                 self.knowledge.append(kpath)
         except Exception:
             pass
+
+    def set_knowledge_files(self, files):
+        try:
+            self.knowledge = list(files or [])
+        except Exception:
+            self.knowledge = []
 
     # Bubble helpers (chat look)
     def _reset_reply_style(self):
@@ -750,9 +756,9 @@ class DataBuddyDialog(wx.Dialog):
             dc.SetBackground(wx.Brush(wx.Colour(32, 36, 44)))
             dc.Clear()
             dc.SetTextForeground(wx.Colour(220, 230, 255))
-            dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
+            dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
             dc.DrawText("[Offline Placeholder]", 40, 40)
-            dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+            dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
             dc.DrawText(prompt, 40, 80)
             dc.SelectObject(wx.NullBitmap)
             bmp.SaveFile(tmp.name, wx.BITMAP_TYPE_PNG)
@@ -833,23 +839,27 @@ class DataBuddyDialog(wx.Dialog):
         except Exception:
             pass
 
-    # STT (optional)
-    def on_mic_toggle(self, _evt):
+    # --- Speech recog toggle (optional)
+    def on_mic_toggle(self, _):
         if not sr:
-            wx.MessageBox("SpeechRecognition not installed.", "Speak", wx.OK | wx.ICON_INFORMATION)
+            wx.MessageBox("SpeechRecognition not installed.", "Mic", wx.OK | wx.ICON_INFORMATION)
             return
-        r = sr.Recognizer()
-        with sr.Microphone() as source:
-            self.tts_status.SetLabel("TTS: listening…")
-            audio = r.listen(source, phrase_time_limit=6)
-        try:
-            text = r.recognize_google(audio)
-            self.prompt.SetValue(text)
-            self.on_ask(None)
-        except Exception as e:
-            wx.MessageBox(f"STT failed: {e}", "Speak", wx.OK | wx.ICON_ERROR)
+        threading.Thread(target=self._sr_worker, daemon=True).start()
 
-    def on_stop_voice(self, _evt):
+    def _sr_worker(self):
+        try:
+            r = sr.Recognizer()
+            with sr.Microphone() as src:
+                self.tts_status.SetLabel("TTS: listening…")
+                audio = r.listen(src, timeout=4, phrase_time_limit=8)
+            text = r.recognize_google(audio)
+            self.tts_status.SetLabel("TTS: idle")
+            wx.CallAfter(self.prompt.SetValue, text)
+            wx.CallAfter(self.on_ask, None)
+        except Exception:
+            wx.CallAfter(self.tts_status.SetLabel, "TTS: idle")
+
+    def on_stop_voice(self, _):
         try:
             if pygame and pygame.mixer.get_init():
                 pygame.mixer.music.stop()
