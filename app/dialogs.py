@@ -3,6 +3,8 @@ import os
 import re
 import json
 import base64
+import random
+import string
 import threading
 import tempfile
 import requests
@@ -113,7 +115,7 @@ class QualityRuleDialog(wx.Dialog):
         self.preview = rt.RichTextCtrl(pnl, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
         self.preview.SetBackgroundColour(wx.Colour(35, 35, 35))
         self.preview.SetForegroundColour(wx.Colour(230, 230, 230))
-        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
         pv.Add(self.preview, 1, wx.EXPAND | wx.ALL, 4)
         main.Add(pv, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
@@ -133,7 +135,7 @@ class QualityRuleDialog(wx.Dialog):
         for b in (load_btn, assign_btn, close_btn):
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
         load_btn.Bind(wx.EVT_BUTTON, self.on_load_rules)
         assign_btn.Bind(wx.EVT_BUTTON, self.on_assign)
         close_btn.Bind(wx.EVT_BUTTON, lambda _: self.EndModal(wx.ID_OK))
@@ -195,6 +197,87 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Synthetic Data (kept simple, no extra deps)
+# ──────────────────────────────────────────────────────────────────────────────
+class SyntheticDataDialog(wx.Dialog):
+    """
+    Minimal synthetic data generator used by MainWindow.on_generate_synth().
+    - Uses current dataset's columns when available.
+    - Heuristics on column names to generate plausible values.
+    """
+    def __init__(self, parent, sample_df: pd.DataFrame | None):
+        super().__init__(parent, title="Synthetic Data", size=(600, 480),
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+
+        self._df = None
+        self.sample_cols = list(sample_df.columns) if isinstance(sample_df, pd.DataFrame) and len(sample_df.columns) else []
+
+        pnl = wx.Panel(self)
+        v = wx.BoxSizer(wx.VERTICAL)
+
+        # How many rows?
+        row_box = wx.BoxSizer(wx.HORIZONTAL)
+        row_box.Add(wx.StaticText(pnl, label="Number of rows:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        self.rows_spin = wx.SpinCtrl(pnl, min=1, max=100000, initial=100)
+        row_box.Add(self.rows_spin, 0, wx.RIGHT, 12)
+        v.Add(row_box, 0, wx.ALL, 10)
+
+        # Which columns?
+        v.Add(wx.StaticText(pnl, label="Columns (from current dataset if loaded):"), 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        self.cols_list = wx.ListBox(pnl, choices=self.sample_cols or ["col1", "col2", "col3"], style=wx.LB_EXTENDED)
+        v.Add(self.cols_list, 1, wx.EXPAND | wx.ALL, 10)
+
+        # Buttons
+        btns = wx.BoxSizer(wx.HORIZONTAL)
+        gen = wx.Button(pnl, label="Generate")
+        ok = wx.Button(pnl, label="OK")
+        cancel = wx.Button(pnl, label="Cancel")
+        btns.Add(gen, 0, wx.ALL, 5)
+        btns.Add(ok, 0, wx.ALL, 5)
+        btns.Add(cancel, 0, wx.ALL, 5)
+        v.Add(btns, 0, wx.ALIGN_RIGHT | wx.RIGHT | wx.BOTTOM, 10)
+
+        gen.Bind(wx.EVT_BUTTON, self._on_generate)
+        ok.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_OK) if self._df is not None else wx.MessageBox("Click Generate first.", "No data", wx.OK | wx.ICON_INFORMATION))
+        cancel.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CANCEL))
+
+        pnl.SetSizer(v)
+
+    def get_dataframe(self) -> pd.DataFrame:
+        return self._df if isinstance(self._df, pd.DataFrame) else pd.DataFrame()
+
+    # --- generation helpers
+    def _on_generate(self, _):
+        cols = self.sample_cols or [self.cols_list.GetString(i) for i in range(self.cols_list.GetCount())]
+        n = int(self.rows_spin.GetValue())
+        data = {c: [self._fake_value_for(c, i) for i in range(n)] for c in cols}
+        self._df = pd.DataFrame(data)
+        wx.MessageBox(f"Generated {len(self._df)} rows, {len(self._df.columns)} cols.", "Synthetic Data", wx.OK | wx.ICON_INFORMATION)
+
+    def _fake_value_for(self, col: str, i: int):
+        name = col.lower().strip()
+        if "email" in name:
+            user = "".join(random.choice(string.ascii_lowercase) for _ in range(8))
+            domain = random.choice(["gmail.com","yahoo.com","outlook.com","hotmail.com"])
+            return f"{user}@{domain}"
+        if "phone" in name or "tel" in name:
+            return f"{random.randint(100,999)}-{random.randint(100,999)}-{random.randint(1000,9999)}"
+        if "first" in name and "name" in name:
+            return random.choice(["ALICE","BOB","CAROL","DAVE","ERIN","FRANK","GRACE","HEIDI","IVAN","JUDY"])
+        if "last" in name and "name" in name:
+            return random.choice(["SMITH","JOHNSON","BROWN","WILLIAMS","JONES","MILLER","DAVIS","GARCIA","RODRIGUEZ","WILSON"])
+        if "address" in name:
+            return f"{random.randint(100,9999)} {random.choice(['E','W','N','S'])} {random.choice(['1ST','2ND','MAPLE','OAK','PINE','CEDAR'])} ST, CITY, ST {random.randint(10000,99999)}"
+        if "loan" in name or "amount" in name or "amt" in name or "balance" in name:
+            return round(random.uniform(2500, 30000), 2)
+        if "date" in name or "dt" in name:
+            base = datetime(2021, 1, 1)
+            return (base.replace(year=2021 + random.randint(0, 4)) + pd.to_timedelta(random.randint(0, 364), unit="D")).date().isoformat()
+        # default token
+        return "".join(random.choice(string.ascii_uppercase) for _ in range(4))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Little Buddy — modern look + streaming + TTS + image generation
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
@@ -237,7 +320,7 @@ class DataBuddyDialog(wx.Dialog):
 
         title = wx.StaticText(pnl, label="Little Buddy")
         title.SetForegroundColour(self.COLORS["text"])
-        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
         # Options row
@@ -247,7 +330,7 @@ class DataBuddyDialog(wx.Dialog):
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
         self.voice.SetForegroundColour(self.COLORS["input_fg"])
-        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         opts.Add(self.voice, 0, wx.RIGHT | wx.EXPAND, 6)
 
         self.tts_checkbox = wx.CheckBox(pnl, label="🔊 Speak Reply")
@@ -262,7 +345,7 @@ class DataBuddyDialog(wx.Dialog):
 
         self.tts_status = wx.StaticText(pnl, label="TTS: idle")
         self.tts_status.SetForegroundColour(self.COLORS["muted"])
-        self.tts_status.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.tts_status.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         opts.Add(self.tts_status, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 12)
 
         vbox.Add(opts, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
@@ -275,19 +358,19 @@ class DataBuddyDialog(wx.Dialog):
         self.persona.SetSelection(0)
         self.persona.SetBackgroundColour(self.COLORS["input_bg"])
         self.persona.SetForegroundColour(self.COLORS["input_fg"])
-        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         vbox.Add(self.persona, 0, wx.EXPAND | wx.ALL, 5)
 
         row = wx.BoxSizer(wx.HORIZONTAL)
         ask_lbl = wx.StaticText(pnl, label="Ask:")
         ask_lbl.SetForegroundColour(self.COLORS["muted"])
-        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         row.Add(ask_lbl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
         self.prompt = wx.TextCtrl(pnl, style=wx.TE_PROCESS_ENTER)
         self.prompt.SetBackgroundColour(self.COLORS["input_bg"])
-        self.prompt.SetForegroundColour(self.COLORS["input_fg"])
-        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+               self.prompt.SetForegroundColour(self.COLORS["input_fg"])
+        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
         self.prompt.SetHint("Type your question and press Enter…")
         self.prompt.Bind(wx.EVT_TEXT_ENTER, self.on_ask)
         row.Add(self.prompt, 1, wx.EXPAND | wx.RIGHT, 6)
@@ -667,9 +750,9 @@ class DataBuddyDialog(wx.Dialog):
             dc = wx.MemoryDC(bmp)
             dc.SetBackground(wx.Brush(wx.Colour(32, 36, 44))); dc.Clear()
             dc.SetTextForeground(wx.Colour(220, 230, 255))
-            dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+            dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
             dc.DrawText("[Offline Placeholder]", 40, 40)
-            dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+            dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
             dc.DrawText(prompt, 40, 80)
             dc.SelectObject(wx.NullBitmap)
             bmp.SaveFile(tmp.name, wx.BITMAP_TYPE_PNG)
