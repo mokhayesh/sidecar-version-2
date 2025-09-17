@@ -236,58 +236,6 @@ class StatCard(wx.Panel):
         self.Layout()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Simple dialogs to SHOW analysis results
-# ──────────────────────────────────────────────────────────────────────────────
-class _TextResultDialog(wx.Dialog):
-    def __init__(self, parent, title, text):
-        super().__init__(parent, title=title, size=(760, 520))
-        self.SetBackgroundColour(PAGE_BG)
-        s = wx.BoxSizer(wx.VERTICAL)
-        t = wx.TextCtrl(self, value=text, style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_RICH2)
-        t.SetFont(_font(9))
-        s.Add(t, 1, wx.EXPAND | wx.ALL, 10)
-        btns = self.CreateSeparatedButtonSizer(wx.OK)
-        s.Add(btns, 0, wx.EXPAND | wx.ALL, 10)
-        self.SetSizer(s)
-        self.CentreOnParent()
-
-class _DataFrameDialog(wx.Dialog):
-    def __init__(self, parent, title, df: pd.DataFrame):
-        super().__init__(parent, title=title, size=(900, 560))
-        self.SetBackgroundColour(PAGE_BG)
-        s = wx.BoxSizer(wx.VERTICAL)
-        grid = gridlib.Grid(self); grid.CreateGrid(0, 0); grid.EnableEditing(False)
-        self._apply_light_grid_theme(grid)
-        # columns
-        cols = list(df.columns)
-        if grid.GetNumberCols() < len(cols):
-            grid.AppendCols(len(cols) - grid.GetNumberCols())
-        for i, c in enumerate(cols):
-            grid.SetColLabelValue(i, str(c))
-        # rows
-        if grid.GetNumberRows() < len(df):
-            grid.AppendRows(len(df) - grid.GetNumberRows())
-        # fill
-        for r, (_, row) in enumerate(df.iterrows()):
-            for c, val in enumerate(row):
-                grid.SetCellValue(r, c, "" if pd.isna(val) else str(val))
-        grid.AutoSizeColumns(False)
-        s.Add(grid, 1, wx.EXPAND | wx.ALL, 10)
-        btns = self.CreateSeparatedButtonSizer(wx.OK)
-        s.Add(btns, 0, wx.EXPAND | wx.ALL, 10)
-        self.SetSizer(s)
-        self.CentreOnParent()
-
-    @staticmethod
-    def _apply_light_grid_theme(grid):
-        grid.SetDefaultCellTextColour(wx.Colour(20, 20, 20))
-        grid.SetDefaultCellBackgroundColour(wx.Colour(255, 255, 255))
-        grid.SetLabelTextColour(wx.Colour(60, 60, 60))
-        grid.SetLabelBackgroundColour(wx.Colour(235, 235, 240))
-        grid.SetGridLineColour(wx.Colour(210, 210, 220))
-        grid.SetRowLabelSize(36); grid.SetColLabelSize(28)
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Main Window
 # ──────────────────────────────────────────────────────────────────────────────
 class MainWindow(wx.Frame):
@@ -713,7 +661,36 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Export failed:\n{e}", "Export", wx.OK | wx.ICON_ERROR)
 
-    # Analysis + result viewers
+    # ──────────────────────────────────────────────────────────────────────────
+    # Analysis -> show results IN THE MAIN GRID
+    # ──────────────────────────────────────────────────────────────────────────
+    def _df_from_result(self, result, default_text="Done."):
+        """Normalize any result into a DataFrame suitable for grid display."""
+        try:
+            if isinstance(result, pd.DataFrame):
+                return result
+            if isinstance(result, dict):
+                # try to expand columns from dict
+                return pd.DataFrame([result])
+            if isinstance(result, list):
+                if result and isinstance(result[0], dict):
+                    return pd.DataFrame(result)
+                return pd.DataFrame({"result": [str(x) for x in result]})
+            if isinstance(result, str):
+                lines = [ln for ln in result.splitlines() if ln.strip() != ""]
+                return pd.DataFrame({"result": lines or [result]})
+        except Exception:
+            pass
+        return pd.DataFrame({"message": [default_text]})
+
+    def _display_df(self, df: pd.DataFrame):
+        headers = list(df.columns)
+        # keep None for NA to avoid 'nan' strings in grid
+        rows = df.astype(object).where(pd.notna(df), None).values.tolist()
+        self.headers = headers
+        self.raw_data = rows
+        self._display(headers, rows)
+
     def do_analysis_process(self, which):
         if not self.headers:
             wx.MessageBox("Load data first.", which, wx.OK | wx.ICON_WARNING); return
@@ -726,16 +703,19 @@ class MainWindow(wx.Frame):
                 self.metrics["null_pct"] = null_pct
                 self.metrics["uniqueness"] = uniq_pct
                 self._refresh_kpis()
-                # Show result content
-                result = profile_analysis(df)  # may be None
-                summary = (
-                    f"PROFILE SUMMARY\n"
-                    f"Rows: {len(df):,}\n"
-                    f"Columns: {len(df.columns):,}\n"
-                    f"Null %: {null_pct:.2f}%\n"
-                    f"Uniqueness: {uniq_pct:.2f}%\n"
-                )
-                self._show_result(which, result, default_text=summary)
+
+                # Prefer custom result if provided; otherwise show summary table
+                res = profile_analysis(df)
+                if res is None:
+                    res = pd.DataFrame(
+                        [
+                            {"metric": "Rows",        "value": len(df)},
+                            {"metric": "Columns",     "value": len(df.columns)},
+                            {"metric": "Null %",      "value": round(null_pct, 2)},
+                            {"metric": "Uniqueness",  "value": round(uniq_pct, 2)},
+                        ]
+                    )
+                self._display_df(self._df_from_result(res, "Profile complete."))
 
             elif which == "Quality":
                 completeness, validity, dq = self._compute_quality_metrics(df)
@@ -743,78 +723,53 @@ class MainWindow(wx.Frame):
                 self.metrics["validity"] = validity
                 self.metrics["dq_score"] = dq
                 self._refresh_kpis()
-                result = quality_analysis(df, self._compile_rules())
-                summary = (
-                    "QUALITY SUMMARY\n"
-                    f"Completeness: {completeness:.2f}%\n"
-                    f"Validity: {('—' if validity is None else f'{validity:.2f}%')}\n"
-                    f"DQ Score: {dq:.2f}%\n"
-                )
-                self._show_result(which, result, default_text=summary)
+
+                res = quality_analysis(df, self._compile_rules())
+                if res is None:
+                    res = pd.DataFrame(
+                        [
+                            {"metric": "Completeness", "value": round(completeness, 2)},
+                            {"metric": "Validity",     "value": "—" if validity is None else round(validity, 2)},
+                            {"metric": "DQ Score",     "value": round(dq, 2)},
+                        ]
+                    )
+                self._display_df(self._df_from_result(res, "Quality complete."))
 
             elif which == "Catalog":
-                result = catalog_analysis(df)
-                self._show_result(which, result, default_text="Catalog analysis completed.")
+                res = catalog_analysis(df)
+                if res is None:
+                    # simple data dictionary fallback
+                    rows = []
+                    for c in df.columns:
+                        s = df[c]
+                        rows.append({
+                            "column": c,
+                            "dtype": str(s.dtype),
+                            "non_null": int(s.notna().sum()),
+                            "unique": int(s.nunique()),
+                            "min": s.min() if pd.api.types.is_numeric_dtype(s) else "",
+                            "max": s.max() if pd.api.types.is_numeric_dtype(s) else "",
+                        })
+                    res = pd.DataFrame(rows)
+                self._display_df(self._df_from_result(res, "Catalog complete."))
 
             elif which == "Compliance":
-                result = compliance_analysis(df)
-                self._show_result(which, result, default_text="Compliance check completed.")
+                res = compliance_analysis(df)
+                if res is None:
+                    res = pd.DataFrame([{"status": "ok", "description": "Compliance check completed."}])
+                self._display_df(self._df_from_result(res, "Compliance complete."))
 
             elif which == "Detect Anomalies":
                 flagged, count = self._detect_anomalies(df)
                 self.metrics["anomalies"] = count
                 self._refresh_kpis()
-                # Show in grid & replace main grid
-                self.headers = list(flagged.columns)
-                self.raw_data = flagged.values.tolist()
-                self._display(self.headers, self.raw_data)
-                self._show_result(which, flagged, default_text=f"Anomalies flagged: {count}")
+                # show flagged dataset with explanation column
+                self._display_df(flagged)
 
             else:
                 wx.MessageBox(f"Unknown process: {which}", "Analysis", wx.OK | wx.ICON_WARNING)
         except Exception as e:
             wx.MessageBox(f"{which} failed:\n{e}", which, wx.OK | wx.ICON_ERROR)
-
-    def _show_result(self, title, result, default_text="Done."):
-        """
-        Display a result in a friendly dialog.
-        - pandas.DataFrame -> table dialog
-        - dict/list  -> JSON/text
-        - str        -> text
-        - None       -> default_text
-        """
-        try:
-            if isinstance(result, pd.DataFrame):
-                dlg = _DataFrameDialog(self, f"{title} Results", result)
-                dlg.ShowModal(); dlg.Destroy(); return
-
-            if isinstance(result, dict):
-                txt = json.dumps(result, indent=2, ensure_ascii=False)
-                dlg = _TextResultDialog(self, f"{title} Results", txt)
-                dlg.ShowModal(); dlg.Destroy(); return
-
-            if isinstance(result, list):
-                try:
-                    # list of dicts -> DataFrame
-                    if result and isinstance(result[0], dict):
-                        df = pd.DataFrame(result)
-                        dlg = _DataFrameDialog(self, f"{title} Results", df)
-                        dlg.ShowModal(); dlg.Destroy(); return
-                except Exception:
-                    pass
-                txt = "\n".join(map(str, result))
-                dlg = _TextResultDialog(self, f"{title} Results", txt or default_text)
-                dlg.ShowModal(); dlg.Destroy(); return
-
-            if isinstance(result, str):
-                dlg = _TextResultDialog(self, f"{title} Results", result or default_text)
-                dlg.ShowModal(); dlg.Destroy(); return
-
-            # Fallback to default text
-            dlg = _TextResultDialog(self, f"{title} Results", default_text)
-            dlg.ShowModal(); dlg.Destroy()
-        except Exception as e:
-            wx.MessageBox(f"Could not display results:\n{e}", f"{title} Results", wx.OK | wx.ICON_ERROR)
 
     # Placeholders
     def on_mdm(self, _evt=None):
