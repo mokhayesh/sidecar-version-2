@@ -2,6 +2,7 @@
 import os
 import re
 import json
+from datetime import datetime
 import threading
 
 import wx
@@ -481,6 +482,60 @@ class MainWindow(wx.Frame):
                     compiled[k] = re.compile(".*")
         return compiled
 
+    # New: detailed per-column quality table (classic layout)
+    def _quality_table(self, df: pd.DataFrame) -> pd.DataFrame:
+        rules = self._compile_rules()
+        total_rows = len(df)
+        rows = []
+
+        agg_comp, agg_uniq, agg_val, agg_q = [], [], [], []
+
+        for c in df.columns:
+            series = df[c]
+            nn = int(series.notna().sum())
+            completeness = (nn / total_rows * 100.0) if total_rows else 0.0
+
+            s_nonnull = series.dropna().astype(str)
+            uniq = (s_nonnull.nunique() / nn * 100.0) if nn else 0.0
+
+            validity = None
+            if nn:
+                if c in rules:
+                    rx = rules[c]
+                    matches = s_nonnull.map(lambda v: bool(rx.fullmatch(v) or rx.search(v))).sum()
+                    validity = (matches / nn) * 100.0
+                else:
+                    validity = 100.0  # no rule -> assume valid
+
+            comps = [uniq, completeness]
+            if validity is not None: comps.append(validity)
+            qscore = sum(comps) / len(comps) if comps else 0.0
+
+            # accumulate aggs
+            agg_comp.append(completeness)
+            agg_uniq.append(uniq)
+            if validity is not None: agg_val.append(validity)
+            agg_q.append(qscore)
+
+            rows.append({
+                "Field": c,
+                "Total": nn,
+                "Completeness (%)": round(completeness, 2),
+                "Uniqueness (%)": round(uniq, 2),
+                "Validity (%)": "—" if validity is None else round(validity, 2),
+                "Quality Score (%)": round(qscore, 2),
+                "Analysis Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
+
+        # update KPI metrics with column-averages
+        self.metrics["completeness"] = sum(agg_comp) / len(agg_comp) if agg_comp else None
+        self.metrics["uniqueness"]   = sum(agg_uniq) / len(agg_uniq) if agg_uniq else None
+        self.metrics["validity"]     = (sum(agg_val) / len(agg_val)) if agg_val else None
+        self.metrics["dq_score"]     = sum(agg_q) / len(agg_q) if agg_q else None
+        self._refresh_kpis()
+
+        return pd.DataFrame(rows)
+
     def _compute_quality_metrics(self, df: pd.DataFrame):
         total_cells = df.shape[0] * max(1, df.shape[1])
         nulls = int(df.isna().sum().sum())
@@ -670,7 +725,6 @@ class MainWindow(wx.Frame):
             if isinstance(result, pd.DataFrame):
                 return result
             if isinstance(result, dict):
-                # try to expand columns from dict
                 return pd.DataFrame([result])
             if isinstance(result, list):
                 if result and isinstance(result[0], dict):
@@ -685,7 +739,6 @@ class MainWindow(wx.Frame):
 
     def _display_df(self, df: pd.DataFrame):
         headers = list(df.columns)
-        # keep None for NA to avoid 'nan' strings in grid
         rows = df.astype(object).where(pd.notna(df), None).values.tolist()
         self.headers = headers
         self.raw_data = rows
@@ -704,7 +757,6 @@ class MainWindow(wx.Frame):
                 self.metrics["uniqueness"] = uniq_pct
                 self._refresh_kpis()
 
-                # Prefer custom result if provided; otherwise show summary table
                 res = profile_analysis(df)
                 if res is None:
                     res = pd.DataFrame(
@@ -718,22 +770,24 @@ class MainWindow(wx.Frame):
                 self._display_df(self._df_from_result(res, "Profile complete."))
 
             elif which == "Quality":
-                completeness, validity, dq = self._compute_quality_metrics(df)
-                self.metrics["completeness"] = completeness
-                self.metrics["validity"] = validity
-                self.metrics["dq_score"] = dq
-                self._refresh_kpis()
-
-                res = quality_analysis(df, self._compile_rules())
-                if res is None:
-                    res = pd.DataFrame(
-                        [
-                            {"metric": "Completeness", "value": round(completeness, 2)},
-                            {"metric": "Validity",     "value": "—" if validity is None else round(validity, 2)},
-                            {"metric": "DQ Score",     "value": round(dq, 2)},
-                        ]
-                    )
-                self._display_df(self._df_from_result(res, "Quality complete."))
+                # detailed per-column quality table (classic layout)
+                table = quality_analysis(df, self._compile_rules())
+                if table is None:
+                    table = self._quality_table(df)
+                else:
+                    # Ensure KPIs still get updated if an external analyzer returned a df
+                    if isinstance(table, pd.DataFrame) and len(table):
+                        try:
+                            self.metrics["completeness"] = float(table["Completeness (%)"]).mean()
+                            self.metrics["uniqueness"]   = float(table["Uniqueness (%)"]).mean()
+                            if "Validity (%)" in table:
+                                vals = pd.to_numeric(table["Validity (%)"], errors="coerce").dropna()
+                                self.metrics["validity"] = float(vals.mean()) if len(vals) else None
+                            self.metrics["dq_score"]     = float(table.get("Quality Score (%)", pd.Series(dtype=float))).mean()
+                            self._refresh_kpis()
+                        except Exception:
+                            pass
+                self._display_df(self._df_from_result(table, "Quality complete."))
 
             elif which == "Catalog":
                 res = catalog_analysis(df)
@@ -763,7 +817,6 @@ class MainWindow(wx.Frame):
                 flagged, count = self._detect_anomalies(df)
                 self.metrics["anomalies"] = count
                 self._refresh_kpis()
-                # show flagged dataset with explanation column
                 self._display_df(flagged)
 
             else:
