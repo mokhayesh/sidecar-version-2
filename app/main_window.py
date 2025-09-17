@@ -454,7 +454,7 @@ class MainWindow(wx.Frame):
             if v is None:
                 return "—"
             if isinstance(v, (int,)) or (isinstance(v, float) and v.is_integer()):
-                return f"{int(v)}{suffix}}"
+                return f"{int(v)}{suffix}"
             return f"{v:.1f}{suffix}"
 
         self.kpi_cards["Rows"].set_value(fmt(m["rows"]))
