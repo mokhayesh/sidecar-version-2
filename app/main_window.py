@@ -25,10 +25,10 @@ from app.analysis import (
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Theme (lavender / lilac to match the concept)
+# Theme
 # ──────────────────────────────────────────────────────────────────────────────
-PURPLE        = wx.Colour(67, 38, 120)     # header band
-PAGE_BG       = wx.Colour(245, 241, 251)   # app background
+PURPLE        = wx.Colour(67, 38, 120)
+PAGE_BG       = wx.Colour(245, 241, 251)
 CARD_BG       = wx.Colour(255, 255, 255)
 CARD_EDGE     = wx.Colour(225, 221, 240)
 TEXT_BODY     = wx.Colour(35, 35, 55)
@@ -44,7 +44,7 @@ def _font(size=9, bold=False):
     )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Kernel (persist lightweight context for Little Buddy + app state)
+# Lightweight kernel state
 # ──────────────────────────────────────────────────────────────────────────────
 class KernelManager:
     def __init__(self, app_name="Data Buddy — Sidecar Application"):
@@ -103,7 +103,7 @@ class KernelManager:
         self._save()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# UI atoms (capsule buttons, gradient “Little Buddy”, KPI cards)
+# UI atoms: capsules / pill / KPI card
 # ──────────────────────────────────────────────────────────────────────────────
 class CapsuleButton(wx.Control):
     def __init__(self, parent, label, handler=None):
@@ -130,12 +130,11 @@ class CapsuleButton(wx.Control):
         was_down = self._down
         self._down = False
         self.Refresh()
-        if was_down and self.GetClientRect().Contains(evt.GetPosition()):
-            if callable(self._handler):
-                try:
-                    self._handler(evt)
-                except TypeError:
-                    self._handler()
+        if was_down and self.GetClientRect().Contains(evt.GetPosition()) and callable(self._handler):
+            try:
+                self._handler(evt)
+            except TypeError:
+                self._handler()
 
     def DoGetBestSize(self):
         dc = wx.ClientDC(self); dc.SetFont(_font(9, True))
@@ -205,7 +204,6 @@ class LittleBuddyPill(wx.Control):
         gc.DrawText(self._label, (w - tw)//2, (h - th)//2)
 
 class StatCard(wx.Panel):
-    """Small KPI card with title, value and a slim gauge (for % metrics)."""
     def __init__(self, parent, title):
         super().__init__(parent)
         self.SetBackgroundColour(CARD_BG)
@@ -238,26 +236,73 @@ class StatCard(wx.Panel):
         self.Layout()
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Simple dialogs to SHOW analysis results
+# ──────────────────────────────────────────────────────────────────────────────
+class _TextResultDialog(wx.Dialog):
+    def __init__(self, parent, title, text):
+        super().__init__(parent, title=title, size=(760, 520))
+        self.SetBackgroundColour(PAGE_BG)
+        s = wx.BoxSizer(wx.VERTICAL)
+        t = wx.TextCtrl(self, value=text, style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_RICH2)
+        t.SetFont(_font(9))
+        s.Add(t, 1, wx.EXPAND | wx.ALL, 10)
+        btns = self.CreateSeparatedButtonSizer(wx.OK)
+        s.Add(btns, 0, wx.EXPAND | wx.ALL, 10)
+        self.SetSizer(s)
+        self.CentreOnParent()
+
+class _DataFrameDialog(wx.Dialog):
+    def __init__(self, parent, title, df: pd.DataFrame):
+        super().__init__(parent, title=title, size=(900, 560))
+        self.SetBackgroundColour(PAGE_BG)
+        s = wx.BoxSizer(wx.VERTICAL)
+        grid = gridlib.Grid(self); grid.CreateGrid(0, 0); grid.EnableEditing(False)
+        self._apply_light_grid_theme(grid)
+        # columns
+        cols = list(df.columns)
+        if grid.GetNumberCols() < len(cols):
+            grid.AppendCols(len(cols) - grid.GetNumberCols())
+        for i, c in enumerate(cols):
+            grid.SetColLabelValue(i, str(c))
+        # rows
+        if grid.GetNumberRows() < len(df):
+            grid.AppendRows(len(df) - grid.GetNumberRows())
+        # fill
+        for r, (_, row) in enumerate(df.iterrows()):
+            for c, val in enumerate(row):
+                grid.SetCellValue(r, c, "" if pd.isna(val) else str(val))
+        grid.AutoSizeColumns(False)
+        s.Add(grid, 1, wx.EXPAND | wx.ALL, 10)
+        btns = self.CreateSeparatedButtonSizer(wx.OK)
+        s.Add(btns, 0, wx.EXPAND | wx.ALL, 10)
+        self.SetSizer(s)
+        self.CentreOnParent()
+
+    @staticmethod
+    def _apply_light_grid_theme(grid):
+        grid.SetDefaultCellTextColour(wx.Colour(20, 20, 20))
+        grid.SetDefaultCellBackgroundColour(wx.Colour(255, 255, 255))
+        grid.SetLabelTextColour(wx.Colour(60, 60, 60))
+        grid.SetLabelBackgroundColour(wx.Colour(235, 235, 240))
+        grid.SetGridLineColour(wx.Colour(210, 210, 220))
+        grid.SetRowLabelSize(36); grid.SetColLabelSize(28)
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Main Window
 # ──────────────────────────────────────────────────────────────────────────────
 class MainWindow(wx.Frame):
     def __init__(self):
         super().__init__(None, title="Data Buddy — Sidecar Application", size=(1320, 850))
 
-        # try to set window icon (best effort)
         for p in (
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "sidecar-01.ico"),
             os.path.join(os.getcwd(), "assets", "sidecar-01.ico"),
             os.path.join(os.getcwd(), "sidecar-01.ico"),
         ):
             if os.path.exists(p):
-                try:
-                    self.SetIcon(wx.Icon(p, wx.BITMAP_TYPE_ICO))
-                    break
-                except Exception:
-                    pass
+                try: self.SetIcon(wx.Icon(p, wx.BITMAP_TYPE_ICO)); break
+                except Exception: pass
 
-        # State
         self.kernel = KernelManager()
         self.headers = []
         self.raw_data = []
@@ -274,14 +319,11 @@ class MainWindow(wx.Frame):
         self.CenterOnScreen()
         self.Show()
 
-    # ──────────────────────────────────────────────────────────────────
-    # Layout
-    # ──────────────────────────────────────────────────────────────────
+    # UI layout
     def _build_ui(self):
         self.SetBackgroundColour(PAGE_BG)
         outer = wx.BoxSizer(wx.VERTICAL)
 
-        # Header band
         header = wx.Panel(self, size=(-1, 64))
         header.SetBackgroundColour(PURPLE)
         hz = wx.BoxSizer(wx.HORIZONTAL)
@@ -295,14 +337,12 @@ class MainWindow(wx.Frame):
         header.SetSizer(hz)
         outer.Add(header, 0, wx.EXPAND)
 
-        # Top nav (capsules)
         nav_panel = wx.Panel(self); nav_panel.SetBackgroundColour(PAGE_BG)
         nav = wx.WrapSizer(wx.HORIZONTAL); nav.AddSpacer(12)
 
         def add_capsule(label, handler):
             b = CapsuleButton(nav_panel, label, handler)
-            nav.Add(b, 0, wx.ALL, 8)
-            return b
+            nav.Add(b, 0, wx.ALL, 8); return b
 
         add_capsule("Upload", self._on_upload_menu)
         add_capsule("Profile", lambda _=None: self.do_analysis_process("Profile"))
@@ -312,12 +352,12 @@ class MainWindow(wx.Frame):
         add_capsule("Anomalies", lambda _=None: self.do_analysis_process("Detect Anomalies"))
         add_capsule("Rule Assignment", self.on_rules)
         add_capsule("Knowledge Files", self.on_load_knowledge)
-        add_capsule("Optimizer", self.on_mdm)         # MDM slot (kept behavior)
-        add_capsule("To Do", self.on_run_tasks)       # Tasks slot (kept behavior)
+        add_capsule("Optimizer", self.on_mdm)
+        add_capsule("To Do", self.on_run_tasks)
         nav_panel.SetSizer(nav)
         outer.Add(nav_panel, 0, wx.EXPAND)
 
-        # KPI strip (8 cards)
+        # KPI strip
         kpi_wrap = wx.Panel(self); kpi_wrap.SetBackgroundColour(PAGE_BG)
         kgrid = wx.GridSizer(rows=1, cols=8, hgap=8, vgap=8)
         titles = ["Rows","Columns","Null %","Uniqueness","DQ Score","Validity","Completeness","Anomalies"]
@@ -330,7 +370,7 @@ class MainWindow(wx.Frame):
         outer.Add(kpi_wrap, 0, wx.EXPAND)
         self._refresh_kpis()
 
-        # Knowledge Files row (chips + “(add)” link)
+        # Knowledge files chips
         info = wx.Panel(self); info.SetBackgroundColour(PAGE_BG)
         hz2 = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info, label="Knowledge Files:")
@@ -365,11 +405,9 @@ class MainWindow(wx.Frame):
 
         self.SetSizer(outer)
 
-        # Menu
+        # Menus
         mb = wx.MenuBar()
-        m_file = wx.Menu()
-        m_file.Append(wx.ID_EXIT, "&Quit\tCtrl+Q")
-        mb.Append(m_file, "&File")
+        m_file = wx.Menu(); m_file.Append(wx.ID_EXIT, "&Quit\tCtrl+Q"); mb.Append(m_file, "&File")
         self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=wx.ID_EXIT)
 
         m_settings = wx.Menu(); OPEN_SETTINGS_ID = wx.NewIdRef()
@@ -395,9 +433,7 @@ class MainWindow(wx.Frame):
         self.grid.SetGridLineColour(wx.Colour(210, 210, 220))
         self.grid.SetRowLabelSize(36); self.grid.SetColLabelSize(28)
 
-    # ──────────────────────────────────────────────────────────────────
     # Knowledge chips/env
-    # ──────────────────────────────────────────────────────────────────
     def _get_prioritized_knowledge(self):
         paths = []
         if self.kernel and os.path.exists(self.kernel.path):
@@ -440,9 +476,7 @@ class MainWindow(wx.Frame):
         except Exception:
             pass
 
-    # ──────────────────────────────────────────────────────────────────
-    # KPI helpers & metric computations
-    # ──────────────────────────────────────────────────────────────────
+    # KPI helpers
     def _refresh_kpis(self):
         m = self.metrics
 
@@ -450,8 +484,7 @@ class MainWindow(wx.Frame):
             return None if v is None else max(0, min(100, round(float(v), 1)))
 
         def fmt(v, suffix=""):
-            if v is None:
-                return "—"
+            if v is None: return "—"
             if isinstance(v, (int,)) or (isinstance(v, float) and v.is_integer()):
                 return f"{int(v)}{suffix}"
             return f"{v:.1f}{suffix}"
@@ -555,9 +588,7 @@ class MainWindow(wx.Frame):
         count = int(flags.sum())
         return work, count
 
-    # ──────────────────────────────────────────────────────────────────
-    # File / S3 / Knowledge / Rules / Export
-    # ──────────────────────────────────────────────────────────────────
+    # Upload / knowledge / rules / export
     def _on_upload_menu(self, _evt=None):
         menu = wx.Menu()
         itm1 = menu.Append(-1, "Load File…")
@@ -636,7 +667,6 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Could not open Quality Rule Assignment:\n{e}", "Quality Rules", wx.OK | wx.ICON_ERROR)
 
-    # Synthetic data
     def on_generate_synth(self, _evt=None):
         try:
             sample = pd.DataFrame(self.raw_data, columns=self.headers) if self.headers else pd.DataFrame()
@@ -661,7 +691,7 @@ class MainWindow(wx.Frame):
                 if dlg.ShowModal() != wx.ID_OK: return
                 local = dlg.GetPath()
             df.to_csv(local, index=False)
-            uri = upload_to_s3(local)  # your helper uses defaults / env
+            uri = upload_to_s3(local)
             wx.MessageBox(f"Uploaded:\n{uri}", "Upload", wx.OK | wx.ICON_INFORMATION)
         except Exception as e:
             wx.MessageBox(f"Upload failed:\n{e}", "Upload", wx.OK | wx.ICON_ERROR)
@@ -677,17 +707,13 @@ class MainWindow(wx.Frame):
                                style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dlg:
                 if dlg.ShowModal() != wx.ID_OK: return
                 path = dlg.GetPath()
-            if typ == "csv":
-                df.to_csv(path, index=False)
-            else:
-                df.to_csv(path, index=False, sep="\t")
+            if typ == "csv": df.to_csv(path, index=False)
+            else:            df.to_csv(path, index=False, sep="\t")
             wx.MessageBox(f"Saved:\n{path}", "Export", wx.OK | wx.ICON_INFORMATION)
         except Exception as e:
             wx.MessageBox(f"Export failed:\n{e}", "Export", wx.OK | wx.ICON_ERROR)
 
-    # ──────────────────────────────────────────────────────────────────
-    # Analysis actions
-    # ──────────────────────────────────────────────────────────────────
+    # Analysis + result viewers
     def do_analysis_process(self, which):
         if not self.headers:
             wx.MessageBox("Load data first.", which, wx.OK | wx.ICON_WARNING); return
@@ -700,31 +726,97 @@ class MainWindow(wx.Frame):
                 self.metrics["null_pct"] = null_pct
                 self.metrics["uniqueness"] = uniq_pct
                 self._refresh_kpis()
-                profile_analysis(df)
+                # Show result content
+                result = profile_analysis(df)  # may be None
+                summary = (
+                    f"PROFILE SUMMARY\n"
+                    f"Rows: {len(df):,}\n"
+                    f"Columns: {len(df.columns):,}\n"
+                    f"Null %: {null_pct:.2f}%\n"
+                    f"Uniqueness: {uniq_pct:.2f}%\n"
+                )
+                self._show_result(which, result, default_text=summary)
+
             elif which == "Quality":
                 completeness, validity, dq = self._compute_quality_metrics(df)
                 self.metrics["completeness"] = completeness
                 self.metrics["validity"] = validity
                 self.metrics["dq_score"] = dq
                 self._refresh_kpis()
-                quality_analysis(df, self._compile_rules())
+                result = quality_analysis(df, self._compile_rules())
+                summary = (
+                    "QUALITY SUMMARY\n"
+                    f"Completeness: {completeness:.2f}%\n"
+                    f"Validity: {('—' if validity is None else f'{validity:.2f}%')}\n"
+                    f"DQ Score: {dq:.2f}%\n"
+                )
+                self._show_result(which, result, default_text=summary)
+
             elif which == "Catalog":
-                catalog_analysis(df)
+                result = catalog_analysis(df)
+                self._show_result(which, result, default_text="Catalog analysis completed.")
+
             elif which == "Compliance":
-                compliance_analysis(df)
+                result = compliance_analysis(df)
+                self._show_result(which, result, default_text="Compliance check completed.")
+
             elif which == "Detect Anomalies":
                 flagged, count = self._detect_anomalies(df)
                 self.metrics["anomalies"] = count
                 self._refresh_kpis()
+                # Show in grid & replace main grid
                 self.headers = list(flagged.columns)
                 self.raw_data = flagged.values.tolist()
                 self._display(self.headers, self.raw_data)
+                self._show_result(which, flagged, default_text=f"Anomalies flagged: {count}")
+
             else:
                 wx.MessageBox(f"Unknown process: {which}", "Analysis", wx.OK | wx.ICON_WARNING)
         except Exception as e:
             wx.MessageBox(f"{which} failed:\n{e}", which, wx.OK | wx.ICON_ERROR)
 
-    # Placeholder handlers you already had wired before
+    def _show_result(self, title, result, default_text="Done."):
+        """
+        Display a result in a friendly dialog.
+        - pandas.DataFrame -> table dialog
+        - dict/list  -> JSON/text
+        - str        -> text
+        - None       -> default_text
+        """
+        try:
+            if isinstance(result, pd.DataFrame):
+                dlg = _DataFrameDialog(self, f"{title} Results", result)
+                dlg.ShowModal(); dlg.Destroy(); return
+
+            if isinstance(result, dict):
+                txt = json.dumps(result, indent=2, ensure_ascii=False)
+                dlg = _TextResultDialog(self, f"{title} Results", txt)
+                dlg.ShowModal(); dlg.Destroy(); return
+
+            if isinstance(result, list):
+                try:
+                    # list of dicts -> DataFrame
+                    if result and isinstance(result[0], dict):
+                        df = pd.DataFrame(result)
+                        dlg = _DataFrameDialog(self, f"{title} Results", df)
+                        dlg.ShowModal(); dlg.Destroy(); return
+                except Exception:
+                    pass
+                txt = "\n".join(map(str, result))
+                dlg = _TextResultDialog(self, f"{title} Results", txt or default_text)
+                dlg.ShowModal(); dlg.Destroy(); return
+
+            if isinstance(result, str):
+                dlg = _TextResultDialog(self, f"{title} Results", result or default_text)
+                dlg.ShowModal(); dlg.Destroy(); return
+
+            # Fallback to default text
+            dlg = _TextResultDialog(self, f"{title} Results", default_text)
+            dlg.ShowModal(); dlg.Destroy()
+        except Exception as e:
+            wx.MessageBox(f"Could not display results:\n{e}", f"{title} Results", wx.OK | wx.ICON_ERROR)
+
+    # Placeholders
     def on_mdm(self, _evt=None):
         wx.MessageBox("Optimizer/MDM placeholder.", "MDM", wx.OK | wx.ICON_INFORMATION)
 
@@ -739,7 +831,7 @@ class MainWindow(wx.Frame):
                 dlg.ShowModal()
                 dlg.Destroy()
             else:
-                dlg.Show()  # frame-style settings
+                dlg.Show()
         except Exception as e:
             wx.MessageBox(f"Settings failed to open:\n{e}", "Settings", wx.OK | wx.ICON_ERROR)
 
@@ -758,13 +850,10 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Buddy", wx.OK | wx.ICON_ERROR)
 
-    # ──────────────────────────────────────────────────────────────────
     # Grid display
-    # ──────────────────────────────────────────────────────────────────
     def _display(self, headers, rows):
         self.grid.BeginBatch()
         try:
-            # columns
             cur_cols = self.grid.GetNumberCols()
             if cur_cols < len(headers):
                 self.grid.AppendCols(len(headers) - cur_cols)
@@ -773,14 +862,12 @@ class MainWindow(wx.Frame):
             for i, h in enumerate(headers):
                 self.grid.SetColLabelValue(i, str(h))
 
-            # rows
             cur_rows = self.grid.GetNumberRows()
             if cur_rows < len(rows):
                 self.grid.AppendRows(len(rows) - cur_rows)
             elif cur_rows > len(rows):
                 self.grid.DeleteRows(0, cur_rows - len(rows))
 
-            # data
             for r, row in enumerate(rows):
                 for c, val in enumerate(row):
                     self.grid.SetCellValue(r, c, "" if val is None else str(val))
