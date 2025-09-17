@@ -233,7 +233,8 @@ class StatCard(wx.Panel):
         if percent is None or percent < 0:
             self.gauge.Hide()
         else:
-            self.gauge.SetValue(int(max(0, min(100, percent)))))
+            # FIX: removed an extra closing parenthesis here
+            self.gauge.SetValue(int(max(0, min(100, percent))))
             self.gauge.Show()
         self.Layout()
 
@@ -453,7 +454,7 @@ class MainWindow(wx.Frame):
             if v is None:
                 return "—"
             if isinstance(v, (int,)) or (isinstance(v, float) and v.is_integer()):
-                return f"{int(v)}{suffix}"
+                return f"{int(v)}{suffix}}"
             return f"{v:.1f}{suffix}"
 
         self.kpi_cards["Rows"].set_value(fmt(m["rows"]))
