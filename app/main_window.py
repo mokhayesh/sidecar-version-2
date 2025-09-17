@@ -233,7 +233,6 @@ class StatCard(wx.Panel):
         if percent is None or percent < 0:
             self.gauge.Hide()
         else:
-            # FIX: removed an extra closing parenthesis here
             self.gauge.SetValue(int(max(0, min(100, percent))))
             self.gauge.Show()
         self.Layout()
