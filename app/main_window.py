@@ -222,7 +222,7 @@ class LittleBuddyPill(wx.Control):
         self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
         self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
         self.Bind(wx.EVT_LEFT_UP, self.on_up)
-        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD)
+        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
 
     def _set_hover(self, v): self._hover = v; self.Refresh()
     def on_down(self, _): self._down = True; self.CaptureMouse(); self.Refresh()
@@ -273,11 +273,11 @@ class KPIBadge(wx.Panel):
         dc.DrawRoundedRectangle(1,1,w-2,h-2,8)
 
         dc.SetTextForeground(wx.Colour(94, 64, 150))
-        dc.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
+        dc.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         dc.DrawText(self._title.upper(), 12, 10)
 
         dc.SetTextForeground(wx.Colour(44, 31, 72))
-        dc.SetFont(wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
+        dc.SetFont(wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         dc.DrawText(str(self._value), 12, 34)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -412,7 +412,6 @@ class MainWindow(wx.Frame):
     def _build_ui(self):
         BG = wx.Colour(249, 246, 255)       # light lavender
         PANEL = wx.Colour(248, 245, 255)
-        TXT = wx.Colour(44,31,72)
 
         self.SetBackgroundColour(BG)
         main = wx.BoxSizer(wx.VERTICAL)
@@ -421,13 +420,8 @@ class MainWindow(wx.Frame):
         self.banner = HeaderBanner(self, height=64)
         main.Add(self.banner, 0, wx.EXPAND)
 
-        # Top row: title + Little Buddy
+        # Top row: Little Buddy (right)
         row = wx.BoxSizer(wx.HORIZONTAL)
-        title = wx.StaticText(self, label="Data Buddy")
-        title.SetForegroundColour(wx.Colour(255,255,255))
-        title.Wrap(-1)
-        # place on banner by overlaying—use spacer for now
-        row.AddSpacer(10)
         row.AddStretchSpacer()
         lb_holder = wx.Panel(self); lb_holder.SetBackgroundColour(wx.Colour(53,29,102))
         lb_sz = wx.BoxSizer(wx.HORIZONTAL)
@@ -451,8 +445,8 @@ class MainWindow(wx.Frame):
         add_btn("Anomalies", lambda e: self.do_analysis_process("Detect Anomalies"))
         add_btn("Rule Assignment", self.on_rules)
         add_btn("Knowledge Files", self.on_load_knowledge)
-        add_btn("Optimizer", self.on_mdm)   # ← real MDM
-        add_btn("To Do", self.on_run_tasks) # ← real tasks
+        add_btn("Optimizer", self.on_mdm)   # real MDM
+        add_btn("To Do", self.on_run_tasks) # real tasks
 
         toolbar_panel.SetSizer(tb)
         main.Add(toolbar_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
@@ -478,7 +472,7 @@ class MainWindow(wx.Frame):
         info_panel = wx.Panel(self); info_panel.SetBackgroundColour(wx.Colour(243, 239, 255))
         hz = wx.BoxSizer(wx.HORIZONTAL)
         lab = wx.StaticText(info_panel, label="Knowledge Files:")
-        lab.SetForegroundColour(TXT)
+        lab.SetForegroundColour(wx.Colour(44,31,72))
         self.knowledge_lbl = wx.StaticText(info_panel, label="(none)")
         self.knowledge_lbl.SetForegroundColour(wx.Colour(94,64,150))
         hz.Add(lab, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 6)
@@ -489,7 +483,7 @@ class MainWindow(wx.Frame):
 
         # Grid
         grid_panel = wx.Panel(self); grid_panel.SetBackgroundColour(BG)
-        self.grid = gridlib.Grid(grid_panel); self.grid.CreateGrid(0, 0)
+        self.grid = wx.grid.Grid(grid_panel); self.grid.CreateGrid(0, 0)
         self.grid.SetDefaultCellTextColour(wx.Colour(35, 31, 51))
         self.grid.SetDefaultCellBackgroundColour(wx.Colour(255,255,255))
         self.grid.SetLabelTextColour(wx.Colour(60,60,90))
@@ -614,7 +608,6 @@ class MainWindow(wx.Frame):
         dq_score = sum(components) / len(components) if components else 0.0
         return completeness, validity, dq_score
 
-    # Flexible output coercion (prevents "truth value of a DataFrame is ambiguous")
     @staticmethod
     def _coerce_hdr_data(obj):
         if isinstance(obj, tuple) and len(obj) == 2:
@@ -625,7 +618,6 @@ class MainWindow(wx.Frame):
                 return list(hdr), list(data)
         if isinstance(obj, pd.DataFrame):
             df = obj; return list(df.columns), df.values.tolist()
-        # unknown ⇒ basic message
         return ["message"], [["Quality complete."]]
 
     # File & knowledge & rules
@@ -708,7 +700,7 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Buddy", wx.OK | wx.ICON_ERROR)
 
-    # Synthetic data (optional from dialogs)
+    # Synthetic data helpers (used by SyntheticDataDialog if you trigger it)
     @staticmethod
     def _most_common_format(strings, default_mask="DDD-DDD-DDDD"):
         def mask_one(s): return re.sub(r"\d", "D", s)
@@ -1044,7 +1036,7 @@ class MainWindow(wx.Frame):
 
         self._display(hdr, data)
 
-    # Anomaly detector (robust)
+    # Robust anomaly detector
     def _detect_anomalies(self, df: pd.DataFrame):
         work = df.copy()
 
@@ -1160,7 +1152,7 @@ class MainWindow(wx.Frame):
         for line in text.splitlines():
             line=line.strip()
             if not line or line.startswith("#"): continue
-            parts=line.split(maxsplit=1)
+            parts=line.split(maxsplit(1))
             action=parts[0]; arg=parts[1] if len(parts)==2 else None
             t={"action": action}
             if arg:
@@ -1257,7 +1249,6 @@ class MainWindow(wx.Frame):
         if isinstance(hdr, tuple) and len(hdr) == 2:
             hdr, data = hdr
 
-        # clear
         self.grid.ClearGrid()
         if self.grid.GetNumberRows(): self.grid.DeleteRows(0, self.grid.GetNumberRows())
         if self.grid.GetNumberCols(): self.grid.DeleteCols(0, self.grid.GetNumberCols())
@@ -1269,7 +1260,6 @@ class MainWindow(wx.Frame):
         for i, h in enumerate(hdr): self.grid.SetColLabelValue(i, str(h))
         self.grid.AppendRows(len(data))
 
-        # anomaly column index if present
         try: anom_idx = hdr.index("__anomaly__")
         except ValueError: anom_idx = -1
 
