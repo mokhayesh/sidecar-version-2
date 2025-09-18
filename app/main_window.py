@@ -217,7 +217,13 @@ class MainWindow(wx.Frame):
                 except Exception: pass
 
         self.kernel = KernelManager()
+
+        # Current grid contents (what you see)
         self.headers, self.raw_data = [], []
+
+        # Base dataset (immutable source for analyses)
+        self.base_headers, self.base_rows = [], []
+
         self.knowledge_files, self.quality_rules = [], {}
         self.metrics = {
             "rows": None, "cols": None, "null_pct": None, "uniqueness": None,
@@ -226,6 +232,15 @@ class MainWindow(wx.Frame):
 
         self._build_ui(); self._ensure_kernel_in_knowledge()
         self.CenterOnScreen(); self.Show()
+
+    # Helper: set a *new dataset* (resets base & display & KPIs)
+    def _set_new_dataset(self, hdr, rows):
+        self.base_headers = list(hdr)
+        self.base_rows = [list(r) for r in rows]
+        self.headers = list(hdr)
+        self.raw_data = [list(r) for r in rows]
+        self._display(self.headers, self.raw_data)
+        self._reset_kpis_for_new_dataset(self.base_headers, self.base_rows)
 
     def _build_ui(self):
         self.SetBackgroundColour(PAGE_BG)
@@ -532,8 +547,7 @@ class MainWindow(wx.Frame):
             hdr, data = detect_and_split_data(text)
         except Exception as e:
             wx.MessageBox(f"Could not read file: {e}", "Error", wx.OK | wx.ICON_ERROR); return
-        self.headers, self.raw_data = hdr, data
-        self._display(hdr, data); self._reset_kpis_for_new_dataset(hdr, data)
+        self._set_new_dataset(hdr, data)
 
     def on_load_s3(self, _evt=None):
         with wx.TextEntryDialog(self, "Enter URI (S3 presigned or HTTP/HTTPS):", "Load from URI/S3") as dlg:
@@ -544,13 +558,12 @@ class MainWindow(wx.Frame):
             hdr, data = detect_and_split_data(text)
         except Exception as e:
             wx.MessageBox(f"Download failed: {e}", "Error", wx.OK | wx.ICON_ERROR); return
-        self.headers, self.raw_data = hdr, data
-        self._display(hdr, data); self._reset_kpis_for_new_dataset(hdr, data)
+        self._set_new_dataset(hdr, data)
 
     def on_rules(self, _evt=None):
-        if not self.headers:
+        if not self.base_headers:
             wx.MessageBox("Load data first so fields are available.", "Quality Rules", wx.OK | wx.ICON_WARNING); return
-        fields = list(self.headers); current_rules = self.quality_rules
+        fields = list(self.base_headers); current_rules = self.quality_rules
         try:
             dlg = QualityRuleDialog(self, fields, current_rules)
             if dlg.ShowModal() == wx.ID_OK:
@@ -561,14 +574,11 @@ class MainWindow(wx.Frame):
 
     def on_generate_synth(self, _evt=None):
         try:
-            sample = pd.DataFrame(self.raw_data, columns=self.headers) if self.headers else pd.DataFrame()
+            sample = pd.DataFrame(self.base_rows, columns=self.base_headers) if self.base_headers else pd.DataFrame()
             dlg = SyntheticDataDialog(self, sample)
             if dlg.ShowModal() == wx.ID_OK:
                 df = dlg.get_dataframe()
-                self.headers = list(df.columns)
-                self.raw_data = df.values.tolist()
-                self._display(self.headers, self.raw_data)
-                self._reset_kpis_for_new_dataset(self.headers, self.raw_data)
+                self._set_new_dataset(list(df.columns), df.values.tolist())
             dlg.Destroy()
         except Exception as e:
             wx.MessageBox(f"Synthetic Data failed:\n{e}", "Synthetic Data", wx.OK | wx.ICON_ERROR)
@@ -634,27 +644,30 @@ class MainWindow(wx.Frame):
             df = pd.DataFrame({"message": [default_text]})
         headers = list(df.columns)
         rows = df.astype(object).where(pd.notna(df), None).values.tolist()
+        # NOTE: update only what's shown; do not mutate base dataset
         self.headers, self.raw_data = headers, rows
         self._display(headers, rows)
 
     def do_analysis_process(self, which):
-        if not self.headers:
+        if not self.base_headers:
             wx.MessageBox("Load data first.", which, wx.OK | wx.ICON_WARNING); return
-        df = pd.DataFrame(self.raw_data, columns=self.headers)
+
+        base_df = pd.DataFrame(self.base_rows, columns=self.base_headers)
+
         try:
             if which == "Profile":
-                null_pct, uniq_pct = self._compute_profile_metrics(df)
+                null_pct, uniq_pct = self._compute_profile_metrics(base_df)
                 self.metrics["null_pct"] = null_pct
                 self.metrics["uniqueness"] = uniq_pct
                 self._refresh_kpis()
 
-                res = profile_analysis(df)
+                res = profile_analysis(base_df)
                 cand = self._result_to_df(res)
                 if cand is None or cand.empty:
                     cand = pd.DataFrame(
                         [
-                            {"metric": "Rows",       "value": len(df)},
-                            {"metric": "Columns",    "value": len(df.columns)},
+                            {"metric": "Rows",       "value": len(base_df)},
+                            {"metric": "Columns",    "value": len(base_df.columns)},
                             {"metric": "Null %",     "value": round(null_pct, 2)},
                             {"metric": "Uniqueness", "value": round(uniq_pct, 2)},
                         ]
@@ -662,10 +675,10 @@ class MainWindow(wx.Frame):
                 self._display_df(cand, "Profile complete.")
 
             elif which == "Quality":
-                ext = quality_analysis(df, self._compile_rules())
+                ext = quality_analysis(base_df, self._compile_rules())
                 table = self._result_to_df(ext)
                 if table is None or table.empty:
-                    table = self._quality_table(df)  # also refreshes KPIs
+                    table = self._quality_table(base_df)  # also refreshes KPIs
                 else:
                     try:
                         if "Completeness (%)" in table:
@@ -684,13 +697,13 @@ class MainWindow(wx.Frame):
                                 table["Quality Score (%)"], errors="coerce"
                             ).dropna().mean()
                         if self.metrics["dq_score"] is None:
-                            c, v, q = self._compute_quality_metrics(df)
+                            c, v, q = self._compute_quality_metrics(base_df)
                             self.metrics["completeness"] = c
                             self.metrics["validity"] = v
                             self.metrics["dq_score"] = q
                         self._refresh_kpis()
                     except Exception:
-                        c, v, q = self._compute_quality_metrics(df)
+                        c, v, q = self._compute_quality_metrics(base_df)
                         self.metrics["completeness"] = c
                         self.metrics["validity"] = v
                         self.metrics["dq_score"] = q
@@ -698,32 +711,45 @@ class MainWindow(wx.Frame):
                 self._display_df(table, "Quality complete.")
 
             elif which == "Catalog":
-                res = catalog_analysis(df)
+                res = catalog_analysis(base_df)
                 table = self._result_to_df(res)
+
+                # Fallback: build catalog strictly from the BASE dataset
                 if table is None or table.empty:
                     rows = []
-                    for c in df.columns:
-                        s = df[c]
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    for c in base_df.columns:
+                        s = base_df[c]
+                        # Decide type
+                        numeric_ratio = pd.to_numeric(s, errors="coerce").notna().mean()
+                        dtype = "Numeric" if numeric_ratio > 0.8 else "Text"
+                        # Nullable?
+                        nullable = "Yes" if s.isna().mean() > 0.0 else "No"
+                        # Example
+                        ex = next((str(v) for v in s.dropna().head(1).tolist()), "")
+                        # Row
                         rows.append({
-                            "column": c,
-                            "dtype": str(s.dtype),
-                            "non_null": int(s.notna().sum()),
-                            "unique": int(s.nunique()),
-                            "min": s.min() if pd.api.types.is_numeric_dtype(s) else "",
-                            "max": s.max() if pd.api.types.is_numeric_dtype(s) else "",
+                            "Field": c,
+                            "Friendly Name": c.replace("_", " ").title(),
+                            "Description": f"Column '{c}' derived from the loaded dataset.",
+                            "Data Type": dtype,
+                            "Nullable": nullable,
+                            "Example": ex,
+                            "Analysis Date": now,
                         })
                     table = pd.DataFrame(rows)
+
                 self._display_df(table, "Catalog complete.")
 
             elif which == "Compliance":
-                res = compliance_analysis(df)
+                res = compliance_analysis(base_df)
                 table = self._result_to_df(res)
                 if table is None or table.empty:
                     table = pd.DataFrame([{"status": "ok", "description": "Compliance check completed."}])
                 self._display_df(table, "Compliance complete.")
 
             elif which == "Detect Anomalies":
-                flagged, count = self._detect_anomalies(df)
+                flagged, count = self._detect_anomalies(base_df)
                 self.metrics["anomalies"] = count; self._refresh_kpis()
                 self._display_df(flagged)
 
@@ -758,8 +784,6 @@ class MainWindow(wx.Frame):
             os.environ["SIDECAR_KNOWLEDGE_FILES"] = os.pathsep.join(prio)
             os.environ["SIDECAR_KNOWLEDGE_FIRST"] = "1"
             os.environ["SIDECAR_KERNEL_FIRST"] = "1"
-            if hasattr(dlg, "set_kernel"): dlg.set_kernel(self.kernel)
-            if hasattr(dlg, "set_knowledge_files"): dlg.set_knowledge_files(list(prio))
             dlg.ShowModal(); dlg.Destroy()
         except Exception as e:
             wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Buddy", wx.OK | wx.ICON_ERROR)
