@@ -735,7 +735,8 @@ class MainWindow(wx.Frame):
             ea=self._norm_email(a.get(cols["email"])); eb=self._norm_email(b.get(cols["email"]))
             if ea and eb: parts.append(1.0 if ea==eb else self._sim(ea,eb)); weights.append(0.5)
         if use_phone and cols.get("phone"):
-            pa=self._norm_phone(a.get(cols["phone"])); pb=self._norm_phone(b.get(cols["phone"]]))
+            pa = self._norm_phone(a.get(cols["phone"])); pb = self._norm_phone(b.get(cols["phone"]))
+
             if pa and pb: parts.append(1.0 if pa==pb else self._sim(pa,pb)); weights.append(0.5)
         if use_name and (cols.get("first") or cols.get("last")):
             fa=self._norm_name(a.get(cols.get("first"))); fb=self._norm_name(b.get(cols.get("first")))
