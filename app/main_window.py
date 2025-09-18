@@ -465,7 +465,7 @@ class MainWindow(wx.Frame):
     @staticmethod
     def _as_df(rows, cols):
         df = pd.DataFrame(rows, columns=cols)
-        return df.applymap(lambda x: None if (x is None or (isinstance(x, str) and x.strip() == "")) else x)
+        return df.map(lambda x: None if (x is None or (isinstance(x, str) and x.strip() == "")) else x)
 
     def _compute_profile_metrics(self, df: pd.DataFrame):
         total_cells = df.shape[0] * max(1, df.shape[1])
@@ -657,7 +657,8 @@ class MainWindow(wx.Frame):
             wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
             return
         src_df = pd.DataFrame(self.raw_data, columns=self.headers)
-        dlg = SyntheticDataDialog(self, fields=list(self.headers))
+        # The dialog now supports both signatures; pass both for safety.
+        dlg = SyntheticDataDialog(self, sample_df=src_df, fields=list(self.headers))
         if hasattr(dlg, "ShowModal"):
             if dlg.ShowModal() != wx.ID_OK:
                 dlg.Destroy(); return
@@ -734,7 +735,7 @@ class MainWindow(wx.Frame):
             ea=self._norm_email(a.get(cols["email"])); eb=self._norm_email(b.get(cols["email"]))
             if ea and eb: parts.append(1.0 if ea==eb else self._sim(ea,eb)); weights.append(0.5)
         if use_phone and cols.get("phone"):
-            pa=self._norm_phone(a.get(cols["phone"])); pb=self._norm_phone(b.get(cols["phone"]))
+            pa=self._norm_phone(a.get(cols["phone"])); pb=self._norm_phone(b.get(cols["phone"]]))
             if pa and pb: parts.append(1.0 if pa==pb else self._sim(pa,pb)); weights.append(0.5)
         if use_name and (cols.get("first") or cols.get("last")):
             fa=self._norm_name(a.get(cols.get("first"))); fb=self._norm_name(b.get(cols.get("first")))
@@ -1092,7 +1093,7 @@ class MainWindow(wx.Frame):
         for line in text.splitlines():
             line=line.strip()
             if not line or line.startswith("#"): continue
-            parts=line.split(maxsplit(1))
+            parts=line.split(maxsplit=1)  # ← fixed
             action=parts[0]; arg=parts[1] if len(parts)==2 else None
             t={"action": action}
             if arg:
@@ -1131,7 +1132,7 @@ class MainWindow(wx.Frame):
                     wx.CallAfter(self.do_analysis_process, name)
 
                 elif act == "exportcsv":
-                    p = t.get("path"); 
+                    p = t.get("path")
                     if not p: raise ValueError("ExportCSV requires 'path'")
                     wx.CallAfter(self._export_to_path, p, ",")
 

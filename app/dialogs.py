@@ -61,12 +61,12 @@ class QualityRuleDialog(wx.Dialog):
         self.current_rules = current_rules
         self.loaded_rules = {}
 
-        BG = wx.Colour(245, 245, 245)
-        PANEL = wx.Colour(255, 255, 255)
-        TXT = wx.Colour(45, 45, 45)
+        BG = wx.Colour(245, 242, 255)
+        PANEL = wx.Colour(250, 248, 255)
+        TXT = wx.Colour(45, 35, 84)
         INPUT_BG = wx.Colour(255, 255, 255)
-        INPUT_TXT = wx.Colour(45, 45, 45)
-        ACCENT = wx.Colour(132, 86, 255)
+        INPUT_TXT = wx.Colour(32, 24, 64)
+        ACCENT = wx.Colour(115, 102, 192)
 
         self.SetBackgroundColour(BG)
         pnl = wx.Panel(self)
@@ -113,9 +113,9 @@ class QualityRuleDialog(wx.Dialog):
         pbox.SetForegroundColour(TXT)
         pv = wx.StaticBoxSizer(pbox, wx.VERTICAL)
         self.preview = rt.RichTextCtrl(pnl, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
-        self.preview.SetBackgroundColour(wx.Colour(250, 250, 250))
-        self.preview.SetForegroundColour(wx.Colour(40, 40, 40))
-        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.preview.SetBackgroundColour(wx.Colour(255, 255, 255))
+        self.preview.SetForegroundColour(wx.Colour(32, 24, 64))
+        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         pv.Add(self.preview, 1, wx.EXPAND | wx.ALL, 4)
         main.Add(pv, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
@@ -135,7 +135,7 @@ class QualityRuleDialog(wx.Dialog):
         for b in (load_btn, assign_btn, close_btn):
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         load_btn.Bind(wx.EVT_BUTTON, self.on_load_rules)
         assign_btn.Bind(wx.EVT_BUTTON, self.on_assign)
         close_btn.Bind(wx.EVT_BUTTON, lambda _: self.EndModal(wx.ID_OK))
@@ -201,16 +201,18 @@ class QualityRuleDialog(wx.Dialog):
 # ──────────────────────────────────────────────────────────────────────────────
 class SyntheticDataDialog(wx.Dialog):
     """
-    Minimal synthetic data generator used by MainWindow.on_generate_synth().
-    - Uses current dataset's columns when available.
-    - Heuristics on column names to generate plausible values.
+    Minimal synthetic data generator.
+    Accepts either:
+      - sample_df (DataFrame) OR
+      - fields (list[str])
     """
-    def __init__(self, parent, sample_df: pd.DataFrame | None):
+    def __init__(self, parent, sample_df: pd.DataFrame | None = None, fields: list[str] | None = None):
         super().__init__(parent, title="Synthetic Data", size=(600, 480),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
         self._df = None
-        self.sample_cols = list(sample_df.columns) if isinstance(sample_df, pd.DataFrame) and len(sample_df.columns) else []
+        cols_from_df = list(sample_df.columns) if isinstance(sample_df, pd.DataFrame) and len(sample_df.columns) else []
+        self.sample_cols = cols_from_df or list(fields or [])
 
         pnl = wx.Panel(self)
         v = wx.BoxSizer(wx.VERTICAL)
@@ -243,6 +245,12 @@ class SyntheticDataDialog(wx.Dialog):
     def get_dataframe(self) -> pd.DataFrame:
         return self._df if isinstance(self._df, pd.DataFrame) else pd.DataFrame()
 
+    def get_values(self):
+        """Compatible with main_window expectation: returns (n_rows, fields)."""
+        n = int(self.rows_spin.GetValue())
+        cols = [self.cols_list.GetString(i) for i in range(self.cols_list.GetCount())]
+        return n, cols
+
     def _on_generate(self, _):
         cols = self.sample_cols or [self.cols_list.GetString(i) for i in range(self.cols_list.GetCount())]
         n = int(self.rows_spin.GetValue())
@@ -273,162 +281,7 @@ class SyntheticDataDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ChatView — lavender speech bubbles with tails (auto-wrap, autoscroll)
-# ──────────────────────────────────────────────────────────────────────────────
-class ChatView(wx.ScrolledWindow):
-    def __init__(self, parent, colors):
-        super().__init__(parent, style=wx.VSCROLL | wx.WANTS_CHARS)
-        self.COL = colors
-        self.SetBackgroundColour(self.COL["panel"])
-        self.font = wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
-        self.messages = []          # list of {"sender": "user"|"bot", "text": str}
-        self._stream_index = None   # index of bubble being streamed
-        self._layout = []           # cached layout items from last paint
-
-        self.SetScrollRate(0, 12)
-        self.Bind(wx.EVT_PAINT, self.on_paint)
-        self.Bind(wx.EVT_SIZE, lambda e: (self._reflow(), e.Skip()))
-        self.Bind(wx.EVT_SHOW, lambda e: (self._reflow(), e.Skip()))
-
-    # public API used by dialog
-    def add_message(self, sender: str, text: str):
-        self.messages.append({"sender": sender, "text": str(text)})
-        self._reflow(scroll_to_end=True)
-
-    def start_bubble(self, sender: str):
-        self._stream_index = len(self.messages)
-        self.messages.append({"sender": sender, "text": ""})
-        self._reflow(scroll_to_end=True)
-
-    def write_stream(self, chunk: str):
-        if self._stream_index is None:
-            return
-        self.messages[self._stream_index]["text"] += str(chunk)
-        self._reflow(scroll_to_end=True)
-
-    def end_bubble(self):
-        self._stream_index = None
-        self._reflow(scroll_to_end=True)
-
-    # layout & paint
-    def _wrap_lines(self, dc, text, max_w):
-        lines = []
-        for para in str(text).split("\n"):
-            words = para.split(" ")
-            line = ""
-            for w in words:
-                test = (line + " " + w) if line else w
-                tw, _ = dc.GetTextExtent(test)
-                if tw <= max_w:
-                    line = test
-                else:
-                    if line:
-                        lines.append(line)
-                    line = w
-            lines.append(line)
-        return lines
-
-    def _reflow(self, scroll_to_end=False):
-        dc = wx.ClientDC(self)
-        self.PrepareDC(dc)
-        dc.SetFont(self.font)
-
-        width = self.GetClientSize().GetWidth()
-        if width <= 20:
-            # best guess before first layout
-            width = max(400, self.GetParent().GetClientSize().GetWidth() - 24)
-
-        margin = 14
-        spacing = 10
-        pad = 10
-        maxw = min(int(width * 0.72), 720)
-        y = margin
-        self._layout = []
-
-        for msg in self.messages:
-            lines = self._wrap_lines(dc, msg["text"], maxw - pad * 2)
-            lh = dc.GetTextExtent("Ag")[1]
-            text_w = 0
-            for ln in lines:
-                tw, _ = dc.GetTextExtent(ln)
-                text_w = max(text_w, tw)
-            bw = min(maxw, max(text_w + pad * 2, 40))
-            bh = lh * len(lines) + pad * 2
-
-            left_align = (msg["sender"] == "bot")
-            x = margin if left_align else (width - bw - margin)
-
-            self._layout.append({
-                "x": x, "y": y, "w": bw, "h": bh,
-                "lines": lines, "lh": lh,
-                "sender": msg["sender"]
-            })
-            y += bh + spacing
-
-        total_h = y + margin
-        self.SetVirtualSize((width, total_h))
-        if scroll_to_end:
-            self.Scroll(0, self.GetScrollRange(wx.VERTICAL))
-        self.Refresh(False)
-
-    def on_paint(self, _):
-        dc = wx.AutoBufferedPaintDC(self)
-        self.PrepareDC(dc)
-        dc.Clear()
-        dc.SetBackground(wx.Brush(self.COL["panel"]))
-        dc.Clear()
-        gc = wx.GraphicsContext.Create(dc)
-        gc.SetFont(self.font, self.COL["text"])
-
-        width = max(20, self.GetClientSize().GetWidth())
-        border = self.COL["border"]
-        # canvas area (white)
-        gc.SetPen(wx.Pen(border))
-        gc.SetBrush(wx.Brush(self.COL["reply_bg"]))
-        gc.DrawRectangle(1, 1, width - 2, self.GetClientSize().GetHeight() - 2)
-
-        # draw bubbles
-        r = 10
-        pad = 10
-        for it in self._layout:
-            x, y, w, h = it["x"], it["y"], it["w"], it["h"]
-            left = (it["sender"] == "bot")
-            bg = self.COL["bubble_bot_bg"] if left else self.COL["bubble_user_bg"]
-            fg = self.COL["bubble_bot_fg"] if left else self.COL["bubble_user_fg"]
-
-            # tail
-            path_tail = gc.CreatePath()
-            if left:
-                path_tail.MoveToPoint(x + 8, y + h - 12)
-                path_tail.AddLineToPoint(x - 2, y + h - 6)
-                path_tail.AddLineToPoint(x + 8, y + h - 2)
-            else:
-                path_tail.MoveToPoint(x + w - 8, y + h - 12)
-                path_tail.AddLineToPoint(x + w + 2, y + h - 6)
-                path_tail.AddLineToPoint(x + w - 8, y + h - 2)
-            path_tail.CloseSubpath()
-
-            gc.SetPen(wx.Pen(bg))
-            gc.SetBrush(wx.Brush(bg))
-            gc.FillPath(path_tail)
-
-            # rounded rect bubble
-            gc.SetPen(wx.Pen(bg))
-            gc.SetBrush(wx.Brush(bg))
-            gc.DrawRoundedRectangle(x, y, w, h, r)
-
-            # text
-            gc.SetPen(wx.Pen(fg))
-            gc.SetBrush(wx.Brush(fg))
-            gc.SetFont(self.font, fg)
-            ty = y + pad
-            for ln in it["lines"]:
-                gc.DrawText(ln, x + pad, ty)
-                ty += it["lh"]
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy — white window + lavender bubbles + streaming + TTS + images
+# Little Buddy — lavender/white look + streaming + TTS + image generation
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None, knowledge=None):
@@ -446,26 +299,21 @@ class DataBuddyDialog(wx.Dialog):
         self.kernel = None
         self._tts_thread = None
 
-        # White base with lavender accents to match app
+        # Lavender / white palette to match the main UI
         self.COLORS = {
-            "bg":        wx.Colour(255, 255, 255),
-            "panel":     wx.Colour(255, 255, 255),
-            "text":      wx.Colour(44, 31, 72),
-            "muted":     wx.Colour(94, 64, 150),
-            "accent":    wx.Colour(132, 86, 255),
-            "accent_hi": wx.Colour(150, 104, 255),
-            "input_bg":  wx.Colour(255, 255, 255),
-            "input_fg":  wx.Colour(44, 31, 72),
-
-            # chat area canvas + border
-            "reply_bg": wx.Colour(255, 255, 255),
-            "border":   wx.Colour(208, 198, 246),
-
-            # bubbles
-            "bubble_user_bg": wx.Colour(235, 228, 255),
+            "bg": wx.Colour(255, 255, 255),
+            "panel": wx.Colour(247, 243, 255),
+            "text": wx.Colour(44, 31, 72),
+            "muted": wx.Colour(90, 70, 120),
+            "accent": wx.Colour(115, 102, 192),
+            "input_bg": wx.Colour(255, 255, 255),
+            "input_fg": wx.Colour(44, 31, 72),
+            "bubble_user_bg": wx.Colour(228, 219, 255),
             "bubble_user_fg": wx.Colour(44, 31, 72),
-            "bubble_bot_bg":  wx.Colour(216, 204, 255),
-            "bubble_bot_fg":  wx.Colour(44, 31, 72),
+            "bubble_bot_bg": wx.Colour(132, 86, 255),
+            "bubble_bot_fg": wx.Colour(255, 255, 255),
+            "reply_bg": wx.Colour(247, 243, 255),
+            "reply_fg": wx.Colour(44, 31, 72),
         }
 
         self.SetBackgroundColour(self.COLORS["bg"])
@@ -474,7 +322,7 @@ class DataBuddyDialog(wx.Dialog):
         vbox = wx.BoxSizer(wx.VERTICAL)
 
         title = wx.StaticText(pnl, label="Little Buddy")
-        title.SetForegroundColour(self.COLORS["muted"])
+        title.SetForegroundColour(self.COLORS["text"])
         title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
@@ -485,24 +333,22 @@ class DataBuddyDialog(wx.Dialog):
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
         self.voice.SetForegroundColour(self.COLORS["input_fg"])
-        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         opts.Add(self.voice, 0, wx.RIGHT | wx.EXPAND, 6)
 
         self.tts_checkbox = wx.CheckBox(pnl, label="🔊 Speak Reply")
         self.tts_checkbox.SetValue(True)
         self.tts_checkbox.SetForegroundColour(self.COLORS["text"])
-        self.tts_checkbox.SetBackgroundColour(self.COLORS["panel"])
         opts.Add(self.tts_checkbox, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
 
         self.fast_mode = wx.CheckBox(pnl, label="⚡ Fast Mode")
         self.fast_mode.SetValue(True)
         self.fast_mode.SetForegroundColour(self.COLORS["text"])
-        self.fast_mode.SetBackgroundColour(self.COLORS["panel"])
         opts.Add(self.fast_mode, 0, wx.ALIGN_CENTER_VERTICAL)
 
         self.tts_status = wx.StaticText(pnl, label="TTS: idle")
         self.tts_status.SetForegroundColour(self.COLORS["muted"])
-        self.tts_status.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.tts_status.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         opts.Add(self.tts_status, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 12)
 
         vbox.Add(opts, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
@@ -515,64 +361,61 @@ class DataBuddyDialog(wx.Dialog):
         self.persona.SetSelection(0)
         self.persona.SetBackgroundColour(self.COLORS["input_bg"])
         self.persona.SetForegroundColour(self.COLORS["input_fg"])
-        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         vbox.Add(self.persona, 0, wx.EXPAND | wx.ALL, 5)
 
         row = wx.BoxSizer(wx.HORIZONTAL)
         ask_lbl = wx.StaticText(pnl, label="Ask:")
         ask_lbl.SetForegroundColour(self.COLORS["muted"])
-        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         row.Add(ask_lbl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
         self.prompt = wx.TextCtrl(pnl, style=wx.TE_PROCESS_ENTER)
         self.prompt.SetBackgroundColour(self.COLORS["input_bg"])
         self.prompt.SetForegroundColour(self.COLORS["input_fg"])
-        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         self.prompt.SetHint("Type your question and press Enter…")
         self.prompt.Bind(wx.EVT_TEXT_ENTER, self.on_ask)
         row.Add(self.prompt, 1, wx.EXPAND | wx.RIGHT, 6)
 
-        def _style_btn(b: wx.Button):
-            b.SetForegroundColour(wx.WHITE)
-            b.SetBackgroundColour(self.COLORS["accent"])
-            b.Bind(wx.EVT_ENTER_WINDOW, lambda e, bb=b: (bb.SetBackgroundColour(self.COLORS["accent_hi"]), bb.Refresh()))
-            b.Bind(wx.EVT_LEAVE_WINDOW, lambda e, bb=b: (bb.SetBackgroundColour(self.COLORS["accent"]), bb.Refresh()))
-
         send_btn = wx.Button(pnl, label="Send")
-        _style_btn(send_btn)
+        send_btn.SetBackgroundColour(self.COLORS["accent"])
+        send_btn.SetForegroundColour(wx.WHITE)
         send_btn.Bind(wx.EVT_BUTTON, self.on_ask)
         row.Add(send_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
         self.mic_btn = wx.Button(pnl, label="🎙 Speak")
+        self.mic_btn.SetBackgroundColour(wx.Colour(60, 120, 90))
         self.mic_btn.SetForegroundColour(wx.WHITE)
-        self.mic_btn.SetBackgroundColour(wx.Colour(96, 148, 118))
         self.mic_btn.Bind(wx.EVT_BUTTON, self.on_mic_toggle)
         row.Add(self.mic_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
         self.stop_btn = wx.Button(pnl, label="Stop")
-        self.stop_btn.SetForegroundColour(wx.WHITE)
         self.stop_btn.SetBackgroundColour(wx.Colour(150, 60, 60))
+        self.stop_btn.SetForegroundColour(wx.WHITE)
         self.stop_btn.Bind(wx.EVT_BUTTON, self.on_stop_voice)
         row.Add(self.stop_btn, 0, wx.ALIGN_CENTER_VERTICAL, 0)
 
         self.img_btn = wx.Button(pnl, label="🎨 Generate Image")
-        self.img_btn.SetForegroundColour(wx.WHITE)
         self.img_btn.SetBackgroundColour(wx.Colour(90, 110, 160))
+        self.img_btn.SetForegroundColour(wx.WHITE)
         self.img_btn.Bind(wx.EVT_BUTTON, self.on_generate_image)
         row.Add(self.img_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)
 
         vbox.Add(row, 0, wx.EXPAND | wx.ALL, 5)
 
-        # Chat area — bubbles
-        self.chat = ChatView(pnl, self.COLORS)
-        vbox.Add(self.chat, 1, wx.EXPAND | wx.ALL, 6)
+        # Chat area with bubbles
+        self.reply = rt.RichTextCtrl(pnl, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.BORDER_SIMPLE)
+        self.reply.SetBackgroundColour(self.COLORS["reply_bg"])
+        self.reply.SetForegroundColour(self.COLORS["reply_fg"])
+        self._reset_reply_style()
+        vbox.Add(self.reply, 1, wx.EXPAND | wx.ALL, 6)
 
-        pnl.SetBackgroundColour(self.COLORS["panel"])
         pnl.SetSizer(vbox)
 
         # Greet
-        self.chat.add_message("user", "Hi!")
-        self.chat.add_message("bot", "Hi, I'm Little Buddy!")
+        self._append_user_bubble("Hi!", fake=True)
+        self._append_bot_bubble("Hi, I'm Little Buddy!")
 
     # external setters
     def set_kernel(self, kernel):
@@ -590,13 +433,58 @@ class DataBuddyDialog(wx.Dialog):
         except Exception:
             self.knowledge = []
 
+    # Bubble helpers (chat look)
+    def _reset_reply_style(self):
+        attr = rt.RichTextAttr()
+        attr.SetTextColour(self.COLORS["reply_fg"])
+        attr.SetFontSize(11)
+        attr.SetFontFaceName("Segoe UI")
+        self.reply.SetDefaultStyle(attr)
+        self.reply.SetBasicStyle(attr)
+
+    def _start_bubble(self, sender: str):
+        if self.reply.GetLastPosition() > 0:
+            self.reply.Newline()
+
+        attr = rt.RichTextAttr()
+        if sender == "user":
+            attr.SetBackgroundColour(self.COLORS["bubble_user_bg"])
+            attr.SetTextColour(self.COLORS["bubble_user_fg"])
+        else:
+            attr.SetBackgroundColour(self.COLORS["bubble_bot_bg"])
+            attr.SetTextColour(self.COLORS["bubble_bot_fg"])
+
+        attr.SetLeftIndent(20, 40)
+        attr.SetRightIndent(20)
+        attr.SetParagraphSpacingAfter(6)
+        attr.SetFontSize(11)
+        attr.SetFontFaceName("Segoe UI")
+
+        self.reply.BeginStyle(attr)
+
+    def _end_bubble(self):
+        self.reply.EndStyle()
+
+    def _append_user_bubble(self, text: str, fake: bool = False):
+        self._start_bubble("user")
+        self.reply.WriteText(text)
+        self._end_bubble()
+        if not fake:
+            self.reply.Newline()
+
+    def _append_bot_bubble(self, text: str):
+        self._start_bubble("bot")
+        self.reply.WriteText(text)
+        self._end_bubble()
+        self.reply.Newline()
+
     # ---------- chat entrypoint
     def on_ask(self, _):
         q = self.prompt.GetValue().strip()
         self.prompt.SetValue("")
         if not q:
             return
-        self.chat.add_message("user", q)
+        self._append_user_bubble(q)
         threading.Thread(target=self._answer_dispatch, args=(q,), daemon=True).start()
 
     def _build_knowledge_context(self, max_chars=1600):
@@ -649,7 +537,7 @@ class DataBuddyDialog(wx.Dialog):
 
         ok = self._chat_openai_streaming(prompt)
         if not ok and provider == "auto" and defaults.get("gemini_api_key"):
-            self.chat.add_message("bot", "(Falling back to Gemini…)")
+            self._append_bot_bubble("(Falling back to Gemini…)")
             self._chat_gemini_streaming(prompt)
 
     # ---------- OpenAI streaming
@@ -658,17 +546,11 @@ class DataBuddyDialog(wx.Dialog):
         model_fast = defaults.get("fast_model", "gpt-4o-mini")
         model = model_fast if self.fast_mode.GetValue() else model_default
 
-        url = (defaults.get("url") or "").strip()
-        api_key = (defaults.get("api_key") or "").strip()
-        if not url or not api_key:
-            self.chat.add_message(
-                "bot",
-                "I don't see an API endpoint or API key in Settings. "
-                "Open Settings → Preferences and fill in the provider URL and API key to chat."
-            )
-            return False
-
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        url = defaults.get("url", "").strip()
+        headers = {
+            "Authorization": f"Bearer {defaults.get('api_key','')}",
+            "Content-Type": "application/json",
+        }
         org = (defaults.get("openai_org") or "").strip()
         if org:
             headers["OpenAI-Organization"] = org
@@ -681,12 +563,13 @@ class DataBuddyDialog(wx.Dialog):
             "stream": True,
         }
 
+        buf = []
         try:
             with self.session.post(url, headers=headers, json=payload, stream=True, timeout=(8, 90), verify=False) as r:
                 if r.status_code in (401, 403):
                     raise requests.HTTPError(f"{r.status_code} auth error", response=r)
                 r.raise_for_status()
-                wx.CallAfter(self.chat.start_bubble, "bot")
+                self._start_bubble("bot")
                 for raw in r.iter_lines(decode_unicode=True):
                     if not raw:
                         continue
@@ -698,20 +581,25 @@ class DataBuddyDialog(wx.Dialog):
                         obj = json.loads(raw)
                         delta = obj["choices"][0].get("delta", {}).get("content")
                         if delta:
-                            wx.CallAfter(self.chat.write_stream, delta)
+                            buf.append(delta)
+                            wx.CallAfter(self.reply.WriteText, delta)
                     except Exception:
                         continue
         except Exception as e:
-            wx.CallAfter(self.chat.end_bubble)
-            wx.CallAfter(self.chat.add_message, "bot", f"Error (OpenAI): {e}")
+            wx.CallAfter(self._end_bubble)
+            wx.CallAfter(self._append_bot_bubble, f"Error (OpenAI): {e}")
             return False
 
-        wx.CallAfter(self.chat.end_bubble)
+        wx.CallAfter(self._end_bubble)
+        answer = "".join(buf)
+        if self.tts_checkbox.GetValue() and answer.strip():
+            wx.CallAfter(lambda: self.speak(answer))
         return True
 
     # ---------- Gemini streaming
     def _gemini_model(self) -> str:
-        return defaults.get("fast_model" if self.fast_mode.GetValue() else "default_model", "gemini-1.5-flash")
+        return defaults.get("fast_model" if self.fast_mode.GetValue() else "default_model",
+                            "gemini-1.5-flash")
 
     def _gemini_base(self) -> str:
         return (defaults.get("gemini_text_url") or "https://generativelanguage.googleapis.com/v1beta/models").rstrip("/")
@@ -719,7 +607,7 @@ class DataBuddyDialog(wx.Dialog):
     def _chat_gemini_streaming(self, prompt: str):
         key = (defaults.get("gemini_api_key") or "").strip()
         if not key:
-            self.chat.add_message("bot", "Gemini API key is not set in Settings.")
+            self._append_bot_bubble("Error: Gemini API key is not set in Settings.")
             return
 
         model = self._gemini_model()
@@ -727,13 +615,14 @@ class DataBuddyDialog(wx.Dialog):
         url = f"{base}/{model}:streamGenerateContent?alt=SSE&key={key}"
         body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
 
+        buf = []
         try:
             with self.session.post(url, headers={"Content-Type": "application/json"},
                                    json=body, stream=True, timeout=(8, 90)) as r:
                 if r.status_code in (404, 400):
                     raise requests.HTTPError("SSE not available", response=r)
                 r.raise_for_status()
-                wx.CallAfter(self.chat.start_bubble, "bot")
+                self._start_bubble("bot")
                 for line in r.iter_lines(decode_unicode=True):
                     if not line:
                         continue
@@ -744,26 +633,46 @@ class DataBuddyDialog(wx.Dialog):
                         break
                     try:
                         obj = json.loads(data)
-                        # extract text parts
-                        text = None
-                        cands = obj.get("candidates") or []
-                        if cands:
-                            parts = cands[0].get("content", {}).get("parts", [])
-                            out = []
-                            for p in parts:
-                                if "text" in p:
-                                    out.append(p["text"])
-                            text = "".join(out) if out else None
+                        text = self._extract_gemini_text(obj)
                         if text:
-                            wx.CallAfter(self.chat.write_stream, text)
+                            buf.append(text)
+                            wx.CallAfter(self.reply.WriteText, text)
                     except Exception:
                         continue
-        except Exception as e:
-            wx.CallAfter(self.chat.end_bubble)
-            wx.CallAfter(self.chat.add_message, "bot", f"Error (Gemini): {e}")
-            return
+        except Exception:
+            try:
+                url2 = f"{base}/{model}:generateContent?key={key}"
+                r2 = self.session.post(url2, headers={"Content-Type": "application/json"},
+                                       json=body, timeout=90)
+                r2.raise_for_status()
+                obj = r2.json()
+                text = self._extract_gemini_text(obj) or ""
+                wx.CallAfter(self._append_bot_bubble, text)
+                buf = [text]
+            except Exception as e2:
+                wx.CallAfter(self._append_bot_bubble, f"Error (Gemini): {e2}")
+                return
 
-        wx.CallAfter(self.chat.end_bubble)
+        wx.CallAfter(self._end_bubble)
+        answer = "".join(buf)
+        if self.tts_checkbox.GetValue() and answer.strip():
+            wx.CallAfter(lambda: self.speak(answer))
+
+    @staticmethod
+    def _extract_gemini_text(obj) -> str | None:
+        try:
+            cands = obj.get("candidates") or []
+            if not cands:
+                return None
+            content = cands[0].get("content") or {}
+            parts = content.get("parts") or []
+            out = []
+            for p in parts:
+                if "text" in p:
+                    out.append(p["text"])
+            return "".join(out) if out else None
+        except Exception:
+            return None
 
     # ---------- Image generation with fallbacks (OpenAI → Gemini → offline)
     def on_generate_image(self, _):
@@ -840,24 +749,24 @@ class DataBuddyDialog(wx.Dialog):
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
         tmp.close()
         if Image and ImageDraw:
-            img = Image.new("RGB", (1024, 1024), (32, 36, 44))
+            img = Image.new("RGB", (1024, 1024), (247, 243, 255))
             draw = ImageDraw.Draw(img)
             try:
                 font = ImageFont.truetype("arial.ttf", 28)
             except Exception:
                 font = ImageFont.load_default()
             draw.multiline_text((40, 40), f"[Offline Placeholder]\n{prompt}",
-                                fill=(220, 230, 255), font=font, spacing=6)
+                                fill=(44, 31, 72), font=font, spacing=6)
             img.save(tmp.name, "PNG")
         else:
             bmp = wx.Bitmap(1024, 1024)
             dc = wx.MemoryDC(bmp)
-            dc.SetBackground(wx.Brush(wx.Colour(32, 36, 44)))
+            dc.SetBackground(wx.Brush(wx.Colour(247, 243, 255)))
             dc.Clear()
-            dc.SetTextForeground(wx.Colour(220, 230, 255))
-            dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
+            dc.SetTextForeground(wx.Colour(44, 31, 72))
+            dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
             dc.DrawText("[Offline Placeholder]", 40, 40)
-            dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+            dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
             dc.DrawText(prompt, 40, 80)
             dc.SelectObject(wx.NullBitmap)
             bmp.SaveFile(tmp.name, wx.BITMAP_TYPE_PNG)
@@ -867,7 +776,7 @@ class DataBuddyDialog(wx.Dialog):
         dlg = wx.Dialog(self, title="Generated Image", size=(720, 740),
                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         pnl = wx.Panel(dlg)
-        pnl.SetBackgroundColour(wx.Colour(30, 30, 30))
+        pnl.SetBackgroundColour(wx.Colour(247, 243, 255))
         v = wx.BoxSizer(wx.VERTICAL)
         img = wx.Image(path, wx.BITMAP_TYPE_ANY)
         w = min(680, img.GetWidth())
@@ -892,7 +801,7 @@ class DataBuddyDialog(wx.Dialog):
         pnl.SetSizer(v)
         dlg.ShowModal()
 
-    # --- Voice
+    # ---------- Voice (three fallbacks)
     def speak(self, text: str):
         if not text:
             return
@@ -919,7 +828,7 @@ class DataBuddyDialog(wx.Dialog):
                 if pyttsx3:
                     eng = pyttsx3.init()
                     eng.say(text)
-                    eng.runWait()
+                    eng.runAndWait()
                     return
             except Exception:
                 pass
