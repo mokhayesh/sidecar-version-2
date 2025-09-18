@@ -26,7 +26,7 @@ from app.analysis import (
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Theme
+# Theme (lavender)
 # ──────────────────────────────────────────────────────────────────────────────
 PURPLE        = wx.Colour(67, 38, 120)
 PAGE_BG       = wx.Colour(245, 241, 251)
@@ -434,7 +434,7 @@ class MainWindow(wx.Frame):
 
         def fmt(v, suffix=""):
             if v is None: return "—"
-            if isinstance(v, (int,)) or (isinstance(v, float) and v.is_integer()):
+            if isinstance(v, int) or (isinstance(v, float) and v.is_integer()):
                 return f"{int(v)}{suffix}"
             return f"{v:.1f}{suffix}"
 
@@ -482,7 +482,7 @@ class MainWindow(wx.Frame):
                     compiled[k] = re.compile(".*")
         return compiled
 
-    # New: detailed per-column quality table (classic layout)
+    # Detailed per-column quality table (classic layout)
     def _quality_table(self, df: pd.DataFrame) -> pd.DataFrame:
         rules = self._compile_rules()
         total_rows = len(df)
@@ -527,7 +527,7 @@ class MainWindow(wx.Frame):
                 "Analysis Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
 
-        # update KPI metrics with column-averages
+        # update KPIs with column averages
         self.metrics["completeness"] = sum(agg_comp) / len(agg_comp) if agg_comp else None
         self.metrics["uniqueness"]   = sum(agg_uniq) / len(agg_uniq) if agg_uniq else None
         self.metrics["validity"]     = (sum(agg_val) / len(agg_val)) if agg_val else None
@@ -717,27 +717,45 @@ class MainWindow(wx.Frame):
             wx.MessageBox(f"Export failed:\n{e}", "Export", wx.OK | wx.ICON_ERROR)
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Analysis -> show results IN THE MAIN GRID
+    # Analysis -> normalize any shape into a DataFrame and show in main grid
     # ──────────────────────────────────────────────────────────────────────────
-    def _df_from_result(self, result, default_text="Done."):
-        """Normalize any result into a DataFrame suitable for grid display."""
+    def _result_to_df(self, result):
+        """Robustly coerce analyzer outputs into a DataFrame."""
         try:
             if isinstance(result, pd.DataFrame):
                 return result
+
+            # Older analyzers sometimes return (headers, rows)
+            if isinstance(result, tuple) and len(result) == 2:
+                hdr, rows = result
+                try:
+                    return pd.DataFrame(rows, columns=list(hdr))
+                except Exception:
+                    pass  # fallthrough if malformed
+
+            if isinstance(result, list):
+                if len(result) and isinstance(result[0], dict):
+                    return pd.DataFrame(result)
+                if len(result) and isinstance(result[0], (list, tuple)):
+                    maxlen = max(len(r) for r in result)
+                    cols = [f"col{i+1}" for i in range(maxlen)]
+                    data = [list(r) + [""]*(maxlen-len(r)) for r in result]
+                    return pd.DataFrame(data, columns=cols)
+                return pd.DataFrame({"result": [str(x) for x in result]})
+
             if isinstance(result, dict):
                 return pd.DataFrame([result])
-            if isinstance(result, list):
-                if result and isinstance(result[0], dict):
-                    return pd.DataFrame(result)
-                return pd.DataFrame({"result": [str(x) for x in result]})
+
             if isinstance(result, str):
-                lines = [ln for ln in result.splitlines() if ln.strip() != ""]
+                lines = [ln for ln in result.splitlines() if ln.strip()]
                 return pd.DataFrame({"result": lines or [result]})
         except Exception:
             pass
-        return pd.DataFrame({"message": [default_text]})
+        return None  # signal to use a fallback
 
-    def _display_df(self, df: pd.DataFrame):
+    def _display_df(self, df: pd.DataFrame, default_text="Done."):
+        if df is None or df.empty:
+            df = pd.DataFrame({"message": [default_text]})
         headers = list(df.columns)
         rows = df.astype(object).where(pd.notna(df), None).values.tolist()
         self.headers = headers
@@ -752,46 +770,68 @@ class MainWindow(wx.Frame):
 
         try:
             if which == "Profile":
+                # KPIs first
                 null_pct, uniq_pct = self._compute_profile_metrics(df)
                 self.metrics["null_pct"] = null_pct
                 self.metrics["uniqueness"] = uniq_pct
                 self._refresh_kpis()
 
                 res = profile_analysis(df)
-                if res is None:
-                    res = pd.DataFrame(
-                        [
-                            {"metric": "Rows",        "value": len(df)},
-                            {"metric": "Columns",     "value": len(df.columns)},
-                            {"metric": "Null %",      "value": round(null_pct, 2)},
-                            {"metric": "Uniqueness",  "value": round(uniq_pct, 2)},
-                        ]
-                    )
-                self._display_df(self._df_from_result(res, "Profile complete."))
+                self._display_df(self._result_to_df(res) or
+                                 pd.DataFrame(
+                                     [
+                                         {"metric": "Rows",        "value": len(df)},
+                                         {"metric": "Columns",     "value": len(df.columns)},
+                                         {"metric": "Null %",      "value": round(null_pct, 2)},
+                                         {"metric": "Uniqueness",  "value": round(uniq_pct, 2)},
+                                     ]
+                                 ),
+                                 "Profile complete.")
 
             elif which == "Quality":
-                # detailed per-column quality table (classic layout)
-                table = quality_analysis(df, self._compile_rules())
-                if table is None:
-                    table = self._quality_table(df)
+                # Prefer analyzer; if it doesn't return a DataFrame, build our classic table
+                ext = quality_analysis(df, self._compile_rules())
+                table = self._result_to_df(ext)
+                if table is None or table.empty:
+                    table = self._quality_table(df)  # also updates KPIs
                 else:
-                    # Ensure KPIs still get updated if an external analyzer returned a df
-                    if isinstance(table, pd.DataFrame) and len(table):
-                        try:
-                            self.metrics["completeness"] = float(table["Completeness (%)"]).mean()
-                            self.metrics["uniqueness"]   = float(table["Uniqueness (%)"]).mean()
-                            if "Validity (%)" in table:
-                                vals = pd.to_numeric(table["Validity (%)"], errors="coerce").dropna()
-                                self.metrics["validity"] = float(vals.mean()) if len(vals) else None
-                            self.metrics["dq_score"]     = float(table.get("Quality Score (%)", pd.Series(dtype=float))).mean()
-                            self._refresh_kpis()
-                        except Exception:
-                            pass
-                self._display_df(self._df_from_result(table, "Quality complete."))
+                    # keep KPIs in sync even when external table is used
+                    try:
+                        if "Completeness (%)" in table:
+                            self.metrics["completeness"] = pd.to_numeric(
+                                table["Completeness (%)"], errors="coerce"
+                            ).dropna().mean()
+                        if "Uniqueness (%)" in table:
+                            self.metrics["uniqueness"] = pd.to_numeric(
+                                table["Uniqueness (%)"], errors="coerce"
+                            ).dropna().mean()
+                        if "Validity (%)" in table:
+                            vals = pd.to_numeric(table["Validity (%)"], errors="coerce").dropna()
+                            self.metrics["validity"] = float(vals.mean()) if len(vals) else None
+                        if "Quality Score (%)" in table:
+                            self.metrics["dq_score"] = pd.to_numeric(
+                                table["Quality Score (%)"], errors="coerce"
+                            ).dropna().mean()
+                        # If the table lacked the above, compute quick aggregates
+                        if self.metrics["dq_score"] is None:
+                            c, v, q = self._compute_quality_metrics(df)
+                            self.metrics["completeness"] = c
+                            self.metrics["validity"] = v
+                            self.metrics["dq_score"] = q
+                        self._refresh_kpis()
+                    except Exception:
+                        # Fallback to computing KPIs from data
+                        c, v, q = self._compute_quality_metrics(df)
+                        self.metrics["completeness"] = c
+                        self.metrics["validity"] = v
+                        self.metrics["dq_score"] = q
+                        self._refresh_kpis()
+                self._display_df(table, "Quality complete.")
 
             elif which == "Catalog":
                 res = catalog_analysis(df)
-                if res is None:
+                table = self._result_to_df(res)
+                if table is None or table.empty:
                     # simple data dictionary fallback
                     rows = []
                     for c in df.columns:
@@ -804,14 +844,15 @@ class MainWindow(wx.Frame):
                             "min": s.min() if pd.api.types.is_numeric_dtype(s) else "",
                             "max": s.max() if pd.api.types.is_numeric_dtype(s) else "",
                         })
-                    res = pd.DataFrame(rows)
-                self._display_df(self._df_from_result(res, "Catalog complete."))
+                    table = pd.DataFrame(rows)
+                self._display_df(table, "Catalog complete.")
 
             elif which == "Compliance":
                 res = compliance_analysis(df)
-                if res is None:
-                    res = pd.DataFrame([{"status": "ok", "description": "Compliance check completed."}])
-                self._display_df(self._df_from_result(res, "Compliance complete."))
+                table = self._result_to_df(res) or pd.DataFrame(
+                    [{"status": "ok", "description": "Compliance check completed."}]
+                )
+                self._display_df(table, "Compliance complete.")
 
             elif which == "Detect Anomalies":
                 flagged, count = self._detect_anomalies(df)
