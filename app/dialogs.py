@@ -273,7 +273,7 @@ class SyntheticDataDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy — modern look + streaming + TTS + image generation
+# Little Buddy — lavender theme + streaming + TTS + image generation
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None, knowledge=None):
@@ -289,24 +289,32 @@ class DataBuddyDialog(wx.Dialog):
             self.knowledge.append(kpath)
 
         self.kernel = None
-
         self._tts_thread = None
 
+        # ----- Lavender palette (matches main app) ---------------------------
         self.COLORS = {
-            "bg": wx.Colour(35, 35, 35),
-            "panel": wx.Colour(38, 38, 38),
-            "text": wx.Colour(230, 230, 230),
-            "muted": wx.Colour(190, 190, 190),
-            "accent": wx.Colour(70, 130, 180),
-            "input_bg": wx.Colour(50, 50, 50),
-            "input_fg": wx.Colour(240, 240, 240),
-            "bubble_user_bg": wx.Colour(44, 62, 80),
-            "bubble_user_fg": wx.Colour(240, 240, 240),
-            "bubble_bot_bg": wx.Colour(56, 42, 120),
-            "bubble_bot_fg": wx.Colour(255, 255, 255),
-            "reply_bg": wx.Colour(28, 28, 28),
-            "reply_fg": wx.Colour(255, 255, 255),
+            "header_bg": wx.Colour(53, 29, 102),      # deep lavender strip (optional)
+            "bg":        wx.Colour(248, 245, 255),     # dialog background
+            "panel":     wx.Colour(248, 245, 255),
+            "text":      wx.Colour(44, 31, 72),
+            "muted":     wx.Colour(94, 64, 150),
+            "accent":    wx.Colour(132, 86, 255),
+            "accent_hi": wx.Colour(150, 104, 255),
+            "input_bg":  wx.Colour(255, 255, 255),
+            "input_fg":  wx.Colour(44, 31, 72),
+
+            # Chat bubbles
+            "bubble_user_bg": wx.Colour(235, 228, 255),
+            "bubble_user_fg": wx.Colour(44, 31, 72),
+            "bubble_bot_bg":  wx.Colour(216, 204, 255),
+            "bubble_bot_fg":  wx.Colour(44, 31, 72),
+
+            # Transcript area
+            "reply_bg": wx.Colour(255, 255, 255),
+            "reply_fg": wx.Colour(44, 31, 72),
+            "border":   wx.Colour(200, 190, 245),
         }
+        # --------------------------------------------------------------------
 
         self.SetBackgroundColour(self.COLORS["bg"])
         pnl = wx.Panel(self)
@@ -314,7 +322,7 @@ class DataBuddyDialog(wx.Dialog):
         vbox = wx.BoxSizer(wx.VERTICAL)
 
         title = wx.StaticText(pnl, label="Little Buddy")
-        title.SetForegroundColour(self.COLORS["text"])
+        title.SetForegroundColour(self.COLORS["muted"])
         title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
@@ -331,11 +339,13 @@ class DataBuddyDialog(wx.Dialog):
         self.tts_checkbox = wx.CheckBox(pnl, label="🔊 Speak Reply")
         self.tts_checkbox.SetValue(True)
         self.tts_checkbox.SetForegroundColour(self.COLORS["text"])
+        self.tts_checkbox.SetBackgroundColour(self.COLORS["panel"])
         opts.Add(self.tts_checkbox, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
 
         self.fast_mode = wx.CheckBox(pnl, label="⚡ Fast Mode")
         self.fast_mode.SetValue(True)
         self.fast_mode.SetForegroundColour(self.COLORS["text"])
+        self.fast_mode.SetBackgroundColour(self.COLORS["panel"])
         opts.Add(self.fast_mode, 0, wx.ALIGN_CENTER_VERTICAL)
 
         self.tts_status = wx.StaticText(pnl, label="TTS: idle")
@@ -370,27 +380,35 @@ class DataBuddyDialog(wx.Dialog):
         self.prompt.Bind(wx.EVT_TEXT_ENTER, self.on_ask)
         row.Add(self.prompt, 1, wx.EXPAND | wx.RIGHT, 6)
 
+        def _style_btn(b: wx.Button):
+            b.SetForegroundColour(wx.WHITE)
+            try:
+                b.SetBackgroundColour(self.COLORS["accent"])
+            except Exception:
+                pass
+            b.Bind(wx.EVT_ENTER_WINDOW, lambda e, bb=b: (bb.SetBackgroundColour(self.COLORS["accent_hi"]), bb.Refresh()))
+            b.Bind(wx.EVT_LEAVE_WINDOW, lambda e, bb=b: (bb.SetBackgroundColour(self.COLORS["accent"]), bb.Refresh()))
+
         send_btn = wx.Button(pnl, label="Send")
-        send_btn.SetBackgroundColour(self.COLORS["accent"])
-        send_btn.SetForegroundColour(wx.WHITE)
+        _style_btn(send_btn)
         send_btn.Bind(wx.EVT_BUTTON, self.on_ask)
         row.Add(send_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
         self.mic_btn = wx.Button(pnl, label="🎙 Speak")
-        self.mic_btn.SetBackgroundColour(wx.Colour(60, 120, 90))
         self.mic_btn.SetForegroundColour(wx.WHITE)
+        self.mic_btn.SetBackgroundColour(wx.Colour(96, 148, 118))
         self.mic_btn.Bind(wx.EVT_BUTTON, self.on_mic_toggle)
         row.Add(self.mic_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
         self.stop_btn = wx.Button(pnl, label="Stop")
-        self.stop_btn.SetBackgroundColour(wx.Colour(150, 60, 60))
         self.stop_btn.SetForegroundColour(wx.WHITE)
+        self.stop_btn.SetBackgroundColour(wx.Colour(150, 60, 60))
         self.stop_btn.Bind(wx.EVT_BUTTON, self.on_stop_voice)
         row.Add(self.stop_btn, 0, wx.ALIGN_CENTER_VERTICAL, 0)
 
         self.img_btn = wx.Button(pnl, label="🎨 Generate Image")
-        self.img_btn.SetBackgroundColour(wx.Colour(90, 110, 160))
         self.img_btn.SetForegroundColour(wx.WHITE)
+        self.img_btn.SetBackgroundColour(wx.Colour(90, 110, 160))
         self.img_btn.Bind(wx.EVT_BUTTON, self.on_generate_image)
         row.Add(self.img_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)
 
@@ -401,13 +419,19 @@ class DataBuddyDialog(wx.Dialog):
         self.reply.SetBackgroundColour(self.COLORS["reply_bg"])
         self.reply.SetForegroundColour(self.COLORS["reply_fg"])
         self._reset_reply_style()
+        # draw a subtle lavender border
+        self.reply.Bind(wx.EVT_PAINT, self._paint_reply_border)
         vbox.Add(self.reply, 1, wx.EXPAND | wx.ALL, 6)
 
+        pnl.SetBackgroundColour(self.COLORS["panel"])
         pnl.SetSizer(vbox)
 
         # Greet
         self._append_user_bubble("Hi!", fake=True)
         self._append_bot_bubble("Hi, I'm Little Buddy!")
+
+        # Apply a recursive tint so everything matches the lavender theme
+        self._apply_lavender_theme()
 
     # external setters
     def set_kernel(self, kernel):
@@ -863,5 +887,55 @@ class DataBuddyDialog(wx.Dialog):
         try:
             if pygame and pygame.mixer.get_init():
                 pygame.mixer.music.stop()
+        except Exception:
+            pass
+
+    # ---------- Lavender theming helpers -----------------------------------
+    def _apply_lavender_theme(self):
+        """Recursively tint all child controls to match the main app's lavender style."""
+        COL = self.COLORS
+
+        def tint(ctrl):
+            try:
+                if isinstance(ctrl, (wx.Panel, wx.ScrolledWindow)):
+                    ctrl.SetBackgroundColour(COL["panel"])
+                if isinstance(ctrl, wx.StaticText):
+                    ctrl.SetForegroundColour(COL["text"])
+                if isinstance(ctrl, wx.TextCtrl):
+                    ctrl.SetBackgroundColour(COL["input_bg"])
+                    ctrl.SetForegroundColour(COL["input_fg"])
+                if isinstance(ctrl, (wx.Choice, wx.ComboBox)):
+                    ctrl.SetBackgroundColour(COL["input_bg"])
+                    ctrl.SetForegroundColour(COL["input_fg"])
+                if isinstance(ctrl, (wx.CheckBox, wx.RadioButton)):
+                    ctrl.SetForegroundColour(COL["text"])
+                    ctrl.SetBackgroundColour(COL["panel"])
+                if isinstance(ctrl, wx.Button):
+                    ctrl.SetForegroundColour(wx.WHITE)
+                    try:
+                        ctrl.SetBackgroundColour(COL["accent"])
+                    except Exception:
+                        pass
+                if isinstance(ctrl, wx.ListCtrl):
+                    ctrl.SetBackgroundColour(wx.Colour(255, 255, 255))
+                    ctrl.SetForegroundColour(COL["text"])
+            except Exception:
+                pass
+            for ch in ctrl.GetChildren():
+                tint(ch)
+
+        # dialog and its children
+        self.SetBackgroundColour(COL["bg"])
+        tint(self)
+
+    def _paint_reply_border(self, evt):
+        """Subtle lavender border around the transcript area."""
+        evt.Skip()
+        try:
+            dc = wx.PaintDC(self.reply)
+            w, h = self.reply.GetClientSize()
+            dc.SetPen(wx.Pen(self.COLORS["border"]))
+            dc.SetBrush(wx.TRANSPARENT_BRUSH)
+            dc.DrawRectangle(0, 0, w - 1, h - 1)
         except Exception:
             pass
