@@ -1,5 +1,5 @@
 # app/main_window.py
-# Lavender UI + full functionality (MDM, Tasks, Knowledge Files, per-process grid output)
+# Lavender UI + full functionality (MDM, Synthetic Data, Tasks, Knowledge Files)
 
 import os
 import re
@@ -113,21 +113,8 @@ class KernelManager:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Header & custom controls
+# Custom controls (buttons, badges, pill)
 # ──────────────────────────────────────────────────────────────────────────────
-
-class HeaderBanner(wx.Panel):
-    def __init__(self, parent, height=60, bg=wx.Colour(53, 29, 102)):  # lavender deep
-        super().__init__(parent, size=(-1, height), style=wx.BORDER_NONE)
-        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
-        self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
-        self._bg = bg
-        self.Bind(wx.EVT_PAINT, self.on_paint)
-
-    def on_paint(self, _evt):
-        dc = wx.AutoBufferedPaintDC(self)
-        dc.SetBackground(wx.Brush(self._bg))
-        dc.Clear()
 
 class RoundedShadowButton(wx.Control):
     def __init__(self, parent, label, handler, colour=wx.Colour(115, 102, 192), radius=12):
@@ -280,94 +267,6 @@ class KPIBadge(wx.Panel):
         dc.SetFont(wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         dc.DrawText(str(self._value), 12, 34)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# MDM dialog
-# ──────────────────────────────────────────────────────────────────────────────
-
-class MDMDialog(wx.Dialog):
-    def __init__(self, parent):
-        super().__init__(parent, title="Master Data Management (MDM)", size=(560, 420))
-        panel = wx.Panel(self)
-        v = wx.BoxSizer(wx.VERTICAL)
-
-        self.chk_include_current = wx.CheckBox(panel, label="Include current dataset as a source")
-        self.chk_include_current.SetValue(True)
-        v.Add(self.chk_include_current, 0, wx.ALL, 8)
-
-        v.Add(wx.StaticText(panel, label="Sources to merge (local files or URIs):"), 0, wx.LEFT | wx.TOP, 8)
-        self.lst = wx.ListBox(panel, style=wx.LB_EXTENDED)
-        v.Add(self.lst, 1, wx.EXPAND | wx.ALL, 8)
-
-        btns = wx.BoxSizer(wx.HORIZONTAL)
-        btn_add = wx.Button(panel, label="Add Local…")
-        btn_uri = wx.Button(panel, label="Add URI/S3…")
-        btn_rm  = wx.Button(panel, label="Remove Selected")
-        btns.Add(btn_add, 0, wx.RIGHT, 6)
-        btns.Add(btn_uri, 0, wx.RIGHT, 6)
-        btns.Add(btn_rm, 0)
-        v.Add(btns, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
-        grid = wx.FlexGridSizer(2,2,6,6); grid.AddGrowableCol(1,1)
-        grid.Add(wx.StaticText(panel, label="Match threshold (percent):"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self.spn_thresh = wx.SpinCtrl(panel, min=50, max=100, initial=85)
-        grid.Add(self.spn_thresh, 0, wx.EXPAND)
-
-        grid.Add(wx.StaticText(panel, label="Fields to match on:"), 0, wx.ALIGN_CENTER_VERTICAL)
-        h = wx.BoxSizer(wx.HORIZONTAL)
-        self.chk_email = wx.CheckBox(panel, label="Email")
-        self.chk_phone = wx.CheckBox(panel, label="Phone")
-        self.chk_name  = wx.CheckBox(panel, label="Name")
-        self.chk_addr  = wx.CheckBox(panel, label="Address")
-        for c in (self.chk_email, self.chk_phone, self.chk_name, self.chk_addr):
-            c.SetValue(True); h.Add(c, 0, wx.RIGHT, 8)
-        grid.Add(h, 0, wx.EXPAND)
-        v.Add(grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
-        v.Add(wx.StaticLine(panel), 0, wx.EXPAND | wx.ALL, 6)
-        okc = wx.StdDialogButtonSizer(); ok = wx.Button(panel, wx.ID_OK); ca = wx.Button(panel, wx.ID_CANCEL)
-        okc.AddButton(ok); okc.AddButton(ca); okc.Realize()
-        v.Add(okc, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
-
-        panel.SetSizer(v)
-        self.sources = []
-        btn_add.Bind(wx.EVT_BUTTON, self._on_add_file)
-        btn_uri.Bind(wx.EVT_BUTTON, self._on_add_uri)
-        btn_rm.Bind(wx.EVT_BUTTON, self._on_rm)
-
-    def _on_add_file(self, _):
-        dlg = wx.FileDialog(self, "Select data file", wildcard="Data|*.csv;*.tsv;*.txt|All|*.*",
-                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE)
-        if dlg.ShowModal() != wx.ID_OK:
-            return
-        for p in dlg.GetPaths():
-            self.sources.append({"type": "file", "value": p})
-            self.lst.Append(f"[FILE] {p}")
-        dlg.Destroy()
-
-    def _on_add_uri(self, _):
-        with wx.TextEntryDialog(self, "Enter HTTP/HTTPS/S3 URI:", "Add URI/S3") as d:
-            if d.ShowModal() != wx.ID_OK:
-                return
-            uri = d.GetValue().strip()
-        if uri:
-            self.sources.append({"type": "uri", "value": uri})
-            self.lst.Append(f"[URI]  {uri}")
-
-    def _on_rm(self, _):
-        for i in reversed(self.lst.GetSelections()):
-            self.lst.Delete(i)
-            del self.sources[i]
-
-    def get_params(self):
-        return {
-            "include_current": self.chk_include_current.GetValue(),
-            "threshold": self.spn_thresh.GetValue() / 100.0,
-            "use_email": self.chk_email.GetValue(),
-            "use_phone": self.chk_phone.GetValue(),
-            "use_name": self.chk_name.GetValue(),
-            "use_addr": self.chk_addr.GetValue(),
-            "sources": list(self.sources),
-        }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Main Window
@@ -410,25 +309,28 @@ class MainWindow(wx.Frame):
 
     # UI
     def _build_ui(self):
-        BG = wx.Colour(249, 246, 255)       # light lavender
+        BG = wx.Colour(249, 246, 255)         # light lavender
+        HEADER = wx.Colour(53, 29, 102)       # deep lavender
         PANEL = wx.Colour(248, 245, 255)
 
         self.SetBackgroundColour(BG)
         main = wx.BoxSizer(wx.VERTICAL)
 
-        # Header
-        self.banner = HeaderBanner(self, height=64)
-        main.Add(self.banner, 0, wx.EXPAND)
+        # Header bar: title (left) + Little Buddy (right)
+        header = wx.Panel(self); header.SetBackgroundColour(HEADER)
+        hbox = wx.BoxSizer(wx.HORIZONTAL)
 
-        # Top row: Little Buddy (right)
-        row = wx.BoxSizer(wx.HORIZONTAL)
-        row.AddStretchSpacer()
-        lb_holder = wx.Panel(self); lb_holder.SetBackgroundColour(wx.Colour(53,29,102))
-        lb_sz = wx.BoxSizer(wx.HORIZONTAL)
-        self.little_pill = LittleBuddyPill(lb_holder, handler=self.on_little_buddy)
-        lb_sz.Add(self.little_pill, 0, wx.ALL, 10); lb_holder.SetSizer(lb_sz)
-        row.Add(lb_holder, 0, wx.EXPAND)
-        main.Add(row, 0, wx.EXPAND)
+        title = wx.StaticText(header, label="Data Buddy — Sidecar Application")
+        title.SetForegroundColour(wx.Colour(255, 255, 255))
+        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        hbox.Add(title, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 12)
+
+        hbox.AddStretchSpacer(1)
+        self.little_pill = LittleBuddyPill(header, handler=self.on_little_buddy)
+        hbox.Add(self.little_pill, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 8)
+
+        header.SetSizer(hbox)
+        main.Add(header, 0, wx.EXPAND)
 
         # Buttons (toolbar)
         toolbar_panel = wx.Panel(self); toolbar_panel.SetBackgroundColour(PANEL)
@@ -445,8 +347,9 @@ class MainWindow(wx.Frame):
         add_btn("Anomalies", lambda e: self.do_analysis_process("Detect Anomalies"))
         add_btn("Rule Assignment", self.on_rules)
         add_btn("Knowledge Files", self.on_load_knowledge)
-        add_btn("Optimizer", self.on_mdm)   # real MDM
-        add_btn("To Do", self.on_run_tasks) # real tasks
+        add_btn("MDM", self.on_mdm)                    # renamed from Optimizer
+        add_btn("Synthetic Data", self.on_generate_synth)  # new button
+        add_btn("To Do", self.on_run_tasks)
 
         toolbar_panel.SetSizer(tb)
         main.Add(toolbar_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
@@ -700,7 +603,7 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Buddy", wx.OK | wx.ICON_ERROR)
 
-    # Synthetic data helpers (used by SyntheticDataDialog if you trigger it)
+    # Synthetic data
     @staticmethod
     def _most_common_format(strings, default_mask="DDD-DDD-DDDD"):
         def mask_one(s): return re.sub(r"\d", "D", s)
@@ -749,7 +652,44 @@ class MainWindow(wx.Frame):
                 gens[col]=lambda _r: "".join(random.choice(letters) for _ in range(random.randint(5,10)))
         return gens
 
-    # MDM helpers
+    def on_generate_synth(self, _evt=None):
+        if not self.headers:
+            wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
+            return
+        src_df = pd.DataFrame(self.raw_data, columns=self.headers)
+        dlg = SyntheticDataDialog(self, fields=list(self.headers))
+        if hasattr(dlg, "ShowModal"):
+            if dlg.ShowModal() != wx.ID_OK:
+                dlg.Destroy(); return
+        try:
+            if hasattr(dlg, "get_values"):
+                n_rows, fields = dlg.get_values()
+            else:
+                n_rows = getattr(dlg, "n_rows", 0)
+                fields = getattr(dlg, "fields", list(self.headers))
+            if not fields:
+                fields = list(self.headers)
+            gens = self._build_generators(src_df, fields)
+            out_rows = []
+            for _ in range(int(n_rows)):
+                row_map = {}
+                for f in fields:
+                    g = gens.get(f)
+                    val = g(row_map) if callable(g) else None
+                    row_map[f] = "" if val is None else val
+                out_rows.append([row_map[f] for f in fields])
+            df = pd.DataFrame(out_rows, columns=fields)
+        except Exception as e:
+            wx.MessageBox(f"Synthetic data error: {e}", "Error", wx.OK | wx.ICON_ERROR)
+            if hasattr(dlg, "Destroy"): dlg.Destroy()
+            return
+        if hasattr(dlg, "Destroy"): dlg.Destroy()
+        hdr = list(df.columns); data = df.values.tolist()
+        self.headers = hdr; self.raw_data = data
+        self._display(hdr, data); self._reset_kpis_for_new_dataset(hdr, data)
+        self.kernel.log("synthetic_generated", rows=len(data), cols=len(hdr), fields=hdr)
+
+    # MDM helpers and action (unchanged functionality)
     @staticmethod
     def _find_col(cols, *cands):
         cl = {c.lower(): c for c in cols}
@@ -895,7 +835,6 @@ class MainWindow(wx.Frame):
             golden.append(merged)
         return pd.DataFrame(golden, columns=all_cols)
 
-    # Actions
     def on_mdm(self, _evt=None):
         if not self.headers:
             wx.MessageBox("Load a base dataset first (or generate synthetic data).",
@@ -945,6 +884,7 @@ class MainWindow(wx.Frame):
         self.current_process = "MDM"
         self.kernel.log("mdm_completed", golden_rows=len(data), golden_cols=len(hdr), params=params)
 
+    # Analyses
     def do_analysis_process(self, proc_name: str):
         if not self.headers:
             wx.MessageBox("Load data first.", "No data", wx.OK | wx.ICON_WARNING); return
@@ -1112,7 +1052,7 @@ class MainWindow(wx.Frame):
         work["__anomaly__"] = ["; ".join(r) if r else "" for r in reasons]
         return work, int(flags.sum())
 
-    # Export / Upload / Tasks
+    # Tasks / export / upload
     def on_run_tasks(self, _evt=None):
         dlg = wx.FileDialog(self, "Open Tasks File",
                             wildcard="Tasks (*.json;*.txt)|*.json;*.txt|All|*.*",
@@ -1285,6 +1225,96 @@ class MainWindow(wx.Frame):
 
     def on_grid_resize(self, event):
         event.Skip(); wx.CallAfter(self.adjust_grid)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MDM dialog used above (kept here to keep file self-contained)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class MDMDialog(wx.Dialog):
+    def __init__(self, parent):
+        super().__init__(parent, title="Master Data Management (MDM)", size=(560, 420))
+        panel = wx.Panel(self)
+        v = wx.BoxSizer(wx.VERTICAL)
+
+        self.chk_include_current = wx.CheckBox(panel, label="Include current dataset as a source")
+        self.chk_include_current.SetValue(True)
+        v.Add(self.chk_include_current, 0, wx.ALL, 8)
+
+        v.Add(wx.StaticText(panel, label="Sources to merge (local files or URIs):"), 0, wx.LEFT | wx.TOP, 8)
+        self.lst = wx.ListBox(panel, style=wx.LB_EXTENDED)
+        v.Add(self.lst, 1, wx.EXPAND | wx.ALL, 8)
+
+        btns = wx.BoxSizer(wx.HORIZONTAL)
+        btn_add = wx.Button(panel, label="Add Local…")
+        btn_uri = wx.Button(panel, label="Add URI/S3…")
+        btn_rm  = wx.Button(panel, label="Remove Selected")
+        btns.Add(btn_add, 0, wx.RIGHT, 6)
+        btns.Add(btn_uri, 0, wx.RIGHT, 6)
+        btns.Add(btn_rm, 0)
+        v.Add(btns, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        grid = wx.FlexGridSizer(2,2,6,6); grid.AddGrowableCol(1,1)
+        grid.Add(wx.StaticText(panel, label="Match threshold (percent):"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.spn_thresh = wx.SpinCtrl(panel, min=50, max=100, initial=85)
+        grid.Add(self.spn_thresh, 0, wx.EXPAND)
+
+        grid.Add(wx.StaticText(panel, label="Fields to match on:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        h = wx.BoxSizer(wx.HORIZONTAL)
+        self.chk_email = wx.CheckBox(panel, label="Email")
+        self.chk_phone = wx.CheckBox(panel, label="Phone")
+        self.chk_name  = wx.CheckBox(panel, label="Name")
+        self.chk_addr  = wx.CheckBox(panel, label="Address")
+        for c in (self.chk_email, self.chk_phone, self.chk_name, self.chk_addr):
+            c.SetValue(True); h.Add(c, 0, wx.RIGHT, 8)
+        grid.Add(h, 0, wx.EXPAND)
+        v.Add(grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        v.Add(wx.StaticLine(panel), 0, wx.EXPAND | wx.ALL, 6)
+        okc = wx.StdDialogButtonSizer(); ok = wx.Button(panel, wx.ID_OK); ca = wx.Button(panel, wx.ID_CANCEL)
+        okc.AddButton(ok); okc.AddButton(ca); okc.Realize()
+        v.Add(okc, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
+
+        panel.SetSizer(v)
+        self.sources = []
+        btn_add.Bind(wx.EVT_BUTTON, self._on_add_file)
+        btn_uri.Bind(wx.EVT_BUTTON, self._on_add_uri)
+        btn_rm.Bind(wx.EVT_BUTTON, self._on_rm)
+
+    def _on_add_file(self, _):
+        dlg = wx.FileDialog(self, "Select data file", wildcard="Data|*.csv;*.tsv;*.txt|All|*.*",
+                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE)
+        if dlg.ShowModal() != wx.ID_OK:
+            return
+        for p in dlg.GetPaths():
+            self.sources.append({"type": "file", "value": p})
+            self.lst.Append(f"[FILE] {p}")
+        dlg.Destroy()
+
+    def _on_add_uri(self, _):
+        with wx.TextEntryDialog(self, "Enter HTTP/HTTPS/S3 URI:", "Add URI/S3") as d:
+            if d.ShowModal() != wx.ID_OK:
+                return
+            uri = d.GetValue().strip()
+        if uri:
+            self.sources.append({"type": "uri", "value": uri})
+            self.lst.Append(f"[URI]  {uri}")
+
+    def _on_rm(self, _):
+        for i in reversed(self.lst.GetSelections()):
+            self.lst.Delete(i)
+            del self.sources[i]
+
+    def get_params(self):
+        return {
+            "include_current": self.chk_include_current.GetValue(),
+            "threshold": self.spn_thresh.GetValue() / 100.0,
+            "use_email": self.chk_email.GetValue(),
+            "use_phone": self.chk_phone.GetValue(),
+            "use_name": self.chk_name.GetValue(),
+            "use_addr": self.chk_addr.GetValue(),
+            "sources": list(self.sources),
+        }
 
 
 if __name__ == "__main__":
