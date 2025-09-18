@@ -31,7 +31,7 @@ from app.analysis import (
 # ──────────────────────────────────────────────────────────────────────────────
 
 class KernelManager:
-    def __init__(self, app_name="Data Buddy — Sidecar Application"):
+    def __init__(self, app_name="Data Genius — Sidecar Application"):
         self.lock = threading.Lock()
         self.dir = os.path.join(os.path.expanduser("~"), ".sidecar")
         os.makedirs(self.dir, exist_ok=True)
@@ -197,7 +197,7 @@ class RoundedShadowButton(wx.Control):
         dc.DrawText(self._label, (w-tw)//2, (h-th)//2)
 
 class LittleBuddyPill(wx.Control):
-    def __init__(self, parent, label="Little Buddy", handler=None):
+    def __init__(self, parent, label="Little Genius", handler=None):
         super().__init__(parent, style=wx.BORDER_NONE)
         self._label = label; self._handler = handler
         self._hover = False; self._down = False
@@ -274,7 +274,7 @@ class KPIBadge(wx.Panel):
 
 class MainWindow(wx.Frame):
     def __init__(self):
-        super().__init__(None, title="Data Buddy — Sidecar Application", size=(1320, 840))
+        super().__init__(None, title="Data Genius — Sidecar Application", size=(1320, 840))
 
         # icon (best effort)
         for p in (
@@ -320,7 +320,7 @@ class MainWindow(wx.Frame):
         header = wx.Panel(self); header.SetBackgroundColour(HEADER)
         hbox = wx.BoxSizer(wx.HORIZONTAL)
 
-        title = wx.StaticText(header, label="Data Buddy — Sidecar Application")
+        title = wx.StaticText(header, label="Data Genius — Sidecar Application")
         title.SetForegroundColour(wx.Colour(255, 255, 255))
         title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         hbox.Add(title, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 12)
@@ -601,7 +601,7 @@ class MainWindow(wx.Frame):
                             knowledge_files=[os.path.basename(p) for p in prio])
             dlg.ShowModal(); dlg.Destroy()
         except Exception as e:
-            wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Buddy", wx.OK | wx.ICON_ERROR)
+            wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Genius", wx.OK | wx.ICON_ERROR)
 
     # Synthetic data
     @staticmethod
