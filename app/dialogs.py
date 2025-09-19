@@ -104,7 +104,7 @@ class QualityRuleDialog(wx.Dialog):
         self.pattern_txt = wx.TextCtrl(pnl)
         self.pattern_txt.SetBackgroundColour(INPUT_BG)
         self.pattern_txt.SetForegroundColour(INPUT_TXT)
-        self.pattern_txt.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.pattern_txt.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         g.Add(self.pattern_txt, 0, wx.EXPAND)
 
         main.Add(g, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
@@ -115,7 +115,7 @@ class QualityRuleDialog(wx.Dialog):
         self.preview = rt.RichTextCtrl(pnl, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
         self.preview.SetBackgroundColour(wx.Colour(255, 255, 255))
         self.preview.SetForegroundColour(wx.Colour(32, 24, 64))
-        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
+        self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         pv.Add(self.preview, 1, wx.EXPAND | wx.ALL, 4)
         main.Add(pv, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
@@ -135,7 +135,7 @@ class QualityRuleDialog(wx.Dialog):
         for b in (load_btn, assign_btn, close_btn):
             b.SetBackgroundColour(ACCENT)
             b.SetForegroundColour(wx.WHITE)
-            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
+            b.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         load_btn.Bind(wx.EVT_BUTTON, self.on_load_rules)
         assign_btn.Bind(wx.EVT_BUTTON, self.on_assign)
         close_btn.Bind(wx.EVT_BUTTON, lambda _: self.EndModal(wx.ID_OK))
@@ -225,7 +225,7 @@ class SyntheticDataDialog(wx.Dialog):
         banner = wx.Panel(self); banner.SetBackgroundColour(BG)
         bh = wx.BoxSizer(wx.HORIZONTAL)
         title = wx.StaticText(banner, label="Generate Synthetic Data")
-        title.SetFont(wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         title.SetForegroundColour(TXT)
         bh.Add(title, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 8)
         bh.AddStretchSpacer()
@@ -441,7 +441,7 @@ class DataBuddyDialog(wx.Dialog):
 
         title = wx.StaticText(pnl, label="Little Buddy")
         title.SetForegroundColour(self.COLORS["text"])
-        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         vbox.Add(title, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
 
         # Options row
@@ -451,7 +451,7 @@ class DataBuddyDialog(wx.Dialog):
         self.voice.SetSelection(1)
         self.voice.SetBackgroundColour(self.COLORS["input_bg"])
         self.voice.SetForegroundColour(self.COLORS["input_fg"])
-        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.voice.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         opts.Add(self.voice, 0, wx.RIGHT | wx.EXPAND, 6)
 
         self.tts_checkbox = wx.CheckBox(pnl, label="🔊 Speak Reply")
@@ -466,7 +466,7 @@ class DataBuddyDialog(wx.Dialog):
 
         self.tts_status = wx.StaticText(pnl, label="TTS: idle")
         self.tts_status.SetForegroundColour(self.COLORS["muted"])
-        self.tts_status.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.tts_status.SetFont(wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         opts.Add(self.tts_status, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 12)
 
         vbox.Add(opts, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
@@ -479,19 +479,19 @@ class DataBuddyDialog(wx.Dialog):
         self.persona.SetSelection(0)
         self.persona.SetBackgroundColour(self.COLORS["input_bg"])
         self.persona.SetForegroundColour(self.COLORS["input_fg"])
-        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.persona.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         vbox.Add(self.persona, 0, wx.EXPAND | wx.ALL, 5)
 
         row = wx.BoxSizer(wx.HORIZONTAL)
         ask_lbl = wx.StaticText(pnl, label="Ask:")
         ask_lbl.SetForegroundColour(self.COLORS["muted"])
-        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        ask_lbl.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         row.Add(ask_lbl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
 
         self.prompt = wx.TextCtrl(pnl, style=wx.TE_PROCESS_ENTER)
         self.prompt.SetBackgroundColour(self.COLORS["input_bg"])
         self.prompt.SetForegroundColour(self.COLORS["input_fg"])
-        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.prompt.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         self.prompt.SetHint("Type your question and press Enter…")
         self.prompt.Bind(wx.EVT_TEXT_ENTER, self.on_ask)
         row.Add(self.prompt, 1, wx.EXPAND | wx.RIGHT, 6)
@@ -882,9 +882,9 @@ class DataBuddyDialog(wx.Dialog):
             dc.SetBackground(wx.Brush(wx.Colour(247, 243, 255)))
             dc.Clear()
             dc.SetTextForeground(wx.Colour(44, 31, 72))
-            dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
+            dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
             dc.DrawText("[Offline Placeholder]", 40, 40)
-            dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL))
+            dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
             dc.DrawText(prompt, 40, 80)
             dc.SelectObject(wx.NullBitmap)
             bmp.SaveFile(tmp.name, wx.BITMAP_TYPE_PNG)
