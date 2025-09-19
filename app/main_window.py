@@ -349,11 +349,10 @@ class MainWindow(wx.Frame):
         add_btn("Anomalies", lambda e: self.do_analysis_process("Detect Anomalies"))
         add_btn("Rule Assignment", self.on_rules)
         add_btn("Knowledge Files", self.on_load_knowledge)
-        add_btn("MDM", self.on_mdm)                    # renamed from Optimizer
-        add_btn("Synthetic Data", self.on_generate_synth)  # new button
+        add_btn("MDM", self.on_mdm)
+        add_btn("Synthetic Data", self.on_generate_synth)
         add_btn("To Do", self.on_run_tasks)
-        # NEW: Export button next to "To Do"
-        add_btn("Export", self.on_export_csv)
+        add_btn("Export", self.on_export_csv)  # NEW
 
         toolbar_panel.SetSizer(tb)
 
@@ -405,7 +404,7 @@ class MainWindow(wx.Frame):
 
         # Grid
         grid_panel = wx.Panel(self); grid_panel.SetBackgroundColour(BG)
-        self.grid = wx.grid.Grid(grid_panel); self.grid.CreateGrid(0, 0)
+        self.grid = gridlib.Grid(grid_panel); self.grid.CreateGrid(0, 0)
         self.grid.SetDefaultCellTextColour(wx.Colour(35, 31, 51))
         self.grid.SetDefaultCellBackgroundColour(wx.Colour(255,255,255))
         self.grid.SetLabelTextColour(wx.Colour(60,60,90))
@@ -414,7 +413,7 @@ class MainWindow(wx.Frame):
         self.grid.EnableEditing(False)  # default; enable only for Catalog
         self.grid.SetRowLabelSize(36); self.grid.SetColLabelSize(28)
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
-        self.grid.Bind(wx.grid.EVT_GRID_CELL_CHANGED, self.on_cell_changed)
+        self.grid.Bind(gridlib.EVT_GRID_CELL_CHANGED, self.on_cell_changed)
 
         gp = wx.BoxSizer(wx.VERTICAL); gp.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
         grid_panel.SetSizer(gp)
@@ -422,7 +421,7 @@ class MainWindow(wx.Frame):
 
         # Menubar
         mb = wx.MenuBar()
-        m_file = wx.Menu(); m_file.append(wx.ID_EXIT, "&Quit\tCtrl+Q"); mb.Append(m_file, "&File")
+        m_file = wx.Menu(); m_file.Append(wx.ID_EXIT, "&Quit\tCtrl+Q"); mb.Append(m_file, "&File")
         self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=wx.ID_EXIT)
 
         m_settings = wx.Menu(); OPEN_SETTINGS_ID = wx.NewIdRef()
@@ -1495,7 +1494,7 @@ class MDMDialog(wx.Dialog):
 
     def get_params(self):
         return {
-            "include_current": self.chk_include_current.GetValue,
+            "include_current": self.chk_include_current.GetValue(),
             "threshold": self.spn_thresh.GetValue() / 100.0,
             "use_email": self.chk_email.GetValue(),
             "use_phone": self.chk_phone.GetValue(),
