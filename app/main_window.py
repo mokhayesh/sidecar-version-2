@@ -1,5 +1,6 @@
 # app/main_window.py
 # Lavender UI + full functionality (MDM, Synthetic Data, Tasks, Knowledge Files)
+# Catalog: SLA column, editable & persisted + catalog toolbar
 
 import os
 import re
@@ -52,7 +53,7 @@ class KernelManager:
                 ]
             },
             "stats": {"launch_count": 0},
-            "state": {"last_dataset": None, "kpis": {}},
+            "state": {"last_dataset": None, "kpis": {}, "catalog_meta": {}},
             "events": []
         }
         self._load_or_init()
@@ -67,7 +68,7 @@ class KernelManager:
                 existing.setdefault("creator", "Salah Mokhayesh")
                 existing.setdefault("app", self.data["app"])
                 existing.setdefault("stats", {"launch_count": 0})
-                existing.setdefault("state", {"last_dataset": None, "kpis": {}})
+                existing.setdefault("state", {"last_dataset": None, "kpis": {}, "catalog_meta": {}})
                 existing.setdefault("events", [])
                 self.data = existing
             else:
@@ -384,6 +385,19 @@ class MainWindow(wx.Frame):
         info_panel.SetSizer(hz)
         main.Add(info_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
+        # ── Catalog toolbar (hidden unless Catalog is active)
+        self.catalog_toolbar_panel = wx.Panel(self)
+        self.catalog_toolbar_panel.SetBackgroundColour(wx.Colour(243, 239, 255))
+        ct = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_catalog_save  = RoundedShadowButton(self.catalog_toolbar_panel, "Save Catalog Edits", self.on_catalog_save)
+        self.btn_catalog_reset = RoundedShadowButton(self.catalog_toolbar_panel, "Reset Catalog Edits", self.on_catalog_reset, colour=wx.Colour(160, 120, 200))
+        ct.Add(self.btn_catalog_save, 0, wx.ALL, 6)
+        ct.Add(self.btn_catalog_reset, 0, wx.ALL, 6)
+        ct.AddStretchSpacer(1)
+        self.catalog_toolbar_panel.SetSizer(ct)
+        self.catalog_toolbar_panel.Hide()
+        main.Add(self.catalog_toolbar_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 4)
+
         # Grid
         grid_panel = wx.Panel(self); grid_panel.SetBackgroundColour(BG)
         self.grid = wx.grid.Grid(grid_panel); self.grid.CreateGrid(0, 0)
@@ -392,8 +406,10 @@ class MainWindow(wx.Frame):
         self.grid.SetLabelTextColour(wx.Colour(60,60,90))
         self.grid.SetLabelBackgroundColour(wx.Colour(235,231,250))
         self.grid.SetGridLineColour(wx.Colour(220,214,245))
-        self.grid.EnableEditing(False); self.grid.SetRowLabelSize(36); self.grid.SetColLabelSize(28)
+        self.grid.EnableEditing(False)  # default; enable only for Catalog
+        self.grid.SetRowLabelSize(36); self.grid.SetColLabelSize(28)
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
+        self.grid.Bind(wx.grid.EVT_GRID_CELL_CHANGED, self.on_cell_changed)
 
         gp = wx.BoxSizer(wx.VERTICAL); gp.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
         grid_panel.SetSizer(gp)
@@ -465,9 +481,8 @@ class MainWindow(wx.Frame):
     @staticmethod
     def _as_df(rows, cols):
         df = pd.DataFrame(rows, columns=cols)
-        # Replace blank strings with None/NA without the applymap FutureWarning
-        df = df.replace(r"^\s*$", pd.NA, regex=True)
-        return df
+        # newer pandas warns about applymap deprecation; DataFrame.map preserves shape for elementwise op
+        return df.map(lambda x: None if (x is None or (isinstance(x, str) and x.strip() == "")) else x)
 
     def _compute_profile_metrics(self, df: pd.DataFrame):
         total_cells = df.shape[0] * max(1, df.shape[1])
@@ -540,8 +555,7 @@ class MainWindow(wx.Frame):
         self.knowledge_files = [x for x in new_list if not (x in seen or seen.add(x))]
         self._update_knowledge_label_and_env()
         self.kernel.log("load_knowledge_files",
-                        count=len(self._get_prioritized_knowledge())),
-        self.kernel.log("load_knowledge_files_detail",
+                        count=len(self._get_prioritized_knowledge()),
                         files=[os.path.basename(p) for p in self._get_prioritized_knowledge()])
 
     def _load_text_file(self, path): return open(path, "r", encoding="utf-8", errors="ignore").read()
@@ -606,7 +620,7 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Genius", wx.OK | wx.ICON_ERROR)
 
-    # Synthetic data — NAME realism + set process
+    # Synthetic data
     @staticmethod
     def _most_common_format(strings, default_mask="DDD-DDD-DDDD"):
         def mask_one(s): return re.sub(r"\d", "D", s)
@@ -626,94 +640,39 @@ class MainWindow(wx.Frame):
             return vals[-1]
         return pick
 
-    # common name pools (lower-case; we capitalize when emitting)
-    _FIRST_NAMES = [
-        "james","mary","robert","patricia","john","jennifer","michael","linda","william","elizabeth",
-        "david","barbara","richard","susan","joseph","jessica","thomas","sarah","charles","karen",
-        "christopher","nancy","daniel","lisa","matthew","margaret","anthony","betty","mark","sandra",
-        "donald","ashley","steven","kimberly","paul","emily","andrew","donna","joshua","michelle",
-        "kevin","carol","brian","amanda","george","dorothy","timothy","melissa","ronald","deborah",
-        "edward","stephanie","jason","rebecca","jeffrey","sharon","ryan","laura","jacob","cynthia",
-        "gary","kathleen","nicholas","amy","eric","shirley","jonathan","angela","stephen","helen",
-        "larry","anna","justin","brenda","scott","pamela","brandon","nicole","benjamin","emma",
-        "samuel","samantha","gregory","katherine","frank","christine","alexander","debra","raymond","rachel"
-    ]
-    _LAST_NAMES = [
-        "smith","johnson","williams","brown","jones","garcia","miller","davis","rodriguez","martinez",
-        "hernandez","lopez","gonzalez","wilson","anderson","thomas","taylor","moore","jackson","martin",
-        "lee","perez","thompson","white","harris","sanchez","clark","ramirez","lewis","robinson",
-        "walker","young","allen","king","wright","scott","torres","nguyen","hill","flores",
-        "green","adams","nelson","baker","hall","rivera","campbell","mitchell","carter","roberts"
-    ]
-
     def _build_generators(self, src_df: pd.DataFrame, fields):
         gens = {}
+        # simple realistic name pools
+        first_names = ["Olivia","Liam","Emma","Noah","Ava","Oliver","Sophia","Elijah","Isabella","James",
+                       "Amelia","William","Mia","Benjamin","Charlotte","Lucas","Harper","Henry","Evelyn","Alexander"]
+        last_names = ["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez",
+                      "Hernandez","Lopez","Gonzalez","Wilson","Anderson","Thomas","Taylor","Moore","Jackson","Martin"]
         for col in fields:
             lower = col.lower()
             series = src_df[col] if col in src_df.columns else pd.Series([], dtype=object)
             col_vals = [v for v in series.tolist() if (v is not None and str(v).strip() != "")]
             col_strs = [str(v) for v in col_vals]
-
-            # --- email
             if "email" in lower:
                 domains = [s.split("@",1)[1].lower() for s in col_strs if "@" in s]
                 dom = self._sample_with_weights(domains or ["gmail.com","yahoo.com","outlook.com","example.com"])
                 pick = self._sample_with_weights(col_vals) if col_vals else None
-                gens[col] = (lambda _row, p=pick, d=dom:
-                             (p() if p and random.random()<0.65 else f"user{random.randint(1000,9999)}@{d()}"))
+                gens[col] = (lambda _row, p=pick, d=dom: (p() if p and random.random()<0.7 else f"user{random.randint(1000,9999)}@{d()}"))
                 continue
-
-            # --- phone
             if any(k in lower for k in ["phone","mobile","cell","telephone"]):
                 mask = self._most_common_format([s for s in col_strs if re.search(r"\d", s)])
-                gens[col] = lambda _row, m=mask: "".join(str(random.randint(0,9)) if ch=="D" else ch for ch in m)
-                continue
-
-            # --- dates
+                gens[col] = lambda _row, m=mask: "".join(str(random.randint(0,9)) if ch=="D" else ch for ch in m); continue
+            if "first" in lower and "name" in lower:
+                gens[col] = lambda _row, pool=first_names: random.choice(pool); continue
+            if "last" in lower and "name" in lower:
+                gens[col] = lambda _row, pool=last_names: random.choice(pool); continue
             if "date" in lower or "dob" in lower:
                 dmax=datetime.today(); dmin=dmax-timedelta(days=3650); delta=(dmax-dmin).days or 365
-                gens[col]=lambda _row, a=dmin, d=delta: (a+timedelta(days=random.randint(0, max(1,d)))).strftime("%Y-%m-%d")
-                continue
-
-            # --- first/last/middle names with realistic pools
-            def cap(s: str) -> str:
-                s = str(s).strip()
-                return s[:1].upper() + s[1:].lower() if s else s
-
-            if "first" in lower and "name" in lower:
-                # 70% sample from existing values (if any), else from common names
-                existing = [cap(v) for v in col_vals if isinstance(v, str)]
-                pick_existing = self._sample_with_weights(existing) if existing else None
-                gens[col] = (lambda _r, pe=pick_existing:
-                             (pe() if pe and random.random()<0.7 else cap(random.choice(self._FIRST_NAMES))))
-                continue
-
-            if "last" in lower and "name" in lower:
-                existing = [cap(v) for v in col_vals if isinstance(v, str)]
-                pick_existing = self._sample_with_weights(existing) if existing else None
-                gens[col] = (lambda _r, pe=pick_existing:
-                             (pe() if pe and random.random()<0.7 else cap(random.choice(self._LAST_NAMES))))
-                continue
-
-            if "middle" in lower and "name" in lower:
-                # Prefer initials; occasionally emit full names
-                def middle():
-                    if random.random() < 0.8:
-                        return cap(random.choice(self._FIRST_NAMES))[0]
-                    return cap(random.choice(self._FIRST_NAMES))
-                gens[col] = lambda _r: middle()
-                continue
-
-            # --- categorical fields with few distinct values
+                gens[col]=lambda _row, a=dmin, d=delta: (a+timedelta(days=random.randint(0, max(1,d)))).strftime("%Y-%m-%d"); continue
             uniq = set(col_vals)
             if uniq and len(uniq) <= 50:
-                gens[col] = self._sample_with_weights(col_vals)
-                continue
-
-            # --- default: sample like data or generate letters
+                gens[col] = self._sample_with_weights(col_vals); continue
             if col_vals:
-                pick = self._sample_with_weights(col_vals)
-                gens[col]=lambda _r, p=pick: p()
+                pick = self._sample_with_weights(col_vals); gens[col]=lambda _r, p=pick: p()
             else:
                 letters="abcdefghijklmnopqrstuvwxyz"
                 gens[col]=lambda _r: "".join(random.choice(letters) for _ in range(random.randint(5,10)))
@@ -724,28 +683,32 @@ class MainWindow(wx.Frame):
             wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
             return
         src_df = pd.DataFrame(self.raw_data, columns=self.headers)
-        dlg = SyntheticDataDialog(self, fields=list(self.headers))
+        # dialogs.SyntheticDataDialog signature: (parent, sample_df)
+        try:
+            dlg = SyntheticDataDialog(self, sample_df=src_df)
+        except TypeError:
+            # fallback to previous signature if needed
+            dlg = SyntheticDataDialog(self, src_df)
         if hasattr(dlg, "ShowModal"):
             if dlg.ShowModal() != wx.ID_OK:
                 dlg.Destroy(); return
         try:
-            if hasattr(dlg, "get_values"):
-                n_rows, fields = dlg.get_values()
-            else:
-                n_rows = getattr(dlg, "n_rows", 0)
-                fields = getattr(dlg, "fields", list(self.headers))
-            if not fields:
+            # dialog returns a DataFrame via get_dataframe()
+            df = dlg.get_dataframe()
+            if df is None or df.empty:
+                # if dialog generated nothing, build here using our generators
+                n_rows = 100
                 fields = list(self.headers)
-            gens = self._build_generators(src_df, fields)
-            out_rows = []
-            for _ in range(int(n_rows)):
-                row_map = {}
-                for f in fields:
-                    g = gens.get(f)
-                    val = g(row_map) if callable(g) else None
-                    row_map[f] = "" if val is None else val
-                out_rows.append([row_map[f] for f in fields])
-            df = pd.DataFrame(out_rows, columns=fields)
+                gens = self._build_generators(src_df, fields)
+                out_rows = []
+                for _ in range(int(n_rows)):
+                    row_map = {}
+                    for f in fields:
+                        g = gens.get(f)
+                        val = g(row_map) if callable(g) else None
+                        row_map[f] = "" if val is None else val
+                    out_rows.append([row_map[f] for f in fields])
+                df = pd.DataFrame(out_rows, columns=fields)
         except Exception as e:
             wx.MessageBox(f"Synthetic data error: {e}", "Error", wx.OK | wx.ICON_ERROR)
             if hasattr(dlg, "Destroy"): dlg.Destroy()
@@ -754,10 +717,9 @@ class MainWindow(wx.Frame):
         hdr = list(df.columns); data = df.values.tolist()
         self.headers = hdr; self.raw_data = data
         self._display(hdr, data); self._reset_kpis_for_new_dataset(hdr, data)
-        self.current_process = "Synthetic Data"  # so S3 upload can route to a Synthetic bucket
         self.kernel.log("synthetic_generated", rows=len(data), cols=len(hdr), fields=hdr)
 
-    # MDM helpers and action (unchanged functionality)
+    # MDM helpers and action
     @staticmethod
     def _find_col(cols, *cands):
         cl = {c.lower(): c for c in cols}
@@ -950,7 +912,103 @@ class MainWindow(wx.Frame):
         self.headers, self.raw_data = hdr, data
         self._display(hdr, data); self._reset_kpis_for_new_dataset(hdr, data)
         self.current_process = "MDM"
+        self._show_catalog_toolbar(False)
         self.kernel.log("mdm_completed", golden_rows=len(data), golden_cols=len(hdr), params=params)
+
+    # Catalog metadata persistence helpers
+    def _load_catalog_meta(self):
+        try:
+            return dict(self.kernel.data.get("state", {}).get("catalog_meta", {}))
+        except Exception:
+            return {}
+
+    def _save_catalog_meta(self, meta: dict):
+        try:
+            self.kernel.data.setdefault("state", {})["catalog_meta"] = dict(meta)
+            self.kernel._save()
+        except Exception:
+            pass
+
+    def _apply_catalog_meta_to_table(self, hdr, data):
+        # Ensure SLA column exists (insert before 'Example' when possible)
+        if "SLA" not in hdr:
+            insert_at = hdr.index("Example") if "Example" in hdr else len(hdr)
+            hdr = list(hdr[:insert_at]) + ["SLA"] + list(hdr[insert_at:])
+            for r in range(len(data)):
+                data[r] = list(data[r][:insert_at]) + ["" ] + list(data[r][insert_at:])
+
+        col_idx = {name: i for i, name in enumerate(hdr)}
+        meta = self._load_catalog_meta()
+
+        if "Field" in col_idx:
+            f_idx = col_idx["Field"]
+            for r in range(len(data)):
+                row = list(data[r])
+                field_name = str(row[f_idx]).strip()
+                if not field_name:
+                    data[r] = row
+                    continue
+                saved = meta.get(field_name, {})
+                for key in ("Friendly Name", "Description", "Data Type", "Nullable", "SLA"):
+                    if key in col_idx and key in saved:
+                        row[col_idx[key]] = saved[key]
+                data[r] = row
+
+        return hdr, data
+
+    # Catalog toolbar show/hide
+    def _show_catalog_toolbar(self, show: bool):
+        if show:
+            self.catalog_toolbar_panel.Show()
+        else:
+            self.catalog_toolbar_panel.Hide()
+        self.Layout()
+
+    # Save visible grid rows to catalog persistence (for editable columns)
+    def _snapshot_grid_to_meta(self):
+        hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
+        try:
+            f_idx = hdr.index("Field")
+        except ValueError:
+            return
+        editable = {"Friendly Name", "Description", "Data Type", "Nullable", "SLA"}
+        col_idx = {name: i for i, name in enumerate(hdr)}
+        meta = self._load_catalog_meta()
+
+        for r in range(self.grid.GetNumberRows()):
+            field_name = self.grid.GetCellValue(r, f_idx).strip()
+            if not field_name:
+                continue
+            meta.setdefault(field_name, {})
+            for name in editable:
+                if name in col_idx:
+                    meta[field_name][name] = self.grid.GetCellValue(r, col_idx[name])
+
+        self._save_catalog_meta(meta)
+
+    def on_catalog_save(self, _evt=None):
+        if self.current_process != "Catalog":
+            return
+        self._snapshot_grid_to_meta()
+        wx.MessageBox("Catalog edits saved.", "Catalog", wx.OK | wx.ICON_INFORMATION)
+
+    def on_catalog_reset(self, _evt=None):
+        if self.current_process != "Catalog":
+            return
+        hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
+        try:
+            f_idx = hdr.index("Field")
+        except ValueError:
+            return
+        meta = self._load_catalog_meta()
+        # remove entries for all visible fields
+        for r in range(self.grid.GetNumberRows()):
+            field_name = self.grid.GetCellValue(r, f_idx).strip()
+            if field_name in meta:
+                del meta[field_name]
+        self._save_catalog_meta(meta)
+        # rerun Catalog to refresh
+        self.do_analysis_process("Catalog")
 
     # Analyses
     def do_analysis_process(self, proc_name: str):
@@ -975,6 +1033,8 @@ class MainWindow(wx.Frame):
             self.metrics["null_pct"] = null_pct
             self.metrics["uniqueness"] = uniq_pct
             self._render_kpis()
+            self.grid.EnableEditing(False)
+            self._show_catalog_toolbar(False)
             self.kernel.log("run_profile", null_pct=null_pct, uniqueness=uniq_pct)
 
         elif proc_name == "Quality":
@@ -1001,6 +1061,8 @@ class MainWindow(wx.Frame):
             self.metrics["validity"] = validity
             self.metrics["dq_score"] = dq
             self._render_kpis()
+            self.grid.EnableEditing(False)
+            self._show_catalog_toolbar(False)
             self.kernel.log("run_quality", completeness=completeness, validity=validity, dq_score=dq)
 
         elif proc_name == "Detect Anomalies":
@@ -1011,7 +1073,8 @@ class MainWindow(wx.Frame):
                 hdr, data = list(df.columns), df.values.tolist(); count = 0
             self.metrics["anomalies"] = count
             self._render_kpis()
-            self.current_process = "Anomalies"   # ensure S3 bucket routing
+            self.grid.EnableEditing(False)
+            self._show_catalog_toolbar(False)
             self.kernel.log("run_detect_anomalies", anomalies=count)
 
         elif proc_name == "Catalog":
@@ -1030,7 +1093,13 @@ class MainWindow(wx.Frame):
                     rows.append([c, friendly, desc, dtype, nullable, sample, now])
                 hdr = ["Field", "Friendly Name", "Description", "Data Type", "Nullable", "Example", "Analysis Date"]
                 data = rows
+
+            # ensure SLA column + overlay persisted edits
+            hdr, data = self._apply_catalog_meta_to_table(hdr, data)
+
             self.kernel.log("run_catalog", columns=len(hdr))
+            self.grid.EnableEditing(True)
+            self._show_catalog_toolbar(True)
 
         elif proc_name == "Compliance":
             try:
@@ -1038,10 +1107,14 @@ class MainWindow(wx.Frame):
                 hdr, data = self._coerce_hdr_data(out)
             except Exception:
                 hdr = ["message"]; data = [["Compliance check complete."]]
+            self.grid.EnableEditing(False)
+            self._show_catalog_toolbar(False)
             self.kernel.log("run_compliance")
 
         else:
             hdr, data = ["message"], [[f"Unknown process: {proc_name}"]]
+            self.grid.EnableEditing(False)
+            self._show_catalog_toolbar(False)
 
         self._display(hdr, data)
 
@@ -1161,7 +1234,7 @@ class MainWindow(wx.Frame):
         for line in text.splitlines():
             line=line.strip()
             if not line or line.startswith("#"): continue
-            parts=line.split(maxsplit=1)   # ← fixed bug (was split(maxsplit(1)))
+            parts=line.split(maxsplit=1)
             action=parts[0]; arg=parts[1] if len(parts)==2 else None
             t={"action": action}
             if arg:
@@ -1244,16 +1317,40 @@ class MainWindow(wx.Frame):
         hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
         data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))] for r in range(self.grid.GetNumberRows())]
         try:
-            # Ensure process names that match buckets you plan to add in Settings:
-            # "Profile", "Quality", "Catalog", "Compliance", "Anomalies", "Synthetic Data", "MDM"
-            process = (self.current_process or "Unknown")
-            msg = upload_to_s3(process, hdr, data)
+            msg = upload_to_s3(self.current_process or "Unknown", hdr, data)
             wx.MessageBox(msg, "Upload", wx.OK | wx.ICON_INFORMATION)
-            self.kernel.log("upload_s3", rows=len(data), cols=len(hdr), process=process)
+            self.kernel.log("upload_s3", rows=len(data), cols=len(hdr), process=self.current_process or "Unknown")
         except Exception as e:
             wx.MessageBox(f"Upload failed: {e}", "Upload", wx.OK | wx.ICON_ERROR)
 
-    # Grid render
+    # Grid events/presentation
+    def on_cell_changed(self, evt):
+        # Persist Catalog edits
+        if self.current_process == "Catalog":
+            try:
+                row = evt.GetRow()
+                col = evt.GetCol()
+                hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
+                col_name = hdr[col]
+                if col_name not in {"Friendly Name", "Description", "Data Type", "Nullable", "SLA"}:
+                    evt.Skip(); return
+                try:
+                    f_idx = hdr.index("Field")
+                except ValueError:
+                    evt.Skip(); return
+                field_name = self.grid.GetCellValue(row, f_idx).strip()
+                new_val = self.grid.GetCellValue(row, col)
+                if not field_name:
+                    evt.Skip(); return
+                meta = self._load_catalog_meta()
+                meta.setdefault(field_name, {})
+                meta[field_name][col_name] = new_val
+                self._save_catalog_meta(meta)
+            finally:
+                evt.Skip()
+        else:
+            evt.Skip()
+
     def _display(self, hdr, data):
         # allow pd.DataFrame too
         if isinstance(hdr, pd.DataFrame):
@@ -1266,7 +1363,9 @@ class MainWindow(wx.Frame):
         if self.grid.GetNumberCols(): self.grid.DeleteCols(0, self.grid.GetNumberCols())
 
         if not isinstance(hdr, (list, tuple)) or len(hdr) == 0:
-            self._render_kpis(); return
+            self._render_kpis()
+            self._show_catalog_toolbar(False)
+            return
 
         self.grid.AppendCols(len(hdr))
         for i, h in enumerate(hdr): self.grid.SetColLabelValue(i, str(h))
@@ -1286,6 +1385,8 @@ class MainWindow(wx.Frame):
                 self.grid.SetCellBackgroundColour(r, c, base)
 
         self.adjust_grid(); self._render_kpis()
+        # Only allow editing for Catalog; toolbar visibility handled by caller
+        self.grid.EnableEditing(self.current_process == "Catalog")
 
     def adjust_grid(self):
         cols = self.grid.GetNumberCols()
