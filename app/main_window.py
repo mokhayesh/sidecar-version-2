@@ -210,7 +210,7 @@ class LittleBuddyPill(wx.Control):
         self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
         self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
         self.Bind(wx.EVT_LEFT_UP, self.on_up)
-        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD)
 
     def _set_hover(self, v): self._hover = v; self.Refresh()
     def on_down(self, _): self._down = True; self.CaptureMouse(); self.Refresh()
@@ -323,7 +323,7 @@ class MainWindow(wx.Frame):
 
         title = wx.StaticText(header, label="Data Genius — Sidecar Application")
         title.SetForegroundColour(wx.Colour(255, 255, 255))
-        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD))
         hbox.Add(title, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 12)
 
         hbox.AddStretchSpacer(1)
@@ -333,6 +333,7 @@ class MainWindow(wx.Frame):
         header.SetSizer(hbox)
         main.Add(header, 0, wx.EXPAND)
 
+        # Build both panels (toolbar and KPI) so we can add in swapped order
         # Buttons (toolbar)
         toolbar_panel = wx.Panel(self); toolbar_panel.SetBackgroundColour(PANEL)
         tb = wx.WrapSizer(wx.HORIZONTAL)
@@ -351,9 +352,10 @@ class MainWindow(wx.Frame):
         add_btn("MDM", self.on_mdm)                    # renamed from Optimizer
         add_btn("Synthetic Data", self.on_generate_synth)  # new button
         add_btn("To Do", self.on_run_tasks)
+        # NEW: Export button next to "To Do"
+        add_btn("Export", self.on_export_csv)
 
         toolbar_panel.SetSizer(tb)
-        main.Add(toolbar_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
         # KPI bar
         kpi_panel = wx.Panel(self); kpi_panel.SetBackgroundColour(BG)
@@ -370,7 +372,10 @@ class MainWindow(wx.Frame):
                   self.card_quality, self.card_validity, self.card_complete, self.card_anoms):
             krow.Add(c, 1, wx.ALL | wx.EXPAND, 6)
         kpi_panel.SetSizer(krow)
-        main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
+
+        # SWAPPED ORDER: KPIs first (top), toolbar second (below)
+        main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
+        main.Add(toolbar_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
 
         # Knowledge files strip
         info_panel = wx.Panel(self); info_panel.SetBackgroundColour(wx.Colour(243, 239, 255))
@@ -481,7 +486,6 @@ class MainWindow(wx.Frame):
     @staticmethod
     def _as_df(rows, cols):
         df = pd.DataFrame(rows, columns=cols)
-        # newer pandas warns about applymap deprecation; DataFrame.map preserves shape for elementwise op
         return df.map(lambda x: None if (x is None or (isinstance(x, str) and x.strip() == "")) else x)
 
     def _compute_profile_metrics(self, df: pd.DataFrame):
@@ -683,20 +687,16 @@ class MainWindow(wx.Frame):
             wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
             return
         src_df = pd.DataFrame(self.raw_data, columns=self.headers)
-        # dialogs.SyntheticDataDialog signature: (parent, sample_df)
         try:
             dlg = SyntheticDataDialog(self, sample_df=src_df)
         except TypeError:
-            # fallback to previous signature if needed
             dlg = SyntheticDataDialog(self, src_df)
         if hasattr(dlg, "ShowModal"):
             if dlg.ShowModal() != wx.ID_OK:
                 dlg.Destroy(); return
         try:
-            # dialog returns a DataFrame via get_dataframe()
             df = dlg.get_dataframe()
             if df is None or df.empty:
-                # if dialog generated nothing, build here using our generators
                 n_rows = 100
                 fields = list(self.headers)
                 gens = self._build_generators(src_df, fields)
@@ -876,7 +876,7 @@ class MainWindow(wx.Frame):
         params = dlg.get_params(); dlg.Destroy()
 
         dataframes=[]
-        if params["include_current"]:
+        if params["include_current"]():
             dataframes.append(pd.DataFrame(self.raw_data, columns=self.headers))
         try:
             for src in params["sources"]:
@@ -1001,13 +1001,11 @@ class MainWindow(wx.Frame):
         except ValueError:
             return
         meta = self._load_catalog_meta()
-        # remove entries for all visible fields
         for r in range(self.grid.GetNumberRows()):
             field_name = self.grid.GetCellValue(r, f_idx).strip()
             if field_name in meta:
                 del meta[field_name]
         self._save_catalog_meta(meta)
-        # rerun Catalog to refresh
         self.do_analysis_process("Catalog")
 
     # Analyses
@@ -1094,7 +1092,6 @@ class MainWindow(wx.Frame):
                 hdr = ["Field", "Friendly Name", "Description", "Data Type", "Nullable", "Example", "Analysis Date"]
                 data = rows
 
-            # ensure SLA column + overlay persisted edits
             hdr, data = self._apply_catalog_meta_to_table(hdr, data)
 
             self.kernel.log("run_catalog", columns=len(hdr))
@@ -1313,6 +1310,25 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Export failed: {e}", "Export", wx.OK | wx.ICON_ERROR)
 
+    # NEW: one-click CSV export from the toolbar
+    def on_export_csv(self, _evt=None):
+        if self.grid.GetNumberCols() == 0:
+            wx.MessageBox("There is nothing to export yet.", "Export", wx.OK | wx.ICON_INFORMATION)
+            return
+        dlg = wx.FileDialog(
+            self,
+            "Export current results to CSV",
+            wildcard="CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+        )
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy(); return
+        path = dlg.GetPath()
+        dlg.Destroy()
+        if not path.lower().endswith(".csv"):
+            path += ".csv"
+        self._export_to_path(path, ",")
+
     def on_upload_s3(self, _evt=None):
         hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
         data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))] for r in range(self.grid.GetNumberRows())]
@@ -1385,7 +1401,6 @@ class MainWindow(wx.Frame):
                 self.grid.SetCellBackgroundColour(r, c, base)
 
         self.adjust_grid(); self._render_kpis()
-        # Only allow editing for Catalog; toolbar visibility handled by caller
         self.grid.EnableEditing(self.current_process == "Catalog")
 
     def adjust_grid(self):
