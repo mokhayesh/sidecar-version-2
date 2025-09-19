@@ -1,4 +1,3 @@
-# app/dialogs.py
 import os
 import re
 import json
@@ -61,6 +60,7 @@ class QualityRuleDialog(wx.Dialog):
         self.current_rules = current_rules
         self.loaded_rules = {}
 
+        # lighter lavender
         BG = wx.Colour(245, 242, 255)
         PANEL = wx.Colour(250, 248, 255)
         TXT = wx.Colour(45, 35, 84)
@@ -197,87 +197,202 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Synthetic Data
+# Synthetic Data — polished UI + realistic names
 # ──────────────────────────────────────────────────────────────────────────────
 class SyntheticDataDialog(wx.Dialog):
     """
-    Minimal synthetic data generator.
+    Polished synthetic data generator.
     Accepts either:
       - sample_df (DataFrame) OR
       - fields (list[str])
     """
     def __init__(self, parent, sample_df: pd.DataFrame | None = None, fields: list[str] | None = None):
-        super().__init__(parent, title="Synthetic Data", size=(600, 480),
+        super().__init__(parent, title="Synthetic Data", size=(740, 560),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
-        self._df = None
         cols_from_df = list(sample_df.columns) if isinstance(sample_df, pd.DataFrame) and len(sample_df.columns) else []
         self.sample_cols = cols_from_df or list(fields or [])
+        self._df: pd.DataFrame | None = None
 
-        pnl = wx.Panel(self)
+        BG = wx.Colour(247, 243, 255)
+        PANEL = wx.Colour(255, 255, 255)
+        ACCENT = wx.Colour(115, 102, 192)
+        TXT = wx.Colour(44, 31, 72)
+
+        self.SetBackgroundColour(BG)
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        banner = wx.Panel(self); banner.SetBackgroundColour(BG)
+        bh = wx.BoxSizer(wx.HORIZONTAL)
+        title = wx.StaticText(banner, label="Generate Synthetic Data")
+        title.SetFont(wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetForegroundColour(TXT)
+        bh.Add(title, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 8)
+        bh.AddStretchSpacer()
+        banner.SetSizer(bh)
+        outer.Add(banner, 0, wx.EXPAND)
+
+        pnl = wx.Panel(self); pnl.SetBackgroundColour(PANEL)
         v = wx.BoxSizer(wx.VERTICAL)
 
-        row_box = wx.BoxSizer(wx.HORIZONTAL)
-        row_box.Add(wx.StaticText(pnl, label="Number of rows:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
-        self.rows_spin = wx.SpinCtrl(pnl, min=1, max=100000, initial=100)
-        row_box.Add(self.rows_spin, 0, wx.RIGHT, 12)
-        v.Add(row_box, 0, wx.ALL, 10)
+        # Controls row
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(wx.StaticText(pnl, label="Number of rows:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        self.rows_spin = wx.SpinCtrl(pnl, min=1, max=200000, initial=100)
+        row.Add(self.rows_spin, 0, wx.RIGHT, 12)
 
-        v.Add(wx.StaticText(pnl, label="Columns (from current dataset if loaded):"), 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
-        self.cols_list = wx.ListBox(pnl, choices=self.sample_cols or ["col1", "col2", "col3"], style=wx.LB_EXTENDED)
-        v.Add(self.cols_list, 1, wx.EXPAND | wx.ALL, 10)
+        row.Add(wx.StaticText(pnl, label="Columns to include:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        self.cols_check = wx.CheckListBox(pnl, choices=self.sample_cols or ["col1", "col2", "col3"])
+        # default select all
+        for i in range(self.cols_check.GetCount()):
+            self.cols_check.Check(i, True)
 
+        left = wx.BoxSizer(wx.VERTICAL)
+        left.Add(self.cols_check, 1, wx.EXPAND | wx.ALL, 4)
+        btns_small = wx.BoxSizer(wx.HORIZONTAL)
+        sel_all = wx.Button(pnl, label="Select All"); sel_none = wx.Button(pnl, label="Clear")
+        btns_small.Add(sel_all, 0, wx.RIGHT, 6); btns_small.Add(sel_none, 0)
+        left.Add(btns_small, 0, wx.ALIGN_LEFT | wx.LEFT | wx.BOTTOM, 4)
+
+        row.Add(left, 1, wx.EXPAND | wx.RIGHT, 12)
+
+        # Preview grid
+        self.preview = wx.grid.Grid(pnl)
+        self.preview.CreateGrid(0, 0)
+        self.preview.EnableEditing(False)
+        self.preview.SetDefaultCellBackgroundColour(wx.Colour(255, 255, 255))
+        self.preview.SetDefaultCellTextColour(TXT)
+
+        row.Add(self.preview, 2, wx.EXPAND)
+        v.Add(row, 1, wx.EXPAND | wx.ALL, 10)
+
+        # bottom buttons
         btns = wx.BoxSizer(wx.HORIZONTAL)
-        gen = wx.Button(pnl, label="Generate")
-        ok = wx.Button(pnl, label="OK")
-        cancel = wx.Button(pnl, label="Cancel")
-        btns.Add(gen, 0, wx.ALL, 5)
-        btns.Add(ok, 0, wx.ALL, 5)
-        btns.Add(cancel, 0, wx.ALL, 5)
-        v.Add(btns, 0, wx.ALIGN_RIGHT | wx.RIGHT | wx.BOTTOM, 10)
-
-        gen.Bind(wx.EVT_BUTTON, self._on_generate)
-        ok.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_OK) if self._df is not None else wx.MessageBox("Click Generate first.", "No data", wx.OK | wx.ICON_INFORMATION))
-        cancel.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CANCEL))
+        gen = wx.Button(pnl, label="Generate Preview")
+        gen.SetBackgroundColour(ACCENT); gen.SetForegroundColour(wx.WHITE)
+        ok = wx.Button(pnl, label="OK"); cancel = wx.Button(pnl, label="Cancel")
+        btns.Add(gen, 0, wx.ALL, 6)
+        btns.AddStretchSpacer()
+        btns.Add(ok, 0, wx.ALL, 6)
+        btns.Add(cancel, 0, wx.ALL, 6)
+        v.Add(btns, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         pnl.SetSizer(v)
+        outer.Add(pnl, 1, wx.EXPAND | wx.ALL, 8)
+        self.SetSizer(outer)
+
+        # events
+        gen.Bind(wx.EVT_BUTTON, self._on_generate)
+        ok.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_OK) if self._df is not None else wx.MessageBox("Click Generate Preview first.", "No data", wx.OK | wx.ICON_INFORMATION))
+        cancel.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CANCEL))
+        sel_all.Bind(wx.EVT_BUTTON, lambda e: [self.cols_check.Check(i, True) for i in range(self.cols_check.GetCount())])
+        sel_none.Bind(wx.EVT_BUTTON, lambda e: [self.cols_check.Check(i, False) for i in range(self.cols_check.GetCount())])
+
+        # Some name/address seeds for realism
+        self.FIRST_NAMES = [
+            "Olivia","Liam","Emma","Noah","Ava","Oliver","Sophia","Elijah","Isabella","James",
+            "Mia","William","Amelia","Benjamin","Harper","Lucas","Evelyn","Henry","Abigail","Alexander",
+            "Michael","Emily","Daniel","Elizabeth","Sebastian","Avery","Jack","Sofia","Jackson","Ella",
+            "Aiden","Scarlett","Owen","Grace","Samuel","Chloe","Matthew","Victoria","Joseph","Riley",
+            "Levi","Aria","David","Lily","John","Zoey","Wyatt","Hannah","Carter","Nora"
+        ]
+        self.LAST_NAMES = [
+            "Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez",
+            "Hernandez","Lopez","Gonzalez","Wilson","Anderson","Thomas","Taylor","Moore","Jackson","Martin",
+            "Lee","Perez","Thompson","White","Harris","Sanchez","Clark","Ramirez","Lewis","Robinson"
+        ]
+        self.STREET_NAMES = ["Maple","Oak","Pine","Cedar","Elm","Birch","Willow","Hill","Lake","Sunset","Ridge","Park"]
+        self.CITIES = ["Austin","Denver","Seattle","Miami","Phoenix","Atlanta","Chicago","Dallas","Orlando","Portland"]
+        self.STATES = ["AL","AK","AZ","AR","CA","CO","CT","DC","DE","FL","GA","HI","IA","ID","IL","IN","KS","KY","LA","MA","MD","ME","MI","MN","MO","MS","MT","NC","ND","NE","NH","NJ","NM","NV","NY","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VA","VT","WA","WI","WV","WY"]
 
     def get_dataframe(self) -> pd.DataFrame:
         return self._df if isinstance(self._df, pd.DataFrame) else pd.DataFrame()
 
     def get_values(self):
-        """Compatible with main_window expectation: returns (n_rows, fields)."""
+        """Returns (n_rows, fields) — compatible with MainWindow usage."""
         n = int(self.rows_spin.GetValue())
-        cols = [self.cols_list.GetString(i) for i in range(self.cols_list.GetCount())]
-        return n, cols
+        selected = [self.cols_check.GetString(i) for i in range(self.cols_check.GetCount()) if self.cols_check.IsChecked(i)]
+        return n, (selected or self.sample_cols)
 
+    # preview/generate
     def _on_generate(self, _):
-        cols = self.sample_cols or [self.cols_list.GetString(i) for i in range(self.cols_list.GetCount())]
-        n = int(self.rows_spin.GetValue())
+        n, cols = self.get_values()
         data = {c: [self._fake_value_for(c, i) for i in range(n)] for c in cols}
         self._df = pd.DataFrame(data)
-        wx.MessageBox(f"Generated {len(self._df)} rows, {len(self._df.columns)} cols.", "Synthetic Data", wx.OK | wx.ICON_INFORMATION)
+        self._show_preview(self._df.head(50))
 
+    def _show_preview(self, df: pd.DataFrame):
+        # rebuild grid
+        self.preview.ClearGrid()
+        if self.preview.GetNumberCols(): self.preview.DeleteCols(0, self.preview.GetNumberCols())
+        if self.preview.GetNumberRows(): self.preview.DeleteRows(0, self.preview.GetNumberRows())
+
+        if df is None or df.empty:
+            return
+
+        self.preview.AppendCols(len(df.columns))
+        for i, c in enumerate(df.columns):
+            self.preview.SetColLabelValue(i, str(c))
+        self.preview.AppendRows(min(50, len(df)))
+        for r in range(min(50, len(df))):
+            for c in range(len(df.columns)):
+                self.preview.SetCellValue(r, c, "" if pd.isna(df.iat[r, c]) else str(df.iat[r, c]))
+
+    # realistic-ish column heuristics
     def _fake_value_for(self, col: str, _i: int):
         name = col.lower().strip()
+
+        def pick(seq): return random.choice(seq)
+
         if "email" in name:
-            user = "".join(random.choice(string.ascii_lowercase) for _ in range(8))
-            domain = random.choice(["gmail.com", "yahoo.com", "outlook.com", "hotmail.com"])
-            return f"{user}@{domain}"
-        if "phone" in name or "tel" in name:
-            return f"{random.randint(100,999)}-{random.randint(100,999)}-{random.randint(1000,9999)}"
+            first = pick(self.FIRST_NAMES).lower()
+            last = pick(self.LAST_NAMES).lower()
+            num = random.randint(1, 9999)
+            domain = pick(["gmail.com","yahoo.com","outlook.com","hotmail.com","example.com"])
+            return f"{first}.{last}{num}@{domain}"
+
+        if "phone" in name or "tel" in name or "mobile" in name:
+            return f"{random.randint(200,989)}-{random.randint(200,989)}-{random.randint(1000,9999)}"
+
         if "first" in name and "name" in name:
-            return random.choice(["ALICE","BOB","CAROL","DAVE","ERIN","FRANK","GRACE","HEIDI","IVAN","JUDY"])
+            return pick(self.FIRST_NAMES)
+
         if "last" in name and "name" in name:
-            return random.choice(["SMITH","JOHNSON","BROWN","WILLIAMS","JONES","MILLER","DAVIS","GARCIA","RODRIGUEZ","WILSON"])
-        if "address" in name:
-            return f"{random.randint(100,9999)} {random.choice(['E','W','N','S'])} {random.choice(['1ST','2ND','MAPLE','OAK','PINE','CEDAR'])} ST, CITY, ST {random.randint(10000,99999)}"
+            return pick(self.LAST_NAMES)
+
+        if "middle" in name and "name" in name:
+            # middle initial 70% / short name 30%
+            return pick(string.ascii_uppercase) if random.random()<0.7 else pick(self.FIRST_NAMES)[:3]
+
+        if "address" in name or "street" in name:
+            num = random.randint(100, 9999)
+            street = pick(self.STREET_NAMES)
+            st_type = pick(["St","Ave","Blvd","Rd","Ln","Dr"])
+            city = pick(self.CITIES)
+            state = pick(self.STATES)
+            zipc = random.randint(10000, 99999)
+            return f"{num} {street} {st_type}, {city}, {state} {zipc}"
+
+        if "city" in name:
+            return pick(self.CITIES)
+
+        if "state" in name:
+            return pick(self.STATES)
+
+        if "zip" in name or "postal" in name:
+            return f"{random.randint(10000,99999)}"
+
         if "loan" in name or "amount" in name or "amt" in name or "balance" in name:
-            return round(random.uniform(2500, 30000), 2)
-        if "date" in name or "dt" in name:
-            base = datetime(2021, 1, 1)
-            return (base.replace(year=2021 + random.randint(0, 4)) + pd.to_timedelta(random.randint(0, 364), unit="D")).date().isoformat()
-        return "".join(random.choice(string.ascii_uppercase) for _ in range(4))
+            return round(random.uniform(2500, 75000), 2)
+
+        if "date" in name or "dt" in name or "dob" in name:
+            base = datetime(2019, 1, 1)
+            days = random.randint(0, 6*365)
+            return (base + pd.to_timedelta(days, unit="D")).date().isoformat()
+
+        # fallback: short token/string
+        letters = string.ascii_uppercase
+        return "".join(random.choice(letters) for _ in range(random.randint(3, 6)))
 
 
 # ──────────────────────────────────────────────────────────────────────────────

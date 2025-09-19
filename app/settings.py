@@ -47,6 +47,9 @@ defaults = {
     "aws_quality_bucket": "",
     "aws_catalog_bucket": "",
     "aws_compliance_bucket": "",
+    # NEW: requested buckets
+    "aws_anomalies_bucket": "",
+    "aws_synthetic_bucket": "",
 
     # Email
     "smtp_server": "",
@@ -92,7 +95,7 @@ IMAGE_PROVIDERS = ["auto", "openai", "gemini", "stability", "none"]
 
 class SettingsWindow(wx.Frame):
     def __init__(self, parent):
-        super().__init__(parent, title="Settings", size=(560, 760))
+        super().__init__(parent, title="Settings", size=(560, 820))
         panel = wx.Panel(self)
         s = wx.GridBagSizer(6, 6)
 
@@ -200,7 +203,7 @@ class SettingsWindow(wx.Frame):
         s.Add(self.azure_region, (row, 3), flag=wx.EXPAND)
         row += 1
 
-        # AWS
+        # AWS keys/region
         s.Add(wx.StaticText(panel, label="AWS Access Key:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.aws_key = wx.TextCtrl(panel, value=defaults.get("aws_access_key_id", ""))
         s.Add(self.aws_key, (row, 1), flag=wx.EXPAND)
@@ -220,6 +223,7 @@ class SettingsWindow(wx.Frame):
         s.Add(self.aws_region, (row, 1), flag=wx.EXPAND)
         row += 1
 
+        # Buckets (including the two new ones)
         s.Add(wx.StaticText(panel, label="Profile Bucket:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.bucket_profile = wx.TextCtrl(panel, value=defaults.get("aws_profile_bucket", ""))
         s.Add(self.bucket_profile, (row, 1), flag=wx.EXPAND)
@@ -236,6 +240,16 @@ class SettingsWindow(wx.Frame):
         s.Add(wx.StaticText(panel, label="Compliance Bucket:"), (row, 2), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.bucket_compliance = wx.TextCtrl(panel, value=defaults.get("aws_compliance_bucket", ""))
         s.Add(self.bucket_compliance, (row, 3), flag=wx.EXPAND)
+        row += 1
+
+        # NEW ROW
+        s.Add(wx.StaticText(panel, label="Anomalies Bucket:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
+        self.bucket_anomalies = wx.TextCtrl(panel, value=defaults.get("aws_anomalies_bucket", ""))
+        s.Add(self.bucket_anomalies, (row, 1), flag=wx.EXPAND)
+
+        s.Add(wx.StaticText(panel, label="Synthetic Data Bucket:"), (row, 2), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
+        self.bucket_synth = wx.TextCtrl(panel, value=defaults.get("aws_synthetic_bucket", ""))
+        s.Add(self.bucket_synth, (row, 3), flag=wx.EXPAND)
         row += 1
 
         # Email
@@ -375,6 +389,9 @@ class SettingsWindow(wx.Frame):
         defaults["aws_quality_bucket"] = self.bucket_quality.GetValue().strip()
         defaults["aws_catalog_bucket"] = self.bucket_catalog.GetValue().strip()
         defaults["aws_compliance_bucket"] = self.bucket_compliance.GetValue().strip()
+        # Save new buckets
+        defaults["aws_anomalies_bucket"] = self.bucket_anomalies.GetValue().strip()
+        defaults["aws_synthetic_bucket"] = self.bucket_synth.GetValue().strip()
 
         defaults["smtp_server"] = self.smtp_server.GetValue().strip()
         defaults["smtp_port"] = self.smtp_port.GetValue().strip()

@@ -465,7 +465,9 @@ class MainWindow(wx.Frame):
     @staticmethod
     def _as_df(rows, cols):
         df = pd.DataFrame(rows, columns=cols)
-        return df.map(lambda x: None if (x is None or (isinstance(x, str) and x.strip() == "")) else x)
+        # Replace blank strings with None/NA without the applymap FutureWarning
+        df = df.replace(r"^\s*$", pd.NA, regex=True)
+        return df
 
     def _compute_profile_metrics(self, df: pd.DataFrame):
         total_cells = df.shape[0] * max(1, df.shape[1])
@@ -538,7 +540,8 @@ class MainWindow(wx.Frame):
         self.knowledge_files = [x for x in new_list if not (x in seen or seen.add(x))]
         self._update_knowledge_label_and_env()
         self.kernel.log("load_knowledge_files",
-                        count=len(self._get_prioritized_knowledge()),
+                        count=len(self._get_prioritized_knowledge())),
+        self.kernel.log("load_knowledge_files_detail",
                         files=[os.path.basename(p) for p in self._get_prioritized_knowledge()])
 
     def _load_text_file(self, path): return open(path, "r", encoding="utf-8", errors="ignore").read()
@@ -603,7 +606,7 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Genius", wx.OK | wx.ICON_ERROR)
 
-    # Synthetic data
+    # Synthetic data — NAME realism + set process
     @staticmethod
     def _most_common_format(strings, default_mask="DDD-DDD-DDDD"):
         def mask_one(s): return re.sub(r"\d", "D", s)
@@ -623,6 +626,26 @@ class MainWindow(wx.Frame):
             return vals[-1]
         return pick
 
+    # common name pools (lower-case; we capitalize when emitting)
+    _FIRST_NAMES = [
+        "james","mary","robert","patricia","john","jennifer","michael","linda","william","elizabeth",
+        "david","barbara","richard","susan","joseph","jessica","thomas","sarah","charles","karen",
+        "christopher","nancy","daniel","lisa","matthew","margaret","anthony","betty","mark","sandra",
+        "donald","ashley","steven","kimberly","paul","emily","andrew","donna","joshua","michelle",
+        "kevin","carol","brian","amanda","george","dorothy","timothy","melissa","ronald","deborah",
+        "edward","stephanie","jason","rebecca","jeffrey","sharon","ryan","laura","jacob","cynthia",
+        "gary","kathleen","nicholas","amy","eric","shirley","jonathan","angela","stephen","helen",
+        "larry","anna","justin","brenda","scott","pamela","brandon","nicole","benjamin","emma",
+        "samuel","samantha","gregory","katherine","frank","christine","alexander","debra","raymond","rachel"
+    ]
+    _LAST_NAMES = [
+        "smith","johnson","williams","brown","jones","garcia","miller","davis","rodriguez","martinez",
+        "hernandez","lopez","gonzalez","wilson","anderson","thomas","taylor","moore","jackson","martin",
+        "lee","perez","thompson","white","harris","sanchez","clark","ramirez","lewis","robinson",
+        "walker","young","allen","king","wright","scott","torres","nguyen","hill","flores",
+        "green","adams","nelson","baker","hall","rivera","campbell","mitchell","carter","roberts"
+    ]
+
     def _build_generators(self, src_df: pd.DataFrame, fields):
         gens = {}
         for col in fields:
@@ -630,23 +653,67 @@ class MainWindow(wx.Frame):
             series = src_df[col] if col in src_df.columns else pd.Series([], dtype=object)
             col_vals = [v for v in series.tolist() if (v is not None and str(v).strip() != "")]
             col_strs = [str(v) for v in col_vals]
+
+            # --- email
             if "email" in lower:
                 domains = [s.split("@",1)[1].lower() for s in col_strs if "@" in s]
                 dom = self._sample_with_weights(domains or ["gmail.com","yahoo.com","outlook.com","example.com"])
                 pick = self._sample_with_weights(col_vals) if col_vals else None
-                gens[col] = (lambda _row, p=pick, d=dom: (p() if p and random.random()<0.7 else f"user{random.randint(1000,9999)}@{d()}"))
+                gens[col] = (lambda _row, p=pick, d=dom:
+                             (p() if p and random.random()<0.65 else f"user{random.randint(1000,9999)}@{d()}"))
                 continue
+
+            # --- phone
             if any(k in lower for k in ["phone","mobile","cell","telephone"]):
                 mask = self._most_common_format([s for s in col_strs if re.search(r"\d", s)])
-                gens[col] = lambda _row, m=mask: "".join(str(random.randint(0,9)) if ch=="D" else ch for ch in m); continue
+                gens[col] = lambda _row, m=mask: "".join(str(random.randint(0,9)) if ch=="D" else ch for ch in m)
+                continue
+
+            # --- dates
             if "date" in lower or "dob" in lower:
                 dmax=datetime.today(); dmin=dmax-timedelta(days=3650); delta=(dmax-dmin).days or 365
-                gens[col]=lambda _row, a=dmin, d=delta: (a+timedelta(days=random.randint(0, max(1,d)))).strftime("%Y-%m-%d"); continue
+                gens[col]=lambda _row, a=dmin, d=delta: (a+timedelta(days=random.randint(0, max(1,d)))).strftime("%Y-%m-%d")
+                continue
+
+            # --- first/last/middle names with realistic pools
+            def cap(s: str) -> str:
+                s = str(s).strip()
+                return s[:1].upper() + s[1:].lower() if s else s
+
+            if "first" in lower and "name" in lower:
+                # 70% sample from existing values (if any), else from common names
+                existing = [cap(v) for v in col_vals if isinstance(v, str)]
+                pick_existing = self._sample_with_weights(existing) if existing else None
+                gens[col] = (lambda _r, pe=pick_existing:
+                             (pe() if pe and random.random()<0.7 else cap(random.choice(self._FIRST_NAMES))))
+                continue
+
+            if "last" in lower and "name" in lower:
+                existing = [cap(v) for v in col_vals if isinstance(v, str)]
+                pick_existing = self._sample_with_weights(existing) if existing else None
+                gens[col] = (lambda _r, pe=pick_existing:
+                             (pe() if pe and random.random()<0.7 else cap(random.choice(self._LAST_NAMES))))
+                continue
+
+            if "middle" in lower and "name" in lower:
+                # Prefer initials; occasionally emit full names
+                def middle():
+                    if random.random() < 0.8:
+                        return cap(random.choice(self._FIRST_NAMES))[0]
+                    return cap(random.choice(self._FIRST_NAMES))
+                gens[col] = lambda _r: middle()
+                continue
+
+            # --- categorical fields with few distinct values
             uniq = set(col_vals)
             if uniq and len(uniq) <= 50:
-                gens[col] = self._sample_with_weights(col_vals); continue
+                gens[col] = self._sample_with_weights(col_vals)
+                continue
+
+            # --- default: sample like data or generate letters
             if col_vals:
-                pick = self._sample_with_weights(col_vals); gens[col]=lambda _r, p=pick: p()
+                pick = self._sample_with_weights(col_vals)
+                gens[col]=lambda _r, p=pick: p()
             else:
                 letters="abcdefghijklmnopqrstuvwxyz"
                 gens[col]=lambda _r: "".join(random.choice(letters) for _ in range(random.randint(5,10)))
@@ -657,8 +724,7 @@ class MainWindow(wx.Frame):
             wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
             return
         src_df = pd.DataFrame(self.raw_data, columns=self.headers)
-        # The dialog now supports both signatures; pass both for safety.
-        dlg = SyntheticDataDialog(self, sample_df=src_df, fields=list(self.headers))
+        dlg = SyntheticDataDialog(self, fields=list(self.headers))
         if hasattr(dlg, "ShowModal"):
             if dlg.ShowModal() != wx.ID_OK:
                 dlg.Destroy(); return
@@ -688,6 +754,7 @@ class MainWindow(wx.Frame):
         hdr = list(df.columns); data = df.values.tolist()
         self.headers = hdr; self.raw_data = data
         self._display(hdr, data); self._reset_kpis_for_new_dataset(hdr, data)
+        self.current_process = "Synthetic Data"  # so S3 upload can route to a Synthetic bucket
         self.kernel.log("synthetic_generated", rows=len(data), cols=len(hdr), fields=hdr)
 
     # MDM helpers and action (unchanged functionality)
@@ -735,8 +802,7 @@ class MainWindow(wx.Frame):
             ea=self._norm_email(a.get(cols["email"])); eb=self._norm_email(b.get(cols["email"]))
             if ea and eb: parts.append(1.0 if ea==eb else self._sim(ea,eb)); weights.append(0.5)
         if use_phone and cols.get("phone"):
-            pa = self._norm_phone(a.get(cols["phone"])); pb = self._norm_phone(b.get(cols["phone"]))
-
+            pa=self._norm_phone(a.get(cols["phone"])); pb=self._norm_phone(b.get(cols["phone"]))
             if pa and pb: parts.append(1.0 if pa==pb else self._sim(pa,pb)); weights.append(0.5)
         if use_name and (cols.get("first") or cols.get("last")):
             fa=self._norm_name(a.get(cols.get("first"))); fb=self._norm_name(b.get(cols.get("first")))
@@ -945,6 +1011,7 @@ class MainWindow(wx.Frame):
                 hdr, data = list(df.columns), df.values.tolist(); count = 0
             self.metrics["anomalies"] = count
             self._render_kpis()
+            self.current_process = "Anomalies"   # ensure S3 bucket routing
             self.kernel.log("run_detect_anomalies", anomalies=count)
 
         elif proc_name == "Catalog":
@@ -1094,7 +1161,7 @@ class MainWindow(wx.Frame):
         for line in text.splitlines():
             line=line.strip()
             if not line or line.startswith("#"): continue
-            parts=line.split(maxsplit=1)  # ← fixed
+            parts=line.split(maxsplit=1)   # ← fixed bug (was split(maxsplit(1)))
             action=parts[0]; arg=parts[1] if len(parts)==2 else None
             t={"action": action}
             if arg:
@@ -1177,9 +1244,12 @@ class MainWindow(wx.Frame):
         hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
         data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))] for r in range(self.grid.GetNumberRows())]
         try:
-            msg = upload_to_s3(self.current_process or "Unknown", hdr, data)
+            # Ensure process names that match buckets you plan to add in Settings:
+            # "Profile", "Quality", "Catalog", "Compliance", "Anomalies", "Synthetic Data", "MDM"
+            process = (self.current_process or "Unknown")
+            msg = upload_to_s3(process, hdr, data)
             wx.MessageBox(msg, "Upload", wx.OK | wx.ICON_INFORMATION)
-            self.kernel.log("upload_s3", rows=len(data), cols=len(hdr), process=self.current_process or "Unknown")
+            self.kernel.log("upload_s3", rows=len(data), cols=len(hdr), process=process)
         except Exception as e:
             wx.MessageBox(f"Upload failed: {e}", "Upload", wx.OK | wx.ICON_ERROR)
 
