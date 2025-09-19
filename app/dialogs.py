@@ -950,42 +950,64 @@ class DataBuddyDialog(wx.Dialog):
             pass
         self._set_tts_status("stopped")
 
+    def _speak_offline_pyttsx3(self, text: str):
+        """Pure offline fallback; uses Windows SAPI via pyttsx3."""
+        if not pyttsx3:
+            self._set_tts_status("offline engine missing")
+            return
+        try:
+            self._set_tts_status("speaking (offline)")
+            eng = pyttsx3.init()
+            # map voice choice if available
+            want = (self.voice.GetStringSelection() or "").lower()
+            try:
+                for v in eng.getProperty("voices"):
+                    vname = (getattr(v, "name", "") or "").lower()
+                    if ("guy" in want and "guy" in vname) or ("aria" in want and "aria" in vname) or ("sonia" in want and "sonia" in vname):
+                        eng.setProperty("voice", v.id)
+                        break
+            except Exception:
+                pass
+            eng.say(text)
+            eng.runAndWait()
+            self._set_tts_status("idle")
+        except Exception as e:
+            self._set_tts_status(f"offline error: {e}")
+
     def speak(self, text: str):
-        """Synthesize with edge-tts to temp MP3, then play via pygame in a worker thread."""
+        """Synthesize with edge-tts to temp MP3, then play via pygame; on failure, fall back to pyttsx3."""
         if not text:
             return
 
         # stop any current playback
         self.on_stop_voice(None)
 
+        # provider mode
+        tts_provider = (defaults.get("tts_provider") or os.environ.get("TTS_PROVIDER") or "auto").lower().strip()
         voice = self.voice.GetStringSelection() or "en-US-GuyNeural"
+
         with self._tts_lock:
             self._tts_stop_flag = False
             self._tts_tmpfile = None
 
         def worker():
+            # If user forced offline, skip edge-tts entirely
+            if tts_provider == "offline":
+                self._speak_offline_pyttsx3(text)
+                return
+
+            out_path = None
+            # Try edge-tts first
             try:
+                if edge_tts is None:
+                    raise RuntimeError("edge-tts not installed")
                 self._set_tts_status("synthesizing…")
-                # synthesize (edge-tts preferred)
                 out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-                if edge_tts:
-                    import asyncio
-                    async def _run():
-                        comm = edge_tts.Communicate(text, voice=voice)
-                        await comm.save(out_path)
-                    asyncio.run(_run())
-                elif gTTS:
-                    gTTS(text).save(out_path)
-                elif pyttsx3:
-                    # pyttsx3 is offline; play directly without saving
-                    eng = pyttsx3.init()
-                    eng.say(text)
-                    eng.runAndWait()
-                    self._set_tts_status("idle")
-                    return
-                else:
-                    self._set_tts_status("unavailable")
-                    return
+                import asyncio
+                async def _run():
+                    comm = edge_tts.Communicate(text, voice=voice)
+                    await comm.save(out_path)
+                asyncio.run(_run())
 
                 with self._tts_lock:
                     if self._tts_stop_flag:
@@ -995,7 +1017,7 @@ class DataBuddyDialog(wx.Dialog):
                         return
                     self._tts_tmpfile = out_path
 
-                # play
+                # play with pygame
                 if not pygame:
                     self._set_tts_status("ready (no pygame)")
                     return
@@ -1016,9 +1038,23 @@ class DataBuddyDialog(wx.Dialog):
                     except Exception:
                         pass
                 self._set_tts_status("idle")
+                return
 
             except Exception as e:
-                self._set_tts_status(f"error: {e}")
+                # common online failure (e.g., 401) -> fall back to offline
+                self._set_tts_status(f"edge fail, fallback: {e}")
+
+                # clean temp if created
+                if out_path:
+                    try: os.remove(out_path)
+                    except Exception: pass
+
+                # if provider is forced 'edge', stop here
+                if tts_provider == "edge":
+                    return
+
+                # try offline pyttsx3
+                self._speak_offline_pyttsx3(text)
 
         self._tts_thread = threading.Thread(target=worker, daemon=True)
         self._tts_thread.start()
