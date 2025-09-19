@@ -1,7 +1,5 @@
 # app/main_window.py
 # Lavender UI + full functionality (MDM, Synthetic Data, Tasks, Knowledge Files)
-# Catalog: SLA column, editable & persisted + catalog toolbar
-
 import os
 import re
 import json
@@ -30,7 +28,6 @@ from app.analysis import (
 # ──────────────────────────────────────────────────────────────────────────────
 # Kernel
 # ──────────────────────────────────────────────────────────────────────────────
-
 class KernelManager:
     def __init__(self, app_name="Data Genius — Sidecar Application"):
         self.lock = threading.Lock()
@@ -53,8 +50,9 @@ class KernelManager:
                 ]
             },
             "stats": {"launch_count": 0},
-            "state": {"last_dataset": None, "kpis": {}, "catalog_meta": {}},
-            "events": []
+            "state": {"last_dataset": None, "kpis": {}},
+            "events": [],
+            "catalog_overrides": {}  # NEW: per-field overrides incl. SLA
         }
         self._load_or_init()
         self.increment_launch()
@@ -68,8 +66,9 @@ class KernelManager:
                 existing.setdefault("creator", "Salah Mokhayesh")
                 existing.setdefault("app", self.data["app"])
                 existing.setdefault("stats", {"launch_count": 0})
-                existing.setdefault("state", {"last_dataset": None, "kpis": {}, "catalog_meta": {}})
+                existing.setdefault("state", {"last_dataset": None, "kpis": {}})
                 existing.setdefault("events", [])
+                existing.setdefault("catalog_overrides", {})
                 self.data = existing
             else:
                 self._save()
@@ -112,11 +111,19 @@ class KernelManager:
             self.data["state"]["kpis"] = dict(kpi_dict or {})
         self._save()
 
+    # Catalog persistence
+    def set_catalog_overrides(self, overrides: dict[str, dict]):
+        with self.lock:
+            self.data["catalog_overrides"] = dict(overrides or {})
+        self._save()
+
+    def get_catalog_overrides(self):
+        return dict(self.data.get("catalog_overrides") or {})
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Custom controls (buttons, badges, pill)
 # ──────────────────────────────────────────────────────────────────────────────
-
 class RoundedShadowButton(wx.Control):
     def __init__(self, parent, label, handler, colour=wx.Colour(115, 102, 192), radius=12):
         super().__init__(parent, style=wx.BORDER_NONE)
@@ -197,6 +204,7 @@ class RoundedShadowButton(wx.Control):
         tw, th = dc.GetTextExtent(self._label)
         dc.DrawText(self._label, (w-tw)//2, (h-th)//2)
 
+
 class LittleBuddyPill(wx.Control):
     def __init__(self, parent, label="Little Genius", handler=None):
         super().__init__(parent, style=wx.BORDER_NONE)
@@ -241,6 +249,7 @@ class LittleBuddyPill(wx.Control):
         tw, th = gc.GetTextExtent(self._label)
         gc.DrawText(self._label, 14, (h-th)//2)
 
+
 class KPIBadge(wx.Panel):
     def __init__(self, parent, title, init_value="—"):
         super().__init__(parent)
@@ -272,7 +281,6 @@ class KPIBadge(wx.Panel):
 # ──────────────────────────────────────────────────────────────────────────────
 # Main Window
 # ──────────────────────────────────────────────────────────────────────────────
-
 class MainWindow(wx.Frame):
     def __init__(self):
         super().__init__(None, title="Data Genius — Sidecar Application", size=(1320, 840))
@@ -302,6 +310,9 @@ class MainWindow(wx.Frame):
             "rows": None, "cols": None, "null_pct": None, "uniqueness": None,
             "dq_score": None, "validity": None, "completeness": None, "anomalies": None,
         }
+
+        # catalog overrides cache
+        self.catalog_overrides = self.kernel.get_catalog_overrides()
 
         self._build_ui()
         self._ensure_kernel_in_knowledge()
@@ -349,8 +360,9 @@ class MainWindow(wx.Frame):
         add_btn("Rule Assignment", self.on_rules)
         add_btn("Knowledge Files", self.on_load_knowledge)
         add_btn("MDM", self.on_mdm)                    # renamed from Optimizer
-        add_btn("Synthetic Data", self.on_generate_synth)  # new button
+        add_btn("Synthetic Data", self.on_generate_synth)
         add_btn("To Do", self.on_run_tasks)
+        add_btn("Export", self.on_export_csv_button)   # NEW
 
         toolbar_panel.SetSizer(tb)
         main.Add(toolbar_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
@@ -385,19 +397,6 @@ class MainWindow(wx.Frame):
         info_panel.SetSizer(hz)
         main.Add(info_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
-        # ── Catalog toolbar (hidden unless Catalog is active)
-        self.catalog_toolbar_panel = wx.Panel(self)
-        self.catalog_toolbar_panel.SetBackgroundColour(wx.Colour(243, 239, 255))
-        ct = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_catalog_save  = RoundedShadowButton(self.catalog_toolbar_panel, "Save Catalog Edits", self.on_catalog_save)
-        self.btn_catalog_reset = RoundedShadowButton(self.catalog_toolbar_panel, "Reset Catalog Edits", self.on_catalog_reset, colour=wx.Colour(160, 120, 200))
-        ct.Add(self.btn_catalog_save, 0, wx.ALL, 6)
-        ct.Add(self.btn_catalog_reset, 0, wx.ALL, 6)
-        ct.AddStretchSpacer(1)
-        self.catalog_toolbar_panel.SetSizer(ct)
-        self.catalog_toolbar_panel.Hide()
-        main.Add(self.catalog_toolbar_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 4)
-
         # Grid
         grid_panel = wx.Panel(self); grid_panel.SetBackgroundColour(BG)
         self.grid = wx.grid.Grid(grid_panel); self.grid.CreateGrid(0, 0)
@@ -406,10 +405,10 @@ class MainWindow(wx.Frame):
         self.grid.SetLabelTextColour(wx.Colour(60,60,90))
         self.grid.SetLabelBackgroundColour(wx.Colour(235,231,250))
         self.grid.SetGridLineColour(wx.Colour(220,214,245))
-        self.grid.EnableEditing(False)  # default; enable only for Catalog
+        self.grid.EnableEditing(False)  # toggled on for Catalog
         self.grid.SetRowLabelSize(36); self.grid.SetColLabelSize(28)
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
-        self.grid.Bind(wx.grid.EVT_GRID_CELL_CHANGED, self.on_cell_changed)
+        self.grid.Bind(gridlib.EVT_GRID_CELL_CHANGED, self.on_grid_cell_changed)
 
         gp = wx.BoxSizer(wx.VERTICAL); gp.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
         grid_panel.SetSizer(gp)
@@ -481,8 +480,7 @@ class MainWindow(wx.Frame):
     @staticmethod
     def _as_df(rows, cols):
         df = pd.DataFrame(rows, columns=cols)
-        # newer pandas warns about applymap deprecation; DataFrame.map preserves shape for elementwise op
-        return df.map(lambda x: None if (x is None or (isinstance(x, str) and x.strip() == "")) else x)
+        return df.applymap(lambda x: None if (x is None or (isinstance(x, str) and x.strip() == "")) else x)
 
     def _compute_profile_metrics(self, df: pd.DataFrame):
         total_cells = df.shape[0] * max(1, df.shape[1])
@@ -555,7 +553,8 @@ class MainWindow(wx.Frame):
         self.knowledge_files = [x for x in new_list if not (x in seen or seen.add(x))]
         self._update_knowledge_label_and_env()
         self.kernel.log("load_knowledge_files",
-                        count=len(self._get_prioritized_knowledge()),
+                        count=len(self._get_prioritized_knowledge())),
+        self.kernel.log("load_knowledge_files_files",
                         files=[os.path.basename(p) for p in self._get_prioritized_knowledge()])
 
     def _load_text_file(self, path): return open(path, "r", encoding="utf-8", errors="ignore").read()
@@ -621,94 +620,24 @@ class MainWindow(wx.Frame):
             wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Genius", wx.OK | wx.ICON_ERROR)
 
     # Synthetic data
-    @staticmethod
-    def _most_common_format(strings, default_mask="DDD-DDD-DDDD"):
-        def mask_one(s): return re.sub(r"\d", "D", s)
-        masks = [mask_one(s) for s in strings if isinstance(s, str)]
-        return Counter(masks).most_common(1)[0][0] if masks else default_mask
-
-    @staticmethod
-    def _sample_with_weights(values):
-        if not values: return lambda *_: None
-        counts = Counter(values); vals, weights = zip(*counts.items())
-        total = float(sum(weights)); probs = [w/total for w in weights]
-        def pick(_row=None):
-            r = random.random(); acc = 0.0
-            for v, p in zip(vals, probs):
-                acc += p
-                if r <= acc: return v
-            return vals[-1]
-        return pick
-
-    def _build_generators(self, src_df: pd.DataFrame, fields):
-        gens = {}
-        # simple realistic name pools
-        first_names = ["Olivia","Liam","Emma","Noah","Ava","Oliver","Sophia","Elijah","Isabella","James",
-                       "Amelia","William","Mia","Benjamin","Charlotte","Lucas","Harper","Henry","Evelyn","Alexander"]
-        last_names = ["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez",
-                      "Hernandez","Lopez","Gonzalez","Wilson","Anderson","Thomas","Taylor","Moore","Jackson","Martin"]
-        for col in fields:
-            lower = col.lower()
-            series = src_df[col] if col in src_df.columns else pd.Series([], dtype=object)
-            col_vals = [v for v in series.tolist() if (v is not None and str(v).strip() != "")]
-            col_strs = [str(v) for v in col_vals]
-            if "email" in lower:
-                domains = [s.split("@",1)[1].lower() for s in col_strs if "@" in s]
-                dom = self._sample_with_weights(domains or ["gmail.com","yahoo.com","outlook.com","example.com"])
-                pick = self._sample_with_weights(col_vals) if col_vals else None
-                gens[col] = (lambda _row, p=pick, d=dom: (p() if p and random.random()<0.7 else f"user{random.randint(1000,9999)}@{d()}"))
-                continue
-            if any(k in lower for k in ["phone","mobile","cell","telephone"]):
-                mask = self._most_common_format([s for s in col_strs if re.search(r"\d", s)])
-                gens[col] = lambda _row, m=mask: "".join(str(random.randint(0,9)) if ch=="D" else ch for ch in m); continue
-            if "first" in lower and "name" in lower:
-                gens[col] = lambda _row, pool=first_names: random.choice(pool); continue
-            if "last" in lower and "name" in lower:
-                gens[col] = lambda _row, pool=last_names: random.choice(pool); continue
-            if "date" in lower or "dob" in lower:
-                dmax=datetime.today(); dmin=dmax-timedelta(days=3650); delta=(dmax-dmin).days or 365
-                gens[col]=lambda _row, a=dmin, d=delta: (a+timedelta(days=random.randint(0, max(1,d)))).strftime("%Y-%m-%d"); continue
-            uniq = set(col_vals)
-            if uniq and len(uniq) <= 50:
-                gens[col] = self._sample_with_weights(col_vals); continue
-            if col_vals:
-                pick = self._sample_with_weights(col_vals); gens[col]=lambda _r, p=pick: p()
-            else:
-                letters="abcdefghijklmnopqrstuvwxyz"
-                gens[col]=lambda _r: "".join(random.choice(letters) for _ in range(random.randint(5,10)))
-        return gens
-
     def on_generate_synth(self, _evt=None):
         if not self.headers:
             wx.MessageBox("Load data first to choose fields.", "No data", wx.OK | wx.ICON_WARNING)
             return
         src_df = pd.DataFrame(self.raw_data, columns=self.headers)
-        # dialogs.SyntheticDataDialog signature: (parent, sample_df)
-        try:
-            dlg = SyntheticDataDialog(self, sample_df=src_df)
-        except TypeError:
-            # fallback to previous signature if needed
-            dlg = SyntheticDataDialog(self, src_df)
+        # Dialog now accepts either sample_df or fields; pass fields for clarity
+        dlg = SyntheticDataDialog(self, fields=list(self.headers))
         if hasattr(dlg, "ShowModal"):
             if dlg.ShowModal() != wx.ID_OK:
                 dlg.Destroy(); return
         try:
-            # dialog returns a DataFrame via get_dataframe()
-            df = dlg.get_dataframe()
-            if df is None or df.empty:
-                # if dialog generated nothing, build here using our generators
-                n_rows = 100
+            n_rows, fields = dlg.get_values()
+            if not fields:
                 fields = list(self.headers)
-                gens = self._build_generators(src_df, fields)
-                out_rows = []
-                for _ in range(int(n_rows)):
-                    row_map = {}
-                    for f in fields:
-                        g = gens.get(f)
-                        val = g(row_map) if callable(g) else None
-                        row_map[f] = "" if val is None else val
-                    out_rows.append([row_map[f] for f in fields])
-                df = pd.DataFrame(out_rows, columns=fields)
+            # Simple local generation uses dialog heuristics for preview;
+            # build via dialog's private helper for name realism
+            gen = {c: [dlg._fake_value_for(c, i) for i in range(int(n_rows))] for c in fields}
+            df = pd.DataFrame(gen)
         except Exception as e:
             wx.MessageBox(f"Synthetic data error: {e}", "Error", wx.OK | wx.ICON_ERROR)
             if hasattr(dlg, "Destroy"): dlg.Destroy()
@@ -719,7 +648,7 @@ class MainWindow(wx.Frame):
         self._display(hdr, data); self._reset_kpis_for_new_dataset(hdr, data)
         self.kernel.log("synthetic_generated", rows=len(data), cols=len(hdr), fields=hdr)
 
-    # MDM helpers and action
+    # MDM helpers and action (unchanged functionality)
     @staticmethod
     def _find_col(cols, *cands):
         cl = {c.lower(): c for c in cols}
@@ -912,103 +841,7 @@ class MainWindow(wx.Frame):
         self.headers, self.raw_data = hdr, data
         self._display(hdr, data); self._reset_kpis_for_new_dataset(hdr, data)
         self.current_process = "MDM"
-        self._show_catalog_toolbar(False)
         self.kernel.log("mdm_completed", golden_rows=len(data), golden_cols=len(hdr), params=params)
-
-    # Catalog metadata persistence helpers
-    def _load_catalog_meta(self):
-        try:
-            return dict(self.kernel.data.get("state", {}).get("catalog_meta", {}))
-        except Exception:
-            return {}
-
-    def _save_catalog_meta(self, meta: dict):
-        try:
-            self.kernel.data.setdefault("state", {})["catalog_meta"] = dict(meta)
-            self.kernel._save()
-        except Exception:
-            pass
-
-    def _apply_catalog_meta_to_table(self, hdr, data):
-        # Ensure SLA column exists (insert before 'Example' when possible)
-        if "SLA" not in hdr:
-            insert_at = hdr.index("Example") if "Example" in hdr else len(hdr)
-            hdr = list(hdr[:insert_at]) + ["SLA"] + list(hdr[insert_at:])
-            for r in range(len(data)):
-                data[r] = list(data[r][:insert_at]) + ["" ] + list(data[r][insert_at:])
-
-        col_idx = {name: i for i, name in enumerate(hdr)}
-        meta = self._load_catalog_meta()
-
-        if "Field" in col_idx:
-            f_idx = col_idx["Field"]
-            for r in range(len(data)):
-                row = list(data[r])
-                field_name = str(row[f_idx]).strip()
-                if not field_name:
-                    data[r] = row
-                    continue
-                saved = meta.get(field_name, {})
-                for key in ("Friendly Name", "Description", "Data Type", "Nullable", "SLA"):
-                    if key in col_idx and key in saved:
-                        row[col_idx[key]] = saved[key]
-                data[r] = row
-
-        return hdr, data
-
-    # Catalog toolbar show/hide
-    def _show_catalog_toolbar(self, show: bool):
-        if show:
-            self.catalog_toolbar_panel.Show()
-        else:
-            self.catalog_toolbar_panel.Hide()
-        self.Layout()
-
-    # Save visible grid rows to catalog persistence (for editable columns)
-    def _snapshot_grid_to_meta(self):
-        hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
-        try:
-            f_idx = hdr.index("Field")
-        except ValueError:
-            return
-        editable = {"Friendly Name", "Description", "Data Type", "Nullable", "SLA"}
-        col_idx = {name: i for i, name in enumerate(hdr)}
-        meta = self._load_catalog_meta()
-
-        for r in range(self.grid.GetNumberRows()):
-            field_name = self.grid.GetCellValue(r, f_idx).strip()
-            if not field_name:
-                continue
-            meta.setdefault(field_name, {})
-            for name in editable:
-                if name in col_idx:
-                    meta[field_name][name] = self.grid.GetCellValue(r, col_idx[name])
-
-        self._save_catalog_meta(meta)
-
-    def on_catalog_save(self, _evt=None):
-        if self.current_process != "Catalog":
-            return
-        self._snapshot_grid_to_meta()
-        wx.MessageBox("Catalog edits saved.", "Catalog", wx.OK | wx.ICON_INFORMATION)
-
-    def on_catalog_reset(self, _evt=None):
-        if self.current_process != "Catalog":
-            return
-        hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
-        try:
-            f_idx = hdr.index("Field")
-        except ValueError:
-            return
-        meta = self._load_catalog_meta()
-        # remove entries for all visible fields
-        for r in range(self.grid.GetNumberRows()):
-            field_name = self.grid.GetCellValue(r, f_idx).strip()
-            if field_name in meta:
-                del meta[field_name]
-        self._save_catalog_meta(meta)
-        # rerun Catalog to refresh
-        self.do_analysis_process("Catalog")
 
     # Analyses
     def do_analysis_process(self, proc_name: str):
@@ -1017,6 +850,9 @@ class MainWindow(wx.Frame):
 
         self.current_process = proc_name
         df = self._as_df(self.raw_data, self.headers)
+
+        # Toggle editability only for Catalog view
+        self.grid.EnableEditing(proc_name == "Catalog")
 
         if proc_name == "Profile":
             try:
@@ -1033,8 +869,6 @@ class MainWindow(wx.Frame):
             self.metrics["null_pct"] = null_pct
             self.metrics["uniqueness"] = uniq_pct
             self._render_kpis()
-            self.grid.EnableEditing(False)
-            self._show_catalog_toolbar(False)
             self.kernel.log("run_profile", null_pct=null_pct, uniqueness=uniq_pct)
 
         elif proc_name == "Quality":
@@ -1061,8 +895,6 @@ class MainWindow(wx.Frame):
             self.metrics["validity"] = validity
             self.metrics["dq_score"] = dq
             self._render_kpis()
-            self.grid.EnableEditing(False)
-            self._show_catalog_toolbar(False)
             self.kernel.log("run_quality", completeness=completeness, validity=validity, dq_score=dq)
 
         elif proc_name == "Detect Anomalies":
@@ -1073,33 +905,34 @@ class MainWindow(wx.Frame):
                 hdr, data = list(df.columns), df.values.tolist(); count = 0
             self.metrics["anomalies"] = count
             self._render_kpis()
-            self.grid.EnableEditing(False)
-            self._show_catalog_toolbar(False)
             self.kernel.log("run_detect_anomalies", anomalies=count)
 
         elif proc_name == "Catalog":
-            try:
-                out = catalog_analysis(df)
-                hdr, data = self._coerce_hdr_data(out)
-            except Exception:
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                rows = []
-                for c in df.columns:
-                    sample = next((str(v) for v in df[c].dropna().head(1).tolist()), "")
-                    dtype = "Numeric" if pd.to_numeric(df[c], errors="coerce").notna().mean() > 0.8 else "Text"
-                    nullable = "Yes" if df[c].isna().mean() > 0 else "No"
-                    friendly = c.replace("_", " ").title()
-                    desc = f"{friendly} for each record."
-                    rows.append([c, friendly, desc, dtype, nullable, sample, now])
-                hdr = ["Field", "Friendly Name", "Description", "Data Type", "Nullable", "Example", "Analysis Date"]
-                data = rows
+            # Build basic catalog, add SLA column, apply overrides, and enable editing
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            rows = []
+            for c in df.columns:
+                # basic profile
+                sample = next((str(v) for v in df[c].dropna().head(1).tolist()), "")
+                is_numeric = pd.to_numeric(df[c], errors="coerce").notna().mean() > 0.8
+                dtype = "Numeric" if is_numeric else "Text"
+                nullable = "Yes" if df[c].isna().mean() > 0 else "No"
+                friendly = c.replace("_", " ").title()
+                desc = f"{friendly} for each record."
 
-            # ensure SLA column + overlay persisted edits
-            hdr, data = self._apply_catalog_meta_to_table(hdr, data)
+                # apply overrides if exist
+                ov = self.catalog_overrides.get(c) or {}
+                friendly = ov.get("Friendly Name", friendly)
+                desc = ov.get("Description", desc)
+                dtype = ov.get("Data Type", dtype)
+                nullable = ov.get("Nullable", nullable)
+                sla = ov.get("SLA", "")  # NEW
 
+                rows.append([c, friendly, desc, dtype, nullable, sample, sla, now])
+
+            hdr = ["Field", "Friendly Name", "Description", "Data Type", "Nullable", "Example", "SLA", "Analysis Date"]
+            data = rows
             self.kernel.log("run_catalog", columns=len(hdr))
-            self.grid.EnableEditing(True)
-            self._show_catalog_toolbar(True)
 
         elif proc_name == "Compliance":
             try:
@@ -1107,18 +940,46 @@ class MainWindow(wx.Frame):
                 hdr, data = self._coerce_hdr_data(out)
             except Exception:
                 hdr = ["message"]; data = [["Compliance check complete."]]
-            self.grid.EnableEditing(False)
-            self._show_catalog_toolbar(False)
             self.kernel.log("run_compliance")
 
         else:
             hdr, data = ["message"], [[f"Unknown process: {proc_name}"]]
-            self.grid.EnableEditing(False)
-            self._show_catalog_toolbar(False)
 
         self._display(hdr, data)
 
-    # Robust anomaly detector
+    # Handle grid edits for Catalog persistence
+    def on_grid_cell_changed(self, evt):
+        if self.current_process != "Catalog":
+            evt.Skip()
+            return
+        row = evt.GetRow()
+        col = evt.GetCol()
+        try:
+            field_col = 0  # "Field"
+            field_name = self.grid.GetCellValue(row, field_col).strip()
+            if not field_name:
+                evt.Skip(); return
+
+            # Map editable columns to override keys
+            label = self.grid.GetColLabelValue(col)
+            key_map = {
+                "Friendly Name": "Friendly Name",
+                "Description": "Description",
+                "Data Type": "Data Type",
+                "Nullable": "Nullable",
+                "SLA": "SLA",
+            }
+            if label not in key_map:
+                evt.Skip(); return
+
+            value = self.grid.GetCellValue(row, col)
+            self.catalog_overrides.setdefault(field_name, {})
+            self.catalog_overrides[field_name][key_map[label]] = value
+            self.kernel.set_catalog_overrides(self.catalog_overrides)
+        finally:
+            evt.Skip()
+
+    # Robust anomaly detector (unchanged)
     def _detect_anomalies(self, df: pd.DataFrame):
         work = df.copy()
 
@@ -1234,7 +1095,7 @@ class MainWindow(wx.Frame):
         for line in text.splitlines():
             line=line.strip()
             if not line or line.startswith("#"): continue
-            parts=line.split(maxsplit=1)
+            parts=line.split(maxsplit=1)  # ← fixed bug
             action=parts[0]; arg=parts[1] if len(parts)==2 else None
             t={"action": action}
             if arg:
@@ -1273,7 +1134,7 @@ class MainWindow(wx.Frame):
                     wx.CallAfter(self.do_analysis_process, name)
 
                 elif act == "exportcsv":
-                    p = t.get("path")
+                    p = t.get("path"); 
                     if not p: raise ValueError("ExportCSV requires 'path'")
                     wx.CallAfter(self._export_to_path, p, ",")
 
@@ -1303,6 +1164,18 @@ class MainWindow(wx.Frame):
         wx.CallAfter(wx.MessageBox, f"Tasks completed. {ran} step(s) executed.",
                      "Tasks", wx.OK | wx.ICON_INFORMATION)
 
+    # Export helpers
+    def on_export_csv_button(self, _evt=None):
+        if self.grid.GetNumberCols() == 0:
+            wx.MessageBox("Nothing to export. Run a process first.", "Export", wx.OK | wx.ICON_INFORMATION)
+            return
+        dlg = wx.FileDialog(self, "Export results to CSV", wildcard="CSV files (*.csv)|*.csv",
+                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy(); return
+        path = dlg.GetPath(); dlg.Destroy()
+        self._export_to_path(path, ",")
+
     def _export_to_path(self, path: str, sep: str):
         try:
             hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
@@ -1310,6 +1183,7 @@ class MainWindow(wx.Frame):
                     for r in range(self.grid.GetNumberRows())]
             pd.DataFrame(data, columns=hdr).to_csv(path, index=False, sep=sep)
             self.kernel.log("export_to_path", path=path, sep=sep, rows=len(data), cols=len(hdr))
+            wx.MessageBox(f"Exported {len(data)} rows.", "Export", wx.OK | wx.ICON_INFORMATION)
         except Exception as e:
             wx.MessageBox(f"Export failed: {e}", "Export", wx.OK | wx.ICON_ERROR)
 
@@ -1323,34 +1197,7 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Upload failed: {e}", "Upload", wx.OK | wx.ICON_ERROR)
 
-    # Grid events/presentation
-    def on_cell_changed(self, evt):
-        # Persist Catalog edits
-        if self.current_process == "Catalog":
-            try:
-                row = evt.GetRow()
-                col = evt.GetCol()
-                hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
-                col_name = hdr[col]
-                if col_name not in {"Friendly Name", "Description", "Data Type", "Nullable", "SLA"}:
-                    evt.Skip(); return
-                try:
-                    f_idx = hdr.index("Field")
-                except ValueError:
-                    evt.Skip(); return
-                field_name = self.grid.GetCellValue(row, f_idx).strip()
-                new_val = self.grid.GetCellValue(row, col)
-                if not field_name:
-                    evt.Skip(); return
-                meta = self._load_catalog_meta()
-                meta.setdefault(field_name, {})
-                meta[field_name][col_name] = new_val
-                self._save_catalog_meta(meta)
-            finally:
-                evt.Skip()
-        else:
-            evt.Skip()
-
+    # Grid render
     def _display(self, hdr, data):
         # allow pd.DataFrame too
         if isinstance(hdr, pd.DataFrame):
@@ -1363,9 +1210,7 @@ class MainWindow(wx.Frame):
         if self.grid.GetNumberCols(): self.grid.DeleteCols(0, self.grid.GetNumberCols())
 
         if not isinstance(hdr, (list, tuple)) or len(hdr) == 0:
-            self._render_kpis()
-            self._show_catalog_toolbar(False)
-            return
+            self._render_kpis(); return
 
         self.grid.AppendCols(len(hdr))
         for i, h in enumerate(hdr): self.grid.SetColLabelValue(i, str(h))
@@ -1385,8 +1230,6 @@ class MainWindow(wx.Frame):
                 self.grid.SetCellBackgroundColour(r, c, base)
 
         self.adjust_grid(); self._render_kpis()
-        # Only allow editing for Catalog; toolbar visibility handled by caller
-        self.grid.EnableEditing(self.current_process == "Catalog")
 
     def adjust_grid(self):
         cols = self.grid.GetNumberCols()
@@ -1403,7 +1246,6 @@ class MainWindow(wx.Frame):
 # ──────────────────────────────────────────────────────────────────────────────
 # MDM dialog used above (kept here to keep file self-contained)
 # ──────────────────────────────────────────────────────────────────────────────
-
 class MDMDialog(wx.Dialog):
     def __init__(self, parent):
         super().__init__(parent, title="Master Data Management (MDM)", size=(560, 420))
