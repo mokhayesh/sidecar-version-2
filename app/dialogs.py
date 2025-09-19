@@ -1,4 +1,3 @@
-# app/dialogs.py
 import os
 import re
 import json
@@ -49,7 +48,7 @@ from app.settings import defaults
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Quality Rule Assignment (style fixes only; FUNC unchanged)
+# Quality Rule Assignment
 # ──────────────────────────────────────────────────────────────────────────────
 class QualityRuleDialog(wx.Dialog):
     def __init__(self, parent, fields, current_rules):
@@ -61,11 +60,12 @@ class QualityRuleDialog(wx.Dialog):
         self.current_rules = current_rules
         self.loaded_rules = {}
 
-        BG = wx.Colour(249, 246, 255)      # light lavender
-        PANEL = wx.Colour(245, 241, 255)
-        TXT = wx.Colour(44, 31, 72)
+        # lighter lavender
+        BG = wx.Colour(245, 242, 255)
+        PANEL = wx.Colour(250, 248, 255)
+        TXT = wx.Colour(45, 35, 84)
         INPUT_BG = wx.Colour(255, 255, 255)
-        INPUT_TXT = wx.Colour(34, 30, 60)
+        INPUT_TXT = wx.Colour(32, 24, 64)
         ACCENT = wx.Colour(115, 102, 192)
 
         self.SetBackgroundColour(BG)
@@ -114,7 +114,7 @@ class QualityRuleDialog(wx.Dialog):
         pv = wx.StaticBoxSizer(pbox, wx.VERTICAL)
         self.preview = rt.RichTextCtrl(pnl, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
         self.preview.SetBackgroundColour(wx.Colour(255, 255, 255))
-        self.preview.SetForegroundColour(wx.Colour(44, 31, 72))
+        self.preview.SetForegroundColour(wx.Colour(32, 24, 64))
         self.preview.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         pv.Add(self.preview, 1, wx.EXPAND | wx.ALL, 4)
         main.Add(pv, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
@@ -197,129 +197,206 @@ class QualityRuleDialog(wx.Dialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Synthetic Data (polished UI; accepts fields OR sample_df)
+# Synthetic Data — polished UI + realistic names
 # ──────────────────────────────────────────────────────────────────────────────
 class SyntheticDataDialog(wx.Dialog):
     """
-    Professional-looking synthetic data generator.
+    Polished synthetic data generator.
     Accepts either:
-      - sample_df: pd.DataFrame
-      - fields: list[str]
+      - sample_df (DataFrame) OR
+      - fields (list[str])
     """
     def __init__(self, parent, sample_df: pd.DataFrame | None = None, fields: list[str] | None = None):
-        super().__init__(parent, title="Synthetic Data", size=(640, 520),
+        super().__init__(parent, title="Synthetic Data", size=(740, 560),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
-        if fields and not isinstance(fields, (list, tuple)):
-            fields = list(fields)
-        self.sample_cols = list(fields or ([] if sample_df is None else list(sample_df.columns)))
+        cols_from_df = list(sample_df.columns) if isinstance(sample_df, pd.DataFrame) and len(sample_df.columns) else []
+        self.sample_cols = cols_from_df or list(fields or [])
+        self._df: pd.DataFrame | None = None
 
-        BG = wx.Colour(249, 246, 255)
-        PANEL = wx.Colour(245, 241, 255)
-        TXT = wx.Colour(44, 31, 72)
+        BG = wx.Colour(247, 243, 255)
+        PANEL = wx.Colour(255, 255, 255)
         ACCENT = wx.Colour(115, 102, 192)
+        TXT = wx.Colour(44, 31, 72)
 
-        pnl = wx.Panel(self)
-        pnl.SetBackgroundColour(PANEL)
+        self.SetBackgroundColour(BG)
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        banner = wx.Panel(self); banner.SetBackgroundColour(BG)
+        bh = wx.BoxSizer(wx.HORIZONTAL)
+        title = wx.StaticText(banner, label="Generate Synthetic Data")
+        title.SetFont(wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetForegroundColour(TXT)
+        bh.Add(title, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 8)
+        bh.AddStretchSpacer()
+        banner.SetSizer(bh)
+        outer.Add(banner, 0, wx.EXPAND)
+
+        pnl = wx.Panel(self); pnl.SetBackgroundColour(PANEL)
         v = wx.BoxSizer(wx.VERTICAL)
 
-        hdr = wx.StaticText(pnl, label="Generate synthetic rows for selected columns.")
-        hdr.SetForegroundColour(TXT)
-        hdr.SetFont(wx.Font(11, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        v.Add(hdr, 0, wx.ALL, 10)
+        # Controls row
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(wx.StaticText(pnl, label="Number of rows:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        self.rows_spin = wx.SpinCtrl(pnl, min=1, max=200000, initial=100)
+        row.Add(self.rows_spin, 0, wx.RIGHT, 12)
 
-        row_box = wx.BoxSizer(wx.HORIZONTAL)
-        row_box.Add(wx.StaticText(pnl, label="Number of rows:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
-        self.rows_spin = wx.SpinCtrl(pnl, min=1, max=100000, initial=100)
-        row_box.Add(self.rows_spin, 0, wx.RIGHT, 12)
+        row.Add(wx.StaticText(pnl, label="Columns to include:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        self.cols_check = wx.CheckListBox(pnl, choices=self.sample_cols or ["col1", "col2", "col3"])
+        # default select all
+        for i in range(self.cols_check.GetCount()):
+            self.cols_check.Check(i, True)
 
-        self.chk_header = wx.CheckBox(pnl, label="Use headers from current dataset")
-        self.chk_header.SetValue(True if self.sample_cols else False)
-        row_box.AddStretchSpacer(1)
-        row_box.Add(self.chk_header, 0, wx.ALIGN_CENTER_VERTICAL)
-        v.Add(row_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        left = wx.BoxSizer(wx.VERTICAL)
+        left.Add(self.cols_check, 1, wx.EXPAND | wx.ALL, 4)
+        btns_small = wx.BoxSizer(wx.HORIZONTAL)
+        sel_all = wx.Button(pnl, label="Select All"); sel_none = wx.Button(pnl, label="Clear")
+        btns_small.Add(sel_all, 0, wx.RIGHT, 6); btns_small.Add(sel_none, 0)
+        left.Add(btns_small, 0, wx.ALIGN_LEFT | wx.LEFT | wx.BOTTOM, 4)
 
-        v.Add(wx.StaticText(pnl, label="Columns (select one or more):"), 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
-        self.cols_list = wx.ListBox(pnl, choices=self.sample_cols or ["col1", "col2", "col3"],
-                                    style=wx.LB_EXTENDED)
-        v.Add(self.cols_list, 1, wx.EXPAND | wx.ALL, 10)
+        row.Add(left, 1, wx.EXPAND | wx.RIGHT, 12)
 
+        # Preview grid
+        self.preview = wx.grid.Grid(pnl)
+        self.preview.CreateGrid(0, 0)
+        self.preview.EnableEditing(False)
+        self.preview.SetDefaultCellBackgroundColour(wx.Colour(255, 255, 255))
+        self.preview.SetDefaultCellTextColour(TXT)
+
+        row.Add(self.preview, 2, wx.EXPAND)
+        v.Add(row, 1, wx.EXPAND | wx.ALL, 10)
+
+        # bottom buttons
         btns = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_generate = wx.Button(pnl, label="Generate")
-        self.btn_ok = wx.Button(pnl, label="OK")
-        self.btn_cancel = wx.Button(pnl, label="Cancel")
-        for b in (self.btn_generate, self.btn_ok):
-            b.SetBackgroundColour(ACCENT)
-            b.SetForegroundColour(wx.WHITE)
-        btns.Add(self.btn_generate, 0, wx.ALL, 5)
-        btns.Add(self.btn_ok, 0, wx.ALL, 5)
-        btns.Add(self.btn_cancel, 0, wx.ALL, 5)
-        v.Add(btns, 0, wx.ALIGN_RIGHT | wx.RIGHT | wx.BOTTOM, 10)
+        gen = wx.Button(pnl, label="Generate Preview")
+        gen.SetBackgroundColour(ACCENT); gen.SetForegroundColour(wx.WHITE)
+        ok = wx.Button(pnl, label="OK"); cancel = wx.Button(pnl, label="Cancel")
+        btns.Add(gen, 0, wx.ALL, 6)
+        btns.AddStretchSpacer()
+        btns.Add(ok, 0, wx.ALL, 6)
+        btns.Add(cancel, 0, wx.ALL, 6)
+        v.Add(btns, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         pnl.SetSizer(v)
+        outer.Add(pnl, 1, wx.EXPAND | wx.ALL, 8)
+        self.SetSizer(outer)
 
-        self._df = None
-        self.btn_generate.Bind(wx.EVT_BUTTON, self._on_generate)
-        self.btn_ok.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_OK) if self._df is not None else wx.MessageBox("Click Generate first.", "No data", wx.OK | wx.ICON_INFORMATION))
-        self.btn_cancel.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CANCEL))
+        # events
+        gen.Bind(wx.EVT_BUTTON, self._on_generate)
+        ok.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_OK) if self._df is not None else wx.MessageBox("Click Generate Preview first.", "No data", wx.OK | wx.ICON_INFORMATION))
+        cancel.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CANCEL))
+        sel_all.Bind(wx.EVT_BUTTON, lambda e: [self.cols_check.Check(i, True) for i in range(self.cols_check.GetCount())])
+        sel_none.Bind(wx.EVT_BUTTON, lambda e: [self.cols_check.Check(i, False) for i in range(self.cols_check.GetCount())])
 
-    # API used by MainWindow
-    def get_values(self):
-        """Return (n_rows, fields) for the requested synthetic dataset."""
-        n = int(self.rows_spin.GetValue())
-        # If user selected nothing, use all in listbox
-        sel_idx = self.cols_list.GetSelections()
-        cols = [self.cols_list.GetString(i) for i in (sel_idx or range(self.cols_list.GetCount()))]
-        return n, cols
+        # Some name/address seeds for realism
+        self.FIRST_NAMES = [
+            "Olivia","Liam","Emma","Noah","Ava","Oliver","Sophia","Elijah","Isabella","James",
+            "Mia","William","Amelia","Benjamin","Harper","Lucas","Evelyn","Henry","Abigail","Alexander",
+            "Michael","Emily","Daniel","Elizabeth","Sebastian","Avery","Jack","Sofia","Jackson","Ella",
+            "Aiden","Scarlett","Owen","Grace","Samuel","Chloe","Matthew","Victoria","Joseph","Riley",
+            "Levi","Aria","David","Lily","John","Zoey","Wyatt","Hannah","Carter","Nora"
+        ]
+        self.LAST_NAMES = [
+            "Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez",
+            "Hernandez","Lopez","Gonzalez","Wilson","Anderson","Thomas","Taylor","Moore","Jackson","Martin",
+            "Lee","Perez","Thompson","White","Harris","Sanchez","Clark","Ramirez","Lewis","Robinson"
+        ]
+        self.STREET_NAMES = ["Maple","Oak","Pine","Cedar","Elm","Birch","Willow","Hill","Lake","Sunset","Ridge","Park"]
+        self.CITIES = ["Austin","Denver","Seattle","Miami","Phoenix","Atlanta","Chicago","Dallas","Orlando","Portland"]
+        self.STATES = ["AL","AK","AZ","AR","CA","CO","CT","DC","DE","FL","GA","HI","IA","ID","IL","IN","KS","KY","LA","MA","MD","ME","MI","MN","MO","MS","MT","NC","ND","NE","NH","NJ","NM","NV","NY","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VA","VT","WA","WI","WV","WY"]
 
     def get_dataframe(self) -> pd.DataFrame:
         return self._df if isinstance(self._df, pd.DataFrame) else pd.DataFrame()
 
-    # For “Generate” preview (optional)
+    def get_values(self):
+        """Returns (n_rows, fields) — compatible with MainWindow usage."""
+        n = int(self.rows_spin.GetValue())
+        selected = [self.cols_check.GetString(i) for i in range(self.cols_check.GetCount()) if self.cols_check.IsChecked(i)]
+        return n, (selected or self.sample_cols)
+
+    # preview/generate
     def _on_generate(self, _):
         n, cols = self.get_values()
-        df = pd.DataFrame({c: [self._fake_value_for(c, i) for i in range(n)] for c in cols})
-        self._df = df
-        wx.MessageBox(f"Generated {len(df)} rows, {len(df.columns)} columns.", "Synthetic Data",
-                      wx.OK | wx.ICON_INFORMATION)
+        data = {c: [self._fake_value_for(c, i) for i in range(n)] for c in cols}
+        self._df = pd.DataFrame(data)
+        self._show_preview(self._df.head(50))
 
-    # Realistic column heuristics
+    def _show_preview(self, df: pd.DataFrame):
+        # rebuild grid
+        self.preview.ClearGrid()
+        if self.preview.GetNumberCols(): self.preview.DeleteCols(0, self.preview.GetNumberCols())
+        if self.preview.GetNumberRows(): self.preview.DeleteRows(0, self.preview.GetNumberRows())
+
+        if df is None or df.empty:
+            return
+
+        self.preview.AppendCols(len(df.columns))
+        for i, c in enumerate(df.columns):
+            self.preview.SetColLabelValue(i, str(c))
+        self.preview.AppendRows(min(50, len(df)))
+        for r in range(min(50, len(df))):
+            for c in range(len(df.columns)):
+                self.preview.SetCellValue(r, c, "" if pd.isna(df.iat[r, c]) else str(df.iat[r, c]))
+
+    # realistic-ish column heuristics
     def _fake_value_for(self, col: str, _i: int):
-        first_pool = [
-            "Noah","Liam","Mason","Jacob","William","Ethan","James","Alexander","Michael","Benjamin",
-            "Olivia","Emma","Ava","Sophia","Isabella","Mia","Charlotte","Amelia","Harper","Abigail"
-        ]
-        last_pool = [
-            "Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez",
-            "Hernandez","Lopez","Gonzalez","Wilson","Anderson","Thomas","Taylor","Moore","Jackson","Martin"
-        ]
-
         name = col.lower().strip()
+
+        def pick(seq): return random.choice(seq)
+
         if "email" in name:
-            user = "".join(random.choice(string.ascii_lowercase) for _ in range(8))
-            domain = random.choice(["gmail.com", "yahoo.com", "outlook.com", "hotmail.com"])
-            return f"{user}@{domain}"
-        if "phone" in name or "tel" in name:
-            return f"{random.randint(100,999)}-{random.randint(100,999)}-{random.randint(1000,9999)}"
+            first = pick(self.FIRST_NAMES).lower()
+            last = pick(self.LAST_NAMES).lower()
+            num = random.randint(1, 9999)
+            domain = pick(["gmail.com","yahoo.com","outlook.com","hotmail.com","example.com"])
+            return f"{first}.{last}{num}@{domain}"
+
+        if "phone" in name or "tel" in name or "mobile" in name:
+            return f"{random.randint(200,989)}-{random.randint(200,989)}-{random.randint(1000,9999)}"
+
         if "first" in name and "name" in name:
-            return random.choice(first_pool)
+            return pick(self.FIRST_NAMES)
+
         if "last" in name and "name" in name:
-            return random.choice(last_pool)
+            return pick(self.LAST_NAMES)
+
         if "middle" in name and "name" in name:
-            return "".join(random.choice(string.ascii_uppercase) for _ in range(3))
-        if "address" in name:
-            return f"{random.randint(100,9999)} {random.choice(['E','W','N','S'])} {random.choice(['Maple','Oak','Pine','Cedar','1st','2nd'])} St, City, ST {random.randint(10000,99999)}"
-        if "loan" in name or "amount" in name or "balance" in name:
-            return round(random.uniform(2500, 30000), 2)
-        if "date" in name or "dt" in name:
-            base = datetime(2021, 1, 1)
-            return (base.replace(year=2021 + random.randint(0, 4)) + pd.to_timedelta(random.randint(0, 364), unit="D")).date().isoformat()
-        # default
-        return "".join(random.choice(string.ascii_uppercase) for _ in range(4))
+            # middle initial 70% / short name 30%
+            return pick(string.ascii_uppercase) if random.random()<0.7 else pick(self.FIRST_NAMES)[:3]
+
+        if "address" in name or "street" in name:
+            num = random.randint(100, 9999)
+            street = pick(self.STREET_NAMES)
+            st_type = pick(["St","Ave","Blvd","Rd","Ln","Dr"])
+            city = pick(self.CITIES)
+            state = pick(self.STATES)
+            zipc = random.randint(10000, 99999)
+            return f"{num} {street} {st_type}, {city}, {state} {zipc}"
+
+        if "city" in name:
+            return pick(self.CITIES)
+
+        if "state" in name:
+            return pick(self.STATES)
+
+        if "zip" in name or "postal" in name:
+            return f"{random.randint(10000,99999)}"
+
+        if "loan" in name or "amount" in name or "amt" in name or "balance" in name:
+            return round(random.uniform(2500, 75000), 2)
+
+        if "date" in name or "dt" in name or "dob" in name:
+            base = datetime(2019, 1, 1)
+            days = random.randint(0, 6*365)
+            return (base + pd.to_timedelta(days, unit="D")).date().isoformat()
+
+        # fallback: short token/string
+        letters = string.ascii_uppercase
+        return "".join(random.choice(letters) for _ in range(random.randint(3, 6)))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Little Buddy — lavender style + streaming + TTS + image generation
+# Little Buddy — lavender/white look + streaming + TTS + image generation
 # ──────────────────────────────────────────────────────────────────────────────
 class DataBuddyDialog(wx.Dialog):
     def __init__(self, parent, data=None, headers=None, knowledge=None):
@@ -337,21 +414,21 @@ class DataBuddyDialog(wx.Dialog):
         self.kernel = None
         self._tts_thread = None
 
-        # Lavender palette
+        # Lavender / white palette to match the main UI
         self.COLORS = {
-            "bg": wx.Colour(249, 246, 255),
-            "panel": wx.Colour(245, 241, 255),
+            "bg": wx.Colour(255, 255, 255),
+            "panel": wx.Colour(247, 243, 255),
             "text": wx.Colour(44, 31, 72),
-            "muted": wx.Colour(90, 80, 120),
+            "muted": wx.Colour(90, 70, 120),
             "accent": wx.Colour(115, 102, 192),
             "input_bg": wx.Colour(255, 255, 255),
-            "input_fg": wx.Colour(34, 30, 60),
-            "bubble_user_bg": wx.Colour(232, 225, 255),
+            "input_fg": wx.Colour(44, 31, 72),
+            "bubble_user_bg": wx.Colour(228, 219, 255),
             "bubble_user_fg": wx.Colour(44, 31, 72),
-            "bubble_bot_bg": wx.Colour(210, 200, 255),
-            "bubble_bot_fg": wx.Colour(34, 30, 60),
-            "reply_bg": wx.Colour(255, 255, 255),
-            "reply_fg": wx.Colour(34, 30, 60),
+            "bubble_bot_bg": wx.Colour(132, 86, 255),
+            "bubble_bot_fg": wx.Colour(255, 255, 255),
+            "reply_bg": wx.Colour(247, 243, 255),
+            "reply_fg": wx.Colour(44, 31, 72),
         }
 
         self.SetBackgroundColour(self.COLORS["bg"])
@@ -442,7 +519,7 @@ class DataBuddyDialog(wx.Dialog):
 
         vbox.Add(row, 0, wx.EXPAND | wx.ALL, 5)
 
-        # Chat area (bubbles)
+        # Chat area with bubbles
         self.reply = rt.RichTextCtrl(pnl, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.BORDER_SIMPLE)
         self.reply.SetBackgroundColour(self.COLORS["reply_bg"])
         self.reply.SetForegroundColour(self.COLORS["reply_fg"])
@@ -777,7 +854,7 @@ class DataBuddyDialog(wx.Dialog):
         cands = obj.get("candidates") or []
         parts = cands[0]["content"]["parts"]
         inline = next((p["inlineData"] for p in parts if "inlineData" in p), None)
-        img_bytes = base64.b64decode(inline.get("data", "")) if inline else b""
+        img_bytes = base64.b64decode(inline.get("data", ""))
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
         tmp.write(img_bytes)
         tmp.close()
@@ -787,21 +864,21 @@ class DataBuddyDialog(wx.Dialog):
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
         tmp.close()
         if Image and ImageDraw:
-            img = Image.new("RGB", (1024, 1024), (232, 225, 255))
+            img = Image.new("RGB", (1024, 1024), (247, 243, 255))
             draw = ImageDraw.Draw(img)
             try:
                 font = ImageFont.truetype("arial.ttf", 28)
             except Exception:
                 font = ImageFont.load_default()
             draw.multiline_text((40, 40), f"[Offline Placeholder]\n{prompt}",
-                                fill=(34, 30, 60), font=font, spacing=6)
+                                fill=(44, 31, 72), font=font, spacing=6)
             img.save(tmp.name, "PNG")
         else:
             bmp = wx.Bitmap(1024, 1024)
             dc = wx.MemoryDC(bmp)
-            dc.SetBackground(wx.Brush(wx.Colour(232, 225, 255)))
+            dc.SetBackground(wx.Brush(wx.Colour(247, 243, 255)))
             dc.Clear()
-            dc.SetTextForeground(wx.Colour(34, 30, 60))
+            dc.SetTextForeground(wx.Colour(44, 31, 72))
             dc.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
             dc.DrawText("[Offline Placeholder]", 40, 40)
             dc.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
@@ -814,7 +891,7 @@ class DataBuddyDialog(wx.Dialog):
         dlg = wx.Dialog(self, title="Generated Image", size=(720, 740),
                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         pnl = wx.Panel(dlg)
-        pnl.SetBackgroundColour(wx.Colour(249, 246, 255))
+        pnl.SetBackgroundColour(wx.Colour(247, 243, 255))
         v = wx.BoxSizer(wx.VERTICAL)
         img = wx.Image(path, wx.BITMAP_TYPE_ANY)
         w = min(680, img.GetWidth())
