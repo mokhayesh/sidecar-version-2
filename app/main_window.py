@@ -33,7 +33,7 @@ from app.analysis import (
 # ──────────────────────────────────────────────────────────────────────────────
 
 class KernelManager:
-    def __init__(self, app_name="Data Genius — Sidecar Application"):
+    def __init__(self, app_name="Data Buddy — Sidecar Application"):
         self.lock = threading.Lock()
         self.dir = os.path.join(os.path.expanduser("~"), ".sidecar")
         os.makedirs(self.dir, exist_ok=True)
@@ -134,7 +134,7 @@ class RoundedShadowButton(wx.Control):
         self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
         self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
         self.Bind(wx.EVT_LEFT_UP, self.on_up)
-        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL)
         self._padx, self._pady = 16, 8
 
     def DoGetBestSize(self):
@@ -199,7 +199,7 @@ class RoundedShadowButton(wx.Control):
         dc.DrawText(self._label, (w-tw)//2, (h-th)//2)
 
 class LittleBuddyPill(wx.Control):
-    def __init__(self, parent, label="Little Genius", handler=None):
+    def __init__(self, parent, label="Little Buddy", handler=None):
         super().__init__(parent, style=wx.BORDER_NONE)
         self._label = label; self._handler = handler
         self._hover = False; self._down = False
@@ -211,7 +211,7 @@ class LittleBuddyPill(wx.Control):
         self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
         self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
         self.Bind(wx.EVT_LEFT_UP, self.on_up)
-        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD)
 
     def _set_hover(self, v): self._hover = v; self.Refresh()
     def on_down(self, _): self._down = True; self.CaptureMouse(); self.Refresh()
@@ -262,11 +262,11 @@ class KPIBadge(wx.Panel):
         dc.DrawRoundedRectangle(1,1,w-2,h-2,8)
 
         dc.SetTextForeground(wx.Colour(94, 64, 150))
-        dc.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        dc.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
         dc.DrawText(self._title.upper(), 12, 10)
 
         dc.SetTextForeground(wx.Colour(44, 31, 72))
-        dc.SetFont(wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        dc.SetFont(wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
         dc.DrawText(str(self._value), 12, 34)
 
 
@@ -276,7 +276,7 @@ class KPIBadge(wx.Panel):
 
 class MainWindow(wx.Frame):
     def __init__(self):
-        super().__init__(None, title="Data Genius — Sidecar Application", size=(1320, 840))
+        super().__init__(None, title="Data Buddy — Sidecar Application", size=(1320, 840))
 
         # icon (best effort)
         for p in (
@@ -322,9 +322,9 @@ class MainWindow(wx.Frame):
         header = wx.Panel(self); header.SetBackgroundColour(HEADER)
         hbox = wx.BoxSizer(wx.HORIZONTAL)
 
-        title = wx.StaticText(header, label="Data Genius — Sidecar Application")
+        title = wx.StaticText(header, label="Data Buddy — Sidecar Application")
         title.SetForegroundColour(wx.Colour(255, 255, 255))
-        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
         hbox.Add(title, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 12)
 
         hbox.AddStretchSpacer(1)
@@ -334,15 +334,13 @@ class MainWindow(wx.Frame):
         header.SetSizer(hbox)
         main.Add(header, 0, wx.EXPAND)
 
-        # Build both panels (toolbar and KPI) so we can add in swapped order
-        # Buttons (toolbar)
+        # Buttons toolbar
         toolbar_panel = wx.Panel(self); toolbar_panel.SetBackgroundColour(PANEL)
         tb = wx.WrapSizer(wx.HORIZONTAL)
         def add_btn(label, handler):
             b = RoundedShadowButton(toolbar_panel, label, handler)
             tb.Add(b, 0, wx.ALL, 6); return b
 
-        # Upload/Export now open menus
         add_btn("Upload", self.on_upload_menu)
         add_btn("Profile", lambda e: self.do_analysis_process("Profile"))
         add_btn("Quality", lambda e: self.do_analysis_process("Quality"))
@@ -374,7 +372,7 @@ class MainWindow(wx.Frame):
             krow.Add(c, 1, wx.ALL | wx.EXPAND, 6)
         kpi_panel.SetSizer(krow)
 
-        # SWAPPED ORDER: KPIs first (top), toolbar second (below)
+        # Order: KPIs first, toolbar second
         main.Add(kpi_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
         main.Add(toolbar_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
 
@@ -391,7 +389,7 @@ class MainWindow(wx.Frame):
         info_panel.SetSizer(hz)
         main.Add(info_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
-        # ── Catalog toolbar (hidden unless Catalog is active)
+        # Catalog toolbar (hidden unless Catalog is active)
         self.catalog_toolbar_panel = wx.Panel(self)
         self.catalog_toolbar_panel.SetBackgroundColour(wx.Colour(243, 239, 255))
         ct = wx.BoxSizer(wx.HORIZONTAL)
@@ -412,11 +410,10 @@ class MainWindow(wx.Frame):
         self.grid.SetLabelTextColour(wx.Colour(60,60,90))
         self.grid.SetLabelBackgroundColour(wx.Colour(235,231,250))
         self.grid.SetGridLineColour(wx.Colour(220,214,245))
-        self.grid.EnableEditing(False)  # default; enable only for Catalog
+        self.grid.EnableEditing(False)
         self.grid.SetRowLabelSize(36); self.grid.SetColLabelSize(28)
         self.grid.Bind(wx.EVT_SIZE, self.on_grid_resize)
         self.grid.Bind(gridlib.EVT_GRID_CELL_CHANGED, self.on_cell_changed)
-
         gp = wx.BoxSizer(wx.VERTICAL); gp.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
         grid_panel.SetSizer(gp)
         main.Add(grid_panel, 1, wx.EXPAND | wx.ALL, 4)
@@ -565,7 +562,7 @@ class MainWindow(wx.Frame):
 
     def _load_text_file(self, path): return open(path, "r", encoding="utf-8", errors="ignore").read()
 
-    # ───────────── Upload menu (File or URI/S3)
+    # Upload menu (File or URI/S3)
     def on_upload_menu(self, evt=None):
         menu = wx.Menu()
         from_file = menu.Append(wx.ID_ANY, "From File…")
@@ -594,7 +591,7 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Could not read from URI:\n{e}", "Load URI", wx.OK | wx.ICON_ERROR)
 
-    # existing local file loader
+    # local file loader
     def on_load_file(self, _evt=None):
         dlg = wx.FileDialog(self, "Open data file", wildcard="Data|*.csv;*.tsv;*.txt|All|*.*",
                             style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
@@ -612,7 +609,7 @@ class MainWindow(wx.Frame):
     def on_rules(self, _evt=None):
         if not self.headers:
             wx.MessageBox("Load data first so fields are available.", "Quality Rules",
-                          wx.OK | wx.ICON_WARNING); return
+                          wx.OK | wx.ICON.WARNING); return
         try:
             dlg = QualityRuleDialog(self, list(self.headers), dict(self.quality_rules))
             if dlg.ShowModal() == wx.ID_OK:
@@ -653,7 +650,7 @@ class MainWindow(wx.Frame):
                             knowledge_files=[os.path.basename(p) for p in prio])
             dlg.ShowModal(); dlg.Destroy()
         except Exception as e:
-            wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Genius", wx.OK | wx.ICON_ERROR)
+            wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Buddy", wx.OK | wx.ICON_ERROR)
 
     # Synthetic data (unchanged)
     @staticmethod
@@ -979,7 +976,7 @@ class MainWindow(wx.Frame):
                 if not field_name:
                     data[r] = row
                     continue
-                saved = meta.get(field_name, {})
+                saved = meta.get(fld := field_name, {})
                 for key in ("Friendly Name", "Description", "Data Type", "Nullable", "SLA"):
                     if key in col_idx and key in saved:
                         row[col_idx[key]] = saved[key]
@@ -995,7 +992,6 @@ class MainWindow(wx.Frame):
             self.catalog_toolbar_panel.Hide()
         self.Layout()
 
-    # Save visible grid rows to catalog persistence (for editable columns)
     def _snapshot_grid_to_meta(self):
         hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
         try:
@@ -1341,7 +1337,7 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Export failed: {e}", "Export", wx.OK | wx.ICON_ERROR)
 
-    # ───────────── Export menu (CSV/TSV file, S3, or HTTP PUT)
+    # Export menu (CSV/TSV file, S3, or HTTP PUT)
     def on_export_menu(self, evt=None):
         if self.grid.GetNumberCols() == 0:
             wx.MessageBox("There is nothing to export yet.", "Export", wx.OK | wx.ICON_INFORMATION)
