@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 from difflib import SequenceMatcher
 
+import requests
 import wx
 import wx.grid as gridlib
 import pandas as pd
@@ -341,7 +342,8 @@ class MainWindow(wx.Frame):
             b = RoundedShadowButton(toolbar_panel, label, handler)
             tb.Add(b, 0, wx.ALL, 6); return b
 
-        add_btn("Upload", self.on_load_file)
+        # Upload/Export now open menus
+        add_btn("Upload", self.on_upload_menu)
         add_btn("Profile", lambda e: self.do_analysis_process("Profile"))
         add_btn("Quality", lambda e: self.do_analysis_process("Quality"))
         add_btn("Catalog", lambda e: self.do_analysis_process("Catalog"))
@@ -352,7 +354,7 @@ class MainWindow(wx.Frame):
         add_btn("MDM", self.on_mdm)
         add_btn("Synthetic Data", self.on_generate_synth)
         add_btn("To Do", self.on_run_tasks)
-        add_btn("Export", self.on_export_csv)  # NEW
+        add_btn("Export", self.on_export_menu)
 
         toolbar_panel.SetSizer(tb)
 
@@ -543,7 +545,7 @@ class MainWindow(wx.Frame):
             df = obj; return list(df.columns), df.values.tolist()
         return ["message"], [["Quality complete."]]
 
-    # File & knowledge & rules
+    # Knowledge & rules
     def on_load_knowledge(self, _evt=None):
         dlg = wx.FileDialog(self, "Load knowledge files", wildcard="Text|*.txt;*.csv;*.tsv|All|*.*",
                             style=wx.FD_OPEN | wx.FD_MULTIPLE | wx.FD_FILE_MUST_EXIST)
@@ -563,6 +565,36 @@ class MainWindow(wx.Frame):
 
     def _load_text_file(self, path): return open(path, "r", encoding="utf-8", errors="ignore").read()
 
+    # ───────────── Upload menu (File or URI/S3)
+    def on_upload_menu(self, evt=None):
+        menu = wx.Menu()
+        from_file = menu.Append(wx.ID_ANY, "From File…")
+        from_uri  = menu.Append(wx.ID_ANY, "From URI / S3…")
+        self.Bind(wx.EVT_MENU, lambda e: self.on_load_file(), from_file)
+        self.Bind(wx.EVT_MENU, lambda e: self.on_load_uri(),  from_uri)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def on_load_uri(self, _evt=None):
+        dlg = wx.TextEntryDialog(self, "Enter URI (supports http(s):// and s3:// when configured):",
+                                 "Load from URI / S3")
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy(); return
+        uri = dlg.GetValue().strip()
+        dlg.Destroy()
+        if not uri:
+            return
+        try:
+            text = download_text_from_uri(uri)
+            hdr, data = detect_and_split_data(text)
+            self.headers, self.raw_data = hdr, data
+            self._display(hdr, data)
+            self._reset_kpis_for_new_dataset(hdr, data)
+            self.kernel.log("load_uri", uri=uri, rows=len(data), cols=len(hdr))
+        except Exception as e:
+            wx.MessageBox(f"Could not read from URI:\n{e}", "Load URI", wx.OK | wx.ICON_ERROR)
+
+    # existing local file loader
     def on_load_file(self, _evt=None):
         dlg = wx.FileDialog(self, "Open data file", wildcard="Data|*.csv;*.tsv;*.txt|All|*.*",
                             style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
@@ -623,7 +655,7 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Little Buddy failed to open:\n{e}", "Little Genius", wx.OK | wx.ICON_ERROR)
 
-    # Synthetic data
+    # Synthetic data (unchanged)
     @staticmethod
     def _most_common_format(strings, default_mask="DDD-DDD-DDDD"):
         def mask_one(s): return re.sub(r"\d", "D", s)
@@ -875,7 +907,7 @@ class MainWindow(wx.Frame):
         params = dlg.get_params(); dlg.Destroy()
 
         dataframes=[]
-        if params["include_current"]():
+        if params["include_current"]:
             dataframes.append(pd.DataFrame(self.raw_data, columns=self.headers))
         try:
             for src in params["sources"]:
@@ -1309,24 +1341,61 @@ class MainWindow(wx.Frame):
         except Exception as e:
             wx.MessageBox(f"Export failed: {e}", "Export", wx.OK | wx.ICON_ERROR)
 
-    # NEW: one-click CSV export from the toolbar
-    def on_export_csv(self, _evt=None):
+    # ───────────── Export menu (CSV/TSV file, S3, or HTTP PUT)
+    def on_export_menu(self, evt=None):
         if self.grid.GetNumberCols() == 0:
             wx.MessageBox("There is nothing to export yet.", "Export", wx.OK | wx.ICON_INFORMATION)
             return
-        dlg = wx.FileDialog(
-            self,
-            "Export current results to CSV",
-            wildcard="CSV files (*.csv)|*.csv|All files (*.*)|*.*",
-            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
-        )
+        menu = wx.Menu()
+        m_csv = menu.Append(wx.ID_ANY, "Save as CSV…")
+        m_tsv = menu.Append(wx.ID_ANY, "Save as TSV…")
+        menu.AppendSeparator()
+        m_s3  = menu.Append(wx.ID_ANY, "Export to S3…")
+        m_uri = menu.Append(wx.ID_ANY, "PUT to URI (HTTP)…")
+        self.Bind(wx.EVT_MENU, lambda e: self._export_save_dialog(','), m_csv)
+        self.Bind(wx.EVT_MENU, lambda e: self._export_save_dialog('\t'), m_tsv)
+        self.Bind(wx.EVT_MENU, lambda e: self.on_upload_s3(), m_s3)
+        self.Bind(wx.EVT_MENU, lambda e: self._export_to_uri_http(), m_uri)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def _export_save_dialog(self, sep=','):
+        dlg = wx.FileDialog(self, "Save data",
+                            wildcard="CSV (*.csv)|*.csv|TSV (*.tsv)|*.tsv|All|*.*",
+                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
         if dlg.ShowModal() != wx.ID_OK:
             dlg.Destroy(); return
-        path = dlg.GetPath()
+        path = dlg.GetPath(); dlg.Destroy()
+        if sep == ',' and not path.lower().endswith('.csv'):
+            path += '.csv'
+        if sep == '\t' and not path.lower().endswith('.tsv'):
+            path += '.tsv'
+        self._export_to_path(path, sep)
+
+    def _export_to_uri_http(self):
+        dlg = wx.TextEntryDialog(self, "Enter HTTP(S) URI to PUT CSV to:",
+                                 "Export to URI (HTTP PUT)")
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy(); return
+        uri = dlg.GetValue().strip()
         dlg.Destroy()
-        if not path.lower().endswith(".csv"):
-            path += ".csv"
-        self._export_to_path(path, ",")
+        if not uri:
+            return
+        try:
+            import io
+            hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
+            data = [[self.grid.GetCellValue(r, c) for c in range(len(hdr))]
+                    for r in range(self.grid.GetNumberRows())]
+            buf = io.StringIO()
+            pd.DataFrame(data, columns=hdr).to_csv(buf, index=False)
+            payload = buf.getvalue().encode('utf-8')
+            resp = requests.put(uri, data=payload, headers={'Content-Type':'text/csv'})
+            if resp.status_code >= 400:
+                raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+            wx.MessageBox("Exported to URI successfully.", "Export", wx.OK | wx.ICON_INFORMATION)
+            self.kernel.log("export_uri", uri=uri, rows=len(data), cols=len(hdr))
+        except Exception as e:
+            wx.MessageBox(f"Export to URI failed:\n{e}", "Export", wx.OK | wx.ICON_ERROR)
 
     def on_upload_s3(self, _evt=None):
         hdr = [self.grid.GetColLabelValue(i) for i in range(self.grid.GetNumberCols())]
