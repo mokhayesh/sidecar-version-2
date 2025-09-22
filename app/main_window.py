@@ -1,6 +1,7 @@
 # app/main_window.py
 # Lavender UI + full functionality (MDM, Synthetic Data, Tasks, Knowledge Files)
 # Catalog: SLA column, editable & persisted + catalog toolbar
+# Rebranded to Data Buddy — Sidecar Application
 
 import os
 import re
@@ -134,7 +135,7 @@ class RoundedShadowButton(wx.Control):
         self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
         self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
         self.Bind(wx.EVT_LEFT_UP, self.on_up)
-        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_NORMAL)
+        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
         self._padx, self._pady = 16, 8
 
     def DoGetBestSize(self):
@@ -211,7 +212,7 @@ class LittleBuddyPill(wx.Control):
         self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
         self.Bind(wx.EVT_LEFT_DOWN, self.on_down)
         self.Bind(wx.EVT_LEFT_UP, self.on_up)
-        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT_BOLD)
+        self._font = wx.Font(9, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
 
     def _set_hover(self, v): self._hover = v; self.Refresh()
     def on_down(self, _): self._down = True; self.CaptureMouse(); self.Refresh()
@@ -262,11 +263,11 @@ class KPIBadge(wx.Panel):
         dc.DrawRoundedRectangle(1,1,w-2,h-2,8)
 
         dc.SetTextForeground(wx.Colour(94, 64, 150))
-        dc.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.NORMAL))
+        dc.SetFont(wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         dc.DrawText(self._title.upper(), 12, 10)
 
         dc.SetTextForeground(wx.Colour(44, 31, 72))
-        dc.SetFont(wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
+        dc.SetFont(wx.Font(13, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         dc.DrawText(str(self._value), 12, 34)
 
 
@@ -324,7 +325,7 @@ class MainWindow(wx.Frame):
 
         title = wx.StaticText(header, label="Data Buddy — Sidecar Application")
         title.SetForegroundColour(wx.Colour(255, 255, 255))
-        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE.NORMAL, wx.FONTWEIGHT.BOLD))
+        title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         hbox.Add(title, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 12)
 
         hbox.AddStretchSpacer(1)
