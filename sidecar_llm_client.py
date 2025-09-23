@@ -1,136 +1,174 @@
-﻿"""
-sidecar_llm_client.py
-A tiny client for your Aldin-Mini local API (OpenAI-compatible Chat Completions).
+﻿# sidecar_llm_client.py
+# Drop-in helper for Sidecar v2
+# - Reads settings from defaults.json (with env overrides)
+# - Injects a domain system prompt + today's date/time
+# - Supports streaming responses with a cancellable handle for the Stop button
 
-Usage:
-    from sidecar_llm_client import LocalLLMClient
-    client = LocalLLMClient(
-        base_url="http://127.0.0.1:8000/v1/chat/completions",
-        api_key="sk-aldin-local-123",
-        model="aldin-mini"
-    )
-    text = client.chat_once([{"role":"user","content":"Hello!"}])
-    for token in client.chat_stream([{"role":"user","content":"Stream please"}]): print(token, end="")
-"""
 from __future__ import annotations
-import json
-import requests
-from typing import Dict, List, Iterable, Optional
+import os, json, threading
+from dataclasses import dataclass
+from typing import Iterator, Optional
+from datetime import datetime, timezone
 
-DEFAULT_TIMEOUT_S = 120
+import httpx
 
-def _headers(api_key: str) -> Dict[str, str]:
+# ──────────────────────────────────────────────────────────────────────────────
+# Load defaults.json (Sidecar settings) with env var overrides
+# ──────────────────────────────────────────────────────────────────────────────
+DEFAULTS_PATH = os.path.join(os.path.dirname(__file__), "defaults.json")
+_defaults = {}
+try:
+    if os.path.exists(DEFAULTS_PATH):
+        with open(DEFAULTS_PATH, "r", encoding="utf-8") as f:
+            _defaults = json.load(f)
+except Exception:
+    _defaults = {}
+
+OPENAI_LIKE_URL = os.environ.get(
+    "SIDECAR_CHAT_URL",
+    _defaults.get("url", "http://127.0.0.1:8000/v1/chat/completions"),
+)
+OPENAI_API_KEY = os.environ.get(
+    "SIDECAR_API_KEY",
+    _defaults.get("api_key", "sk-aldin-local-123") or "sk-aldin-local-123",
+)
+DEFAULT_MODEL = os.environ.get(
+    "SIDECAR_MODEL",
+    _defaults.get("default_model", "aldin-mini"),
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Domain system prompt (quick win specialization)
+# You can override via env: SIDECAR_SYSTEM_PROMPT
+# ──────────────────────────────────────────────────────────────────────────────
+DOMAIN_SYSTEM_PROMPT = os.environ.get(
+    "SIDECAR_SYSTEM_PROMPT",
+    """You are **Aldin**, a specialist LLM for:
+• Data Governance (policies, stewardship, lineage, controls, quality)
+• Data Management (MDM, metadata, catalogs, lifecycle, retention)
+• Data Architecture (conceptual/logical/physical, lakehouse, ELT/ETL)
+• Analytics (BI, KPI design, experimentation, visualization)
+• Data Science & MLOps (feature engineering, evaluation, drift, monitoring)
+
+Principles:
+1) Be practical and concise. Prefer checklists, tables, and concrete steps.
+2) If the user is vague, ask up to 2 clarifying questions before proposing a plan.
+3) Cite standards or common patterns when relevant (DAMA-DMBOK, FAIR, medallion).
+4) If a request needs org-specific rules you don’t have, say so and offer a template.
+5) For compare/contrast, use a 2-column table. For plans, use numbered steps.
+
+Refuse:
+- Don’t invent private policy names or internal metrics you don’t know.
+- Avoid hallucinating external tool outputs; propose how to verify instead.
+"""
+)
+
+def system_time_message() -> dict:
+    now = datetime.now(timezone.utc).astimezone()
     return {
-        "Authorization": f"Bearer {api_key}" if api_key else "",
-        "Content-Type": "application/json",
+        "role": "system",
+        "content": f"Today's date is {now.strftime('%Y-%m-%d')} and the local time is {now.strftime('%H:%M')} {now.tzname()}."
     }
 
-class LocalLLMClient:
-    def __init__(
-        self,
-        base_url: str = "http://127.0.0.1:8000/v1/chat/completions",
-        api_key: str = "",
-        model: str = "aldin-mini",
-        timeout: int = DEFAULT_TIMEOUT_S,
-    ) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
-        self.model = model
-        self.timeout = int(timeout)
+def domain_prompt_message() -> dict:
+    return {"role": "system", "content": DOMAIN_SYSTEM_PROMPT}
 
-    # -------------------- non-streamed --------------------
-    def chat_once(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 256,
-        extra: Optional[Dict] = None,
-    ) -> str:
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": float(temperature),
-            "max_tokens": int(max_tokens),
-        }
-        if extra:
-            payload.update(extra)
-        r = requests.post(
-            self.base_url,
-            headers=_headers(self.api_key),
-            data=json.dumps(payload),
-            timeout=self.timeout,
-        )
-        r.raise_for_status()
-        data = r.json()
-        return data["choices"][0]["message"]["content"]
+def with_injected_system(messages: list[dict]) -> list[dict]:
+    """Ensure our 2 system messages are first: (1) domain prompt, (2) date/time."""
+    msgs = messages or []
+    # Remove any previous auto-injected versions to avoid duplication
+    def is_auto_system(m: dict) -> bool:
+        if m.get("role") != "system":
+            return False
+        c = (m.get("content") or "").strip()
+        return ("Aldin, a specialist LLM" in c) or c.startswith("Today's date is ")
+    msgs = [m for m in msgs if not is_auto_system(m)]
+    # Prepend our system messages
+    return [domain_prompt_message(), system_time_message(), *msgs]
 
-    # -------------------- streaming --------------------
-    def chat_stream(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 256,
-        extra: Optional[Dict] = None,
-    ) -> Iterable[str]:
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": float(temperature),
-            "max_tokens": int(max_tokens),
-            "stream": True,
-        }
-        if extra:
-            payload.update(extra)
-        with requests.post(
-            self.base_url,
-            headers=_headers(self.api_key),
-            data=json.dumps(payload),
-            stream=True,
-            timeout=self.timeout,
-        ) as r:
-            r.raise_for_status()
-            for raw in r.iter_lines(decode_unicode=True):
-                if not raw or not raw.startswith("data: "):
-                    continue
-                chunk = raw[6:]
-                if chunk == "[DONE]":
+# ──────────────────────────────────────────────────────────────────────────────
+# Public API
+# ──────────────────────────────────────────────────────────────────────────────
+@dataclass
+class ChatSettings:
+    model: str = DEFAULT_MODEL
+    temperature: float = float(_defaults.get("temperature", "0.6"))
+    top_p: float = float(_defaults.get("top_p", "1.0"))
+    max_tokens: int = int(_defaults.get("max_tokens", "800"))
+    stream: bool = True
+    timeout: float = 120.0
+
+class StreamHandle:
+    """Holds state for an in-flight stream so the UI can cancel it."""
+    def __init__(self):
+        self._cancel = threading.Event()
+        self._resp: Optional[httpx.Response] = None
+
+    def attach(self, resp: httpx.Response) -> None:
+        self._resp = resp
+
+    def cancel(self) -> None:
+        self._cancel.set()
+        try:
+            if self._resp is not None:
+                self._resp.close()  # closes the socket → server stops streaming
+        except Exception:
+            pass
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._cancel.is_set()
+
+def stream_chat(messages: list[dict], settings: ChatSettings, handle: StreamHandle) -> Iterator[str]:
+    """Yield text deltas; call handle.cancel() from the UI's Stop button."""
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": settings.model,
+        "messages": with_injected_system(messages),
+        "temperature": settings.temperature,
+        "top_p": settings.top_p,
+        "max_tokens": settings.max_tokens,
+        "stream": True,
+    }
+    with httpx.Client(timeout=settings.timeout) as client:
+        with client.stream("POST", OPENAI_LIKE_URL, headers=headers, json=payload) as resp:
+            handle.attach(resp)
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if handle.is_cancelled:
                     break
-                obj = json.loads(chunk)
-                delta = obj["choices"][0]["delta"].get("content", "")
-                if delta:
-                    yield delta
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line.removeprefix("data:").strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data)
+                    delta = obj["choices"][0]["delta"].get("content")
+                    if delta:
+                        yield delta
+                except Exception:
+                    continue
 
-# --------------- convenience helpers using your defaults dict ---------------
-def client_from_defaults(defaults: Dict) -> LocalLLMClient:
-    """
-    Create a client directly from your Sidecar defaults dict.
-    Expects:
-      defaults["url"]            -> "http://127.0.0.1:8000/v1/chat/completions"
-      defaults["api_key"]        -> "sk-..."
-      defaults["default_model"]  -> "aldin-mini"
-    """
-    base_url = defaults.get("url", "http://127.0.0.1:8000/v1/chat/completions")
-    api_key = defaults.get("api_key", "")
-    model = defaults.get("default_model", "aldin-mini")
-    return LocalLLMClient(base_url=base_url, api_key=api_key, model=model)
-
-def chat_once_with_defaults(defaults: Dict, user_text: str, system_text: str = "You are a helpful data-governance assistant.") -> str:
-    client = client_from_defaults(defaults)
-    messages = [
-        {"role": "system", "content": system_text},
-        {"role": "user", "content": user_text},
-    ]
-    temp = float(defaults.get("temperature", "0.7"))
-    max_toks = int(defaults.get("max_tokens", "256"))
-    return client.chat_once(messages, temperature=temp, max_tokens=max_toks)
-
-def chat_stream_with_defaults(defaults: Dict, user_text: str, system_text: str = "You are a helpful data-governance assistant.") -> Iterable[str]:
-    client = client_from_defaults(defaults)
-    messages = [
-        {"role": "system", "content": system_text},
-        {"role": "user", "content": user_text},
-    ]
-    temp = float(defaults.get("temperature", "0.7"))
-    max_toks = int(defaults.get("max_tokens", "256"))
-    return client.chat_stream(messages, temperature=temp, max_tokens=max_toks)
-
+def complete_once(messages: list[dict], settings: ChatSettings) -> str:
+    """Non-streaming call that returns a full completion string."""
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": settings.model,
+        "messages": with_injected_system(messages),
+        "temperature": settings.temperature,
+        "top_p": settings.top_p,
+        "max_tokens": settings.max_tokens,
+        "stream": False,
+    }
+    with httpx.Client(timeout=settings.timeout) as client:
+        r = client.post(OPENAI_LIKE_URL, headers=headers, json=payload)
+        r.raise_for_status()
+        obj = r.json()
+        return obj["choices"][0]["message"]["content"]
