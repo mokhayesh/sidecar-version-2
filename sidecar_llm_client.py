@@ -1,174 +1,244 @@
 ﻿# sidecar_llm_client.py
-# Drop-in helper for Sidecar v2
-# - Reads settings from defaults.json (with env overrides)
-# - Injects a domain system prompt + today's date/time
-# - Supports streaming responses with a cancellable handle for the Stop button
-
 from __future__ import annotations
-import os, json, threading
+
+import json
+import time
+import threading
 from dataclasses import dataclass
-from typing import Iterator, Optional
-from datetime import datetime, timezone
+from datetime import datetime
+from typing import Dict, Generator, Iterable, List, Optional
 
-import httpx
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Load defaults.json (Sidecar settings) with env var overrides
-# ──────────────────────────────────────────────────────────────────────────────
-DEFAULTS_PATH = os.path.join(os.path.dirname(__file__), "defaults.json")
-_defaults = {}
-try:
-    if os.path.exists(DEFAULTS_PATH):
-        with open(DEFAULTS_PATH, "r", encoding="utf-8") as f:
-            _defaults = json.load(f)
-except Exception:
-    _defaults = {}
-
-OPENAI_LIKE_URL = os.environ.get(
-    "SIDECAR_CHAT_URL",
-    _defaults.get("url", "http://127.0.0.1:8000/v1/chat/completions"),
-)
-OPENAI_API_KEY = os.environ.get(
-    "SIDECAR_API_KEY",
-    _defaults.get("api_key", "sk-aldin-local-123") or "sk-aldin-local-123",
-)
-DEFAULT_MODEL = os.environ.get(
-    "SIDECAR_MODEL",
-    _defaults.get("default_model", "aldin-mini"),
-)
+import requests
+from zoneinfo import ZoneInfo
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Domain system prompt (quick win specialization)
-# You can override via env: SIDECAR_SYSTEM_PROMPT
+# Config & defaults
 # ──────────────────────────────────────────────────────────────────────────────
-DOMAIN_SYSTEM_PROMPT = os.environ.get(
-    "SIDECAR_SYSTEM_PROMPT",
-    """You are **Aldin**, a specialist LLM for:
-• Data Governance (policies, stewardship, lineage, controls, quality)
-• Data Management (MDM, metadata, catalogs, lifecycle, retention)
-• Data Architecture (conceptual/logical/physical, lakehouse, ELT/ETL)
-• Analytics (BI, KPI design, experimentation, visualization)
-• Data Science & MLOps (feature engineering, evaluation, drift, monitoring)
 
-Principles:
-1) Be practical and concise. Prefer checklists, tables, and concrete steps.
-2) If the user is vague, ask up to 2 clarifying questions before proposing a plan.
-3) Cite standards or common patterns when relevant (DAMA-DMBOK, FAIR, medallion).
-4) If a request needs org-specific rules you don’t have, say so and offer a template.
-5) For compare/contrast, use a 2-column table. For plans, use numbered steps.
+DEFAULTS_FILE = "defaults.json"
 
-Refuse:
-- Don’t invent private policy names or internal metrics you don’t know.
-- Avoid hallucinating external tool outputs; propose how to verify instead.
+def _load_defaults() -> Dict:
+    try:
+        return json.load(open(DEFAULTS_FILE, "r", encoding="utf-8"))
+    except Exception:
+        return {}
+
+DEFAULTS = _load_defaults()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Domain system prompt (with {{TODAY}} injection)
+# ──────────────────────────────────────────────────────────────────────────────
+
+DOMAIN_SYSTEM_PROMPT = """You are Aldin-Mini, a domain assistant for:
+• Data Governance (policies, lineage, stewardship, controls)
+• Data Management (MDM, metadata, cataloging, lifecycle)
+• Data Architecture (patterns, lakehouse/mesh/warehouse, modeling)
+• Analytics & BI, and Data Science/ML
+
+Ground your answers in practical, auditable steps (policies → controls → roles → artifacts).
+Prefer bullet points, numbered steps, and examples. When asked for “today’s” info, use the injected date: {{TODAY}}.
+If content feels generic, ask one clarifying question before answering.
 """
-)
 
-def system_time_message() -> dict:
-    now = datetime.now(timezone.utc).astimezone()
-    return {
-        "role": "system",
-        "content": f"Today's date is {now.strftime('%Y-%m-%d')} and the local time is {now.strftime('%H:%M')} {now.tzname()}."
-    }
+def _today_str() -> str:
+    # Use your local timezone so “today” is correct in your UI
+    tz = ZoneInfo("America/Detroit")
+    return datetime.now(tz).date().isoformat()
 
-def domain_prompt_message() -> dict:
-    return {"role": "system", "content": DOMAIN_SYSTEM_PROMPT}
+def _inject_domain_prompt(messages: List[Dict]) -> List[Dict]:
+    """Ensure a system message is first; inject TODAY into the prompt."""
+    sys = DOMAIN_SYSTEM_PROMPT.replace("{{TODAY}}", _today_str())
+    has_system = len(messages) > 0 and messages[0].get("role") == "system"
 
-def with_injected_system(messages: list[dict]) -> list[dict]:
-    """Ensure our 2 system messages are first: (1) domain prompt, (2) date/time."""
-    msgs = messages or []
-    # Remove any previous auto-injected versions to avoid duplication
-    def is_auto_system(m: dict) -> bool:
-        if m.get("role") != "system":
-            return False
-        c = (m.get("content") or "").strip()
-        return ("Aldin, a specialist LLM" in c) or c.startswith("Today's date is ")
-    msgs = [m for m in msgs if not is_auto_system(m)]
-    # Prepend our system messages
-    return [domain_prompt_message(), system_time_message(), *msgs]
+    if has_system:
+        # Keep existing system content, append our domain brain under a divider
+        merged = messages[0]["content"].rstrip() + "\n\n---\n" + sys
+        out = [{"role": "system", "content": merged}]
+        out.extend(messages[1:])
+        return out
+    else:
+        return [{"role": "system", "content": sys}, *messages]
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Public API
+# Settings & Provider plumbing
 # ──────────────────────────────────────────────────────────────────────────────
+
 @dataclass
 class ChatSettings:
-    model: str = DEFAULT_MODEL
-    temperature: float = float(_defaults.get("temperature", "0.6"))
-    top_p: float = float(_defaults.get("top_p", "1.0"))
-    max_tokens: int = int(_defaults.get("max_tokens", "800"))
-    stream: bool = True
-    timeout: float = 120.0
+    provider: str = DEFAULTS.get("provider", "custom")  # custom | openai | gemini | auto
+    url: str = DEFAULTS.get("url", "http://127.0.0.1:8000/v1/chat/completions")
+    api_key: str = DEFAULTS.get("api_key", "")
+    org: str = DEFAULTS.get("openai_org", "")
 
+    default_model: str = DEFAULTS.get("default_model", "aldin-mini")
+    temperature: float = float(DEFAULTS.get("temperature", "0.6"))
+    top_p: float = float(DEFAULTS.get("top_p", "1.0"))
+    max_tokens: int = int(DEFAULTS.get("max_tokens", "800"))
+
+    # Stored profiles so you can switch providers without retyping
+    custom_url: str = DEFAULTS.get("custom_url", "http://127.0.0.1:8000/v1/chat/completions")
+    custom_api_key: str = DEFAULTS.get("custom_api_key", "sk-aldin-local-123")
+    custom_model: str = DEFAULTS.get("custom_model", "aldin-mini")
+
+    openai_url: str = DEFAULTS.get("openai_url", "https://api.openai.com/v1/chat/completions")
+    openai_api_key: str = DEFAULTS.get("openai_api_key", "")
+    openai_default_model: str = DEFAULTS.get("openai_default_model", "gpt-4o")
+
+    gemini_text_url: str = DEFAULTS.get("gemini_text_url", "https://generativelanguage.googleapis.com/v1beta/models")
+    gemini_api_key: str = DEFAULTS.get("gemini_api_key", "")
+    gemini_default_model: str = DEFAULTS.get("gemini_default_model", "gemini-1.5-pro")
+
+    def resolve(self) -> "ChatSettings":
+        """Return a copy with URL/API/model switched based on provider."""
+        s = ChatSettings(**self.__dict__)
+        p = (self.provider or "custom").lower()
+
+        if p in ("custom", "auto"):
+            s.url = self.custom_url or s.url
+            s.api_key = self.custom_api_key or s.api_key
+            s.default_model = self.custom_model or s.default_model
+        elif p == "openai":
+            s.url = self.openai_url or s.url
+            s.api_key = self.openai_api_key or s.api_key
+            s.default_model = self.openai_default_model or s.default_model
+        elif p == "gemini":
+            # Gemini uses a different REST shape (we handle below)
+            s.api_key = self.gemini_api_key or s.api_key
+            s.default_model = self.gemini_default_model or s.default_model
+        return s
+
+# For the Stop button
 class StreamHandle:
-    """Holds state for an in-flight stream so the UI can cancel it."""
-    def __init__(self):
-        self._cancel = threading.Event()
-        self._resp: Optional[httpx.Response] = None
-
-    def attach(self, resp: httpx.Response) -> None:
-        self._resp = resp
+    def __init__(self) -> None:
+        self._cancel = False
+        self._lock = threading.Lock()
 
     def cancel(self) -> None:
-        self._cancel.set()
+        with self._lock:
+            self._cancel = True
+
+    def cancelled(self) -> bool:
+        with self._lock:
+            return self._cancel
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Core APIs
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _headers(settings: ChatSettings) -> Dict[str, str]:
+    h = {"Content-Type": "application/json"}
+    if settings.api_key:
+        h["Authorization"] = f"Bearer {settings.api_key}"
+    if settings.org:
+        h["OpenAI-Organization"] = settings.org
+    return h
+
+def complete_once(
+    messages: List[Dict],
+    settings: Optional[ChatSettings] = None,
+    model: Optional[str] = None,
+) -> str:
+    """Non-streaming completion; returns the assistant text."""
+    settings = (settings or ChatSettings()).resolve()
+    msgs = _inject_domain_prompt(messages)
+
+    if settings.provider == "gemini":
+        # Gemini: POST {base}/{model}:generateContent?key=API_KEY
+        url = f"{settings.gemini_text_url}/{model or settings.default_model}:generateContent?key={settings.api_key}"
+        # Convert messages → Gemini format
+        parts = []
+        for m in msgs:
+            role = "user" if m["role"] in ("user", "system") else "model"
+            parts.append({"role": role, "parts": [{"text": m["content"]}]})
+        payload = {
+            "contents": parts,
+            "generationConfig": {
+                "temperature": settings.temperature,
+                "topP": settings.top_p,
+                "maxOutputTokens": settings.max_tokens,
+            },
+        }
+        r = requests.post(url, json=payload, timeout=600)
+        r.raise_for_status()
+        data = r.json()
         try:
-            if self._resp is not None:
-                self._resp.close()  # closes the socket → server stops streaming
+            return data["candidates"][0]["content"]["parts"][0]["text"]
         except Exception:
-            pass
+            return json.dumps(data, indent=2)
 
-    @property
-    def is_cancelled(self) -> bool:
-        return self._cancel.is_set()
-
-def stream_chat(messages: list[dict], settings: ChatSettings, handle: StreamHandle) -> Iterator[str]:
-    """Yield text deltas; call handle.cancel() from the UI's Stop button."""
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json",
-    }
+    # OpenAI-compatible (OpenAI or your local llama.cpp server)
+    url = settings.url
     payload = {
-        "model": settings.model,
-        "messages": with_injected_system(messages),
+        "model": model or settings.default_model,
+        "messages": msgs,
+        "temperature": settings.temperature,
+        "top_p": settings.top_p,
+        "max_tokens": settings.max_tokens,
+    }
+    r = requests.post(url, headers=_headers(settings), json=payload, timeout=600)
+    r.raise_for_status()
+    data = r.json()
+    try:
+        return data["choices"][0]["message"]["content"]
+    except Exception:
+        return json.dumps(data, indent=2)
+
+def stream_chat(
+    messages: List[Dict],
+    settings: Optional[ChatSettings] = None,
+    handle: Optional[StreamHandle] = None,
+    model: Optional[str] = None,
+) -> Iterable[str]:
+    """Streaming generator of text deltas; yields str chunks as they arrive."""
+    settings = (settings or ChatSettings()).resolve()
+    handle = handle or StreamHandle()
+    msgs = _inject_domain_prompt(messages)
+
+    if settings.provider == "gemini":
+        # Simple "poor man's" stream: poll once, then yield chunks
+        text = complete_once(messages, settings=settings, model=model)
+        for ch in _chunk(text, 32):
+            if handle.cancelled():
+                break
+            yield ch
+            time.sleep(0.005)
+        return
+
+    # OpenAI-compatible streaming
+    url = settings.url
+    payload = {
+        "model": model or settings.default_model,
+        "messages": msgs,
         "temperature": settings.temperature,
         "top_p": settings.top_p,
         "max_tokens": settings.max_tokens,
         "stream": True,
     }
-    with httpx.Client(timeout=settings.timeout) as client:
-        with client.stream("POST", OPENAI_LIKE_URL, headers=headers, json=payload) as resp:
-            handle.attach(resp)
-            resp.raise_for_status()
-            for line in resp.iter_lines():
-                if handle.is_cancelled:
-                    break
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line.removeprefix("data:").strip()
+
+    with requests.post(url, headers=_headers(settings), json=payload, stream=True, timeout=600) as r:
+        r.raise_for_status()
+        for line in r.iter_lines(decode_unicode=True):
+            if handle.cancelled():
+                break
+            if not line:
+                continue
+            if line.startswith("data: "):
+                data = line[6:].strip()
                 if data == "[DONE]":
                     break
                 try:
                     obj = json.loads(data)
-                    delta = obj["choices"][0]["delta"].get("content")
+                    delta = obj["choices"][0]["delta"].get("content", "")
                     if delta:
                         yield delta
                 except Exception:
+                    # If the server sends non-JSON lines, ignore them
                     continue
 
-def complete_once(messages: list[dict], settings: ChatSettings) -> str:
-    """Non-streaming call that returns a full completion string."""
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": settings.model,
-        "messages": with_injected_system(messages),
-        "temperature": settings.temperature,
-        "top_p": settings.top_p,
-        "max_tokens": settings.max_tokens,
-        "stream": False,
-    }
-    with httpx.Client(timeout=settings.timeout) as client:
-        r = client.post(OPENAI_LIKE_URL, headers=headers, json=payload)
-        r.raise_for_status()
-        obj = r.json()
-        return obj["choices"][0]["message"]["content"]
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _chunk(s: str, n: int) -> Generator[str, None, None]:
+    for i in range(0, len(s), n):
+        yield s[i:i+n]

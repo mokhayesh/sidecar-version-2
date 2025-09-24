@@ -1,8 +1,6 @@
 import os
 import json
 import wx
-import requests  # for querying /v1/models dynamically
-from typing import List
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Defaults & persistence
@@ -10,37 +8,49 @@ from typing import List
 
 DEFAULTS_FILE = "defaults.json"
 
+# sensible base defaults
 defaults = {
-    # Provider & API keys
-    "provider": "auto",                  # auto | openai | gemini | custom
-    "api_key": "",                      # OpenAI or custom key
-    "openai_org": "",                   # optional OpenAI organization
-    "gemini_api_key": "",               # Google Gemini key
+    "provider": "custom",
 
-    # Chat models / settings
-    "default_model": "gpt-4o",
-    "fast_model": "gpt-4o-mini",
+    # ACTIVE (used by the app today)
+    "url": "http://127.0.0.1:8000/v1/chat/completions",
+    "api_key": "sk-aldin-local-123",
+    "default_model": "aldin-mini",
+    "fast_model": "aldin-mini",
+
+    # stored profiles (so you don't retype)
+    "custom_url": "http://127.0.0.1:8000/v1/chat/completions",
+    "custom_api_key": "sk-aldin-local-123",
+    "custom_model": "aldin-mini",
+
+    "openai_url": "https://api.openai.com/v1/chat/completions",
+    "openai_api_key": "",
+    "openai_org": "",
+    "openai_default_model": "gpt-4o",
+    "openai_fast_model": "gpt-4o-mini",
+
+    "gemini_text_url": "https://generativelanguage.googleapis.com/v1beta/models",
+    "gemini_api_key": "",
+    "gemini_default_model": "gemini-1.5-pro",
+    "gemini_fast_model": "gemini-1.5-flash",
+
     "max_tokens": "800",
     "temperature": "0.6",
     "top_p": "1.0",
     "frequency_penalty": "0.0",
     "presence_penalty": "0.0",
 
-    # Chat endpoints
-    "url": "https://api.openai.com/v1/chat/completions",
-    "gemini_text_url": "https://generativelanguage.googleapis.com/v1beta/models",
-
-    # Image generation
-    "image_provider": "auto",           # auto | openai | gemini | stability | none
+    # images (unchanged)
+    "image_provider": "auto",
     "image_model": "gpt-image-1",
     "image_generation_url": "https://api.openai.com/v1/images/generations",
     "stability_api_key": "",
 
-    # (Optional) TTS (Azure)
+    # optional TTS
     "azure_tts_key": "",
     "azure_tts_region": "",
 
-    # AWS & S3
+    # AWS
     "aws_access_key_id": "",
     "aws_secret_access_key": "",
     "aws_session_token": "",
@@ -49,11 +59,10 @@ defaults = {
     "aws_quality_bucket": "",
     "aws_catalog_bucket": "",
     "aws_compliance_bucket": "",
-    # NEW: requested buckets
     "aws_anomalies_bucket": "",
     "aws_synthetic_bucket": "",
 
-    # Email
+    # email
     "smtp_server": "",
     "smtp_port": "",
     "email_username": "",
@@ -61,7 +70,6 @@ defaults = {
     "from_email": "",
     "to_email": "",
 
-    # Misc
     "filepath": os.path.expanduser("~"),
 }
 
@@ -91,17 +99,39 @@ GEMINI_IMAGE = ["gemini-1.5-flash", "gemini-1.5-pro"]  # used for image output
 
 STABILITY_IMAGE = ["sdxl", "sd3-medium"]
 
-PROVIDERS = ["auto", "openai", "gemini", "custom"]
-IMAGE_PROVIDERS = ["auto", "openai", "gemini", "stability", "none"]
-
-# Local/custom fallback lists (used if /v1/models discovery fails)
-CUSTOM_MAIN = ["aldin-mini"]
+# include local models in "custom"
+CUSTOM_MAIN = ["aldin-mini"]        # extend as you add more
 CUSTOM_FAST = ["aldin-mini"]
+IMAGE_PROVIDERS = ["auto", "openai", "gemini", "stability", "none"]
+PROVIDERS = ["custom", "openai", "gemini", "auto"]
+
+# how to map a provider to the keys in defaults.json
+PROFILE_KEYS = {
+    "custom": {
+        "url": "custom_url",
+        "api_key": "custom_api_key",
+        "default_model": "custom_model",
+        "fast_model": "custom_model",
+    },
+    "openai": {
+        "url": "openai_url",
+        "api_key": "openai_api_key",
+        "org": "openai_org",
+        "default_model": "openai_default_model",
+        "fast_model": "openai_fast_model",
+    },
+    "gemini": {
+        "url": "gemini_text_url",  # Gemini uses base+model in client, we still show/save here
+        "api_key": "gemini_api_key",
+        "default_model": "gemini_default_model",
+        "fast_model": "gemini_fast_model",
+    },
+}
 
 
 class SettingsWindow(wx.Frame):
     def __init__(self, parent):
-        super().__init__(parent, title="Settings", size=(560, 820))
+        super().__init__(parent, title="Settings", size=(600, 860))
         panel = wx.Panel(self)
         s = wx.GridBagSizer(6, 6)
 
@@ -110,37 +140,26 @@ class SettingsWindow(wx.Frame):
         # Provider
         s.Add(wx.StaticText(panel, label="Provider:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.provider = wx.Choice(panel, choices=PROVIDERS)
-        self.provider.SetSelection(max(PROVIDERS.index(defaults.get("provider", "auto")), 0))
+        sel = defaults.get("provider", "custom")
+        self.provider.SetSelection(max(PROVIDERS.index(sel), 0))
         self.provider.Bind(wx.EVT_CHOICE, self._on_provider_change)
-        s.Add(self.provider, (row, 1), span=(1, 2), flag=wx.EXPAND)
+        s.Add(self.provider, (row, 1), span=(1, 3), flag=wx.EXPAND)
         row += 1
 
-        # OpenAI/custom key / org
-        s.Add(wx.StaticText(panel, label="OpenAI API Key:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
+        # Keys / URLs
+        s.Add(wx.StaticText(panel, label="API Key:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.api_key = wx.TextCtrl(panel, value=defaults.get("api_key", ""))
-        s.Add(self.api_key, (row, 1), span=(1, 2), flag=wx.EXPAND)
+        s.Add(self.api_key, (row, 1), span=(1, 3), flag=wx.EXPAND)
         row += 1
 
         s.Add(wx.StaticText(panel, label="OpenAI Org (optional):"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.org = wx.TextCtrl(panel, value=defaults.get("openai_org", ""))
-        s.Add(self.org, (row, 1), span=(1, 2), flag=wx.EXPAND)
+        s.Add(self.org, (row, 1), span=(1, 3), flag=wx.EXPAND)
         row += 1
 
-        # Gemini key
-        s.Add(wx.StaticText(panel, label="Gemini API Key:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
-        self.gemini_key = wx.TextCtrl(panel, value=defaults.get("gemini_api_key", ""))
-        s.Add(self.gemini_key, (row, 1), span=(1, 2), flag=wx.EXPAND)
-        row += 1
-
-        # Chat URLs
         s.Add(wx.StaticText(panel, label="Chat URL:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
-        self.chat_url = wx.TextCtrl(panel, value=defaults.get("url", "https://api.openai.com/v1/chat/completions"))
-        s.Add(self.chat_url, (row, 1), span=(1, 2), flag=wx.EXPAND)
-        row += 1
-
-        s.Add(wx.StaticText(panel, label="Gemini Base URL:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
-        self.gemini_url = wx.TextCtrl(panel, value=defaults.get("gemini_text_url", "https://generativelanguage.googleapis.com/v1beta/models"))
-        s.Add(self.gemini_url, (row, 1), span=(1, 2), flag=wx.EXPAND)
+        self.chat_url = wx.TextCtrl(panel, value=defaults.get("url", "http://127.0.0.1:8000/v1/chat/completions"))
+        s.Add(self.chat_url, (row, 1), span=(1, 3), flag=wx.EXPAND)
         row += 1
 
         # Model dropdowns
@@ -191,12 +210,12 @@ class SettingsWindow(wx.Frame):
 
         s.Add(wx.StaticText(panel, label="Image URL (OpenAI):"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.image_url = wx.TextCtrl(panel, value=defaults.get("image_generation_url", "https://api.openai.com/v1/images/generations"))
-        s.Add(self.image_url, (row, 1), span=(1, 2), flag=wx.EXPAND)
+        s.Add(self.image_url, (row, 1), span=(1, 3), flag=wx.EXPAND)
         row += 1
 
         s.Add(wx.StaticText(panel, label="Stability API Key:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.stability = wx.TextCtrl(panel, value=defaults.get("stability_api_key", ""))
-        s.Add(self.stability, (row, 1), span=(1, 2), flag=wx.EXPAND)
+        s.Add(self.stability, (row, 1), span=(1, 3), flag=wx.EXPAND)
         row += 1
 
         # TTS
@@ -229,7 +248,7 @@ class SettingsWindow(wx.Frame):
         s.Add(self.aws_region, (row, 1), flag=wx.EXPAND)
         row += 1
 
-        # Buckets (including the two new ones)
+        # Buckets
         s.Add(wx.StaticText(panel, label="Profile Bucket:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.bucket_profile = wx.TextCtrl(panel, value=defaults.get("aws_profile_bucket", ""))
         s.Add(self.bucket_profile, (row, 1), flag=wx.EXPAND)
@@ -248,7 +267,6 @@ class SettingsWindow(wx.Frame):
         s.Add(self.bucket_compliance, (row, 3), flag=wx.EXPAND)
         row += 1
 
-        # NEW ROW
         s.Add(wx.StaticText(panel, label="Anomalies Bucket:"), (row, 0), flag=wx.ALIGN_RIGHT | wx.ALIGN_CENTER_VERTICAL)
         self.bucket_anomalies = wx.TextCtrl(panel, value=defaults.get("aws_anomalies_bucket", ""))
         s.Add(self.bucket_anomalies, (row, 1), flag=wx.EXPAND)
@@ -288,11 +306,10 @@ class SettingsWindow(wx.Frame):
 
         hint = wx.StaticText(
             panel,
-            label=("Recommendations: Fast chat → gpt-4o-mini / gemini-1.5-flash. "
-                   "Higher quality → gpt-4o / gemini-1.5-pro. "
-                   "Images → gpt-image-1 (OpenAI) / gemini-1.5-flash (Gemini) / SDXL (Stability).")
+            label=("Tip: switch Provider to automatically load URL/API key/models from your stored profiles "
+                   "(Custom/OpenAI/Gemini).")
         )
-        hint.Wrap(520)
+        hint.Wrap(560)
         s.Add(hint, (row, 0), span=(1, 4), flag=wx.ALL | wx.EXPAND, border=6)
         row += 1
 
@@ -302,11 +319,12 @@ class SettingsWindow(wx.Frame):
 
         panel.SetSizerAndFit(s)
 
+        # init choices + values
         self._refresh_model_choices()
         self._refresh_image_models()
+        self._apply_provider_profile(PROVIDERS[self.provider.GetSelection()])
         self._select_choice(self.default_model, defaults.get("default_model"))
         self._select_choice(self.fast_model, defaults.get("fast_model"))
-        self._select_choice(self.image_model, defaults.get("image_model"))
 
     # utils
     def _select_choice(self, choice_ctrl: wx.Choice, value: str | None):
@@ -317,54 +335,24 @@ class SettingsWindow(wx.Frame):
             choice_ctrl.SetSelection(items.index(value))
 
     def _on_provider_change(self, _):
-        # Prefill when switching to custom
-        sel = ["auto", "openai", "gemini", "custom"][self.provider.GetSelection()]
-        if sel == "custom":
-            current = self.chat_url.GetValue().strip()
-            if (not current) or current.startswith("https://api.openai.com"):
-                self.chat_url.SetValue("http://127.0.0.1:8000/v1/chat/completions")
-            if not self.api_key.GetValue().strip():
-                self.api_key.SetValue(defaults.get("api_key", "sk-aldin-local-123"))
-            if not defaults.get("default_model"):
-                defaults["default_model"] = "aldin-mini"
+        provider = PROVIDERS[self.provider.GetSelection()]
         self._refresh_model_choices()
+        self._apply_provider_profile(provider)
 
     def _on_image_provider_change(self, _):
         self._refresh_image_models()
 
-    def _fetch_custom_models(self) -> List[str]:
-        """Query the configured Chat URL for /v1/models (OpenAI-compatible)."""
-        try:
-            base = self.chat_url.GetValue().strip()
-            if not base:
-                return []
-            # Allow full endpoint or base
-            if base.rstrip("/").endswith("/v1/chat/completions"):
-                base = base.rsplit("/v1/chat/completions", 1)[0]
-            url = base.rstrip("/") + "/v1/models"
-            headers = {}
-            key = self.api_key.GetValue().strip()
-            if key:
-                headers["Authorization"] = f"Bearer {key}"
-            r = requests.get(url, headers=headers, timeout=5)
-            r.raise_for_status()
-            data = r.json()
-            ids = [m.get("id") for m in (data.get("data") or []) if isinstance(m, dict) and m.get("id")]
-            # De-dup while preserving order
-            out: List[str] = []
-            for mid in ids:
-                if mid not in out:
-                    out.append(mid)
-            return out
-        except Exception:
-            return []
-
     def _refresh_model_choices(self):
-        provider = ["auto", "openai", "gemini", "custom"][self.provider.GetSelection()]
+        provider = PROVIDERS[self.provider.GetSelection()]
         self.default_model.Clear()
         self.fast_model.Clear()
 
-        if provider in ("auto", "openai"):
+        if provider in ("custom", "auto"):
+            for m in CUSTOM_MAIN:
+                self.default_model.Append(m)
+            for m in CUSTOM_FAST:
+                self.fast_model.Append(m)
+        elif provider == "openai":
             for m in OPENAI_MAIN:
                 self.default_model.Append(m)
             for m in OPENAI_FAST:
@@ -374,24 +362,12 @@ class SettingsWindow(wx.Frame):
                 self.default_model.Append(m)
             for m in GEMINI_FAST:
                 self.fast_model.Append(m)
-        elif provider == "custom":
-            discovered = self._fetch_custom_models()
-            models_main = discovered or CUSTOM_MAIN
-            models_fast = discovered or CUSTOM_FAST
-            for m in models_main:
-                self.default_model.Append(m)
-            for m in models_fast:
-                self.fast_model.Append(m)
 
-        # Fallbacks if lists are empty
+        # fallback
         if self.default_model.GetCount() == 0:
             self.default_model.Append(defaults.get("default_model", "aldin-mini"))
         if self.fast_model.GetCount() == 0:
             self.fast_model.Append(defaults.get("fast_model", "aldin-mini"))
-
-        # Re-select saved values when possible
-        self._select_choice(self.default_model, defaults.get("default_model"))
-        self._select_choice(self.fast_model, defaults.get("fast_model"))
 
     def _refresh_image_models(self):
         prov = IMAGE_PROVIDERS[self.image_provider.GetSelection()]
@@ -410,30 +386,73 @@ class SettingsWindow(wx.Frame):
 
         self._select_choice(self.image_model, defaults.get("image_model"))
 
+    # Load stored profile values into the UI when provider changes
+    def _apply_provider_profile(self, provider: str):
+        keys = PROFILE_KEYS.get(provider, {})
+        # URL
+        url_key = keys.get("url")
+        url_val = defaults.get(url_key, defaults.get("url", ""))
+        self.chat_url.SetValue(url_val)
+
+        # API key
+        api_key_key = keys.get("api_key")
+        api_val = defaults.get(api_key_key, defaults.get("api_key", ""))
+        self.api_key.SetValue(api_val)
+
+        # Org (OpenAI only)
+        if provider == "openai":
+            self.org.Enable(True)
+            self.org.SetValue(defaults.get("openai_org", ""))
+        else:
+            self.org.Enable(provider == "openai")
+
+        # models
+        def_sel = defaults.get(keys.get("default_model", ""), defaults.get("default_model"))
+        fast_sel = defaults.get(keys.get("fast_model", ""), defaults.get("fast_model"))
+        self._select_choice(self.default_model, def_sel)
+        self._select_choice(self.fast_model, fast_sel)
+
     def on_save(self, _):
-        defaults["provider"] = ["auto", "openai", "gemini", "custom"][self.provider.GetSelection()]
+        # which provider is selected?
+        provider = PROVIDERS[self.provider.GetSelection()]
+        defaults["provider"] = provider
+
+        # write ACTIVE top-level
+        defaults["url"] = self.chat_url.GetValue().strip()
         defaults["api_key"] = self.api_key.GetValue().strip()
         defaults["openai_org"] = self.org.GetValue().strip()
-        defaults["gemini_api_key"] = self.gemini_key.GetValue().strip()
-
-        defaults["url"] = self.chat_url.GetValue().strip()
-        defaults["gemini_text_url"] = self.gemini_url.GetValue().strip()
-        defaults["default_model"] = self.default_model.GetStringSelection() or (self.default_model.GetCount() and self.default_model.GetString(0)) or "aldin-mini"
-        defaults["fast_model"] = self.fast_model.GetStringSelection() or (self.fast_model.GetCount() and self.fast_model.GetString(0)) or "aldin-mini"
+        defaults["default_model"] = self.default_model.GetStringSelection() or self.default_model.GetString(0)
+        defaults["fast_model"] = self.fast_model.GetStringSelection() or self.fast_model.GetString(0)
         defaults["max_tokens"] = self.max_tokens.GetValue().strip()
         defaults["temperature"] = self.temperature.GetValue().strip()
         defaults["top_p"] = self.top_p.GetValue().strip()
         defaults["frequency_penalty"] = self.freq_pen.GetValue().strip()
         defaults["presence_penalty"] = self.pres_pen.GetValue().strip()
 
+        # also persist back into the selected provider profile
+        keys = PROFILE_KEYS.get(provider, {})
+        if "url" in keys:
+            defaults[keys["url"]] = defaults["url"]
+        if "api_key" in keys:
+            defaults[keys["api_key"]] = defaults["api_key"]
+        if "default_model" in keys:
+            defaults[keys["default_model"]] = defaults["default_model"]
+        if "fast_model" in keys:
+            defaults[keys["fast_model"]] = defaults["fast_model"]
+        if provider == "openai":
+            defaults["openai_org"] = self.org.GetValue().strip()
+
+        # images
         defaults["image_provider"] = IMAGE_PROVIDERS[self.image_provider.GetSelection()]
         defaults["image_model"] = self.image_model.GetStringSelection() or self.image_model.GetString(0)
         defaults["image_generation_url"] = self.image_url.GetValue().strip()
         defaults["stability_api_key"] = self.stability.GetValue().strip()
 
+        # TTS
         defaults["azure_tts_key"] = self.azure_key.GetValue().strip()
         defaults["azure_tts_region"] = self.azure_region.GetValue().strip()
 
+        # AWS
         defaults["aws_access_key_id"] = self.aws_key.GetValue().strip()
         defaults["aws_secret_access_key"] = self.aws_secret.GetValue().strip()
         defaults["aws_session_token"] = self.aws_token.GetValue().strip()
@@ -442,10 +461,10 @@ class SettingsWindow(wx.Frame):
         defaults["aws_quality_bucket"] = self.bucket_quality.GetValue().strip()
         defaults["aws_catalog_bucket"] = self.bucket_catalog.GetValue().strip()
         defaults["aws_compliance_bucket"] = self.bucket_compliance.GetValue().strip()
-        # Save new buckets
         defaults["aws_anomalies_bucket"] = self.bucket_anomalies.GetValue().strip()
         defaults["aws_synthetic_bucket"] = self.bucket_synth.GetValue().strip()
 
+        # Email
         defaults["smtp_server"] = self.smtp_server.GetValue().strip()
         defaults["smtp_port"] = self.smtp_port.GetValue().strip()
         defaults["email_username"] = self.email_user.GetValue().strip()
